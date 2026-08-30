@@ -19,6 +19,10 @@ import {
 export const NETWORK = "eip155:84532";
 // 0.01 テスト USDC / 呼び出し。DESIGN.md 決定18参照
 export const DEFAULT_PRICE = "$0.01";
+// 決済（settle）をハンドラ実行前に行う。無認証の公開エンドポイントで、
+// 署名は有効だが決済が通らない支払いにより Bedrock の生成コストだけを
+// 負わされる経路を塞ぐ。DESIGN.md 決定21参照
+export const PAYMENT_FLOW = "upfront";
 
 export interface BillingMcpServerOptions {
   /** x402 facilitator の URL（テストでは偽サーバーに差し替える） */
@@ -67,8 +71,9 @@ export async function createPaidWrapper(options: {
     network: NETWORK,
     payTo: options.payTo,
     price: options.price ?? DEFAULT_PRICE,
-    // EIP-712 ドメインパラメータ（Base Sepolia のテスト USDC）
-    extra: { name: "USDC", version: "2" },
+    // EIP-712 ドメインパラメータ（Base Sepolia のテスト USDC）と支払いフロー。
+    // exact スキームは eip3009 で authorization / upfront に対応する
+    extra: { name: "USDC", version: "2", paymentFlow: PAYMENT_FLOW },
   });
 
   return createPaymentWrapper(resourceServer, {
