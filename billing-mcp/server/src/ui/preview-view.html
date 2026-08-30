@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>HTML Preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+    #toolbar { padding: 8px 12px; background: #f5f5f5; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px; }
+    #toolbar button { padding: 6px 14px; background: #0066cc; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    #toolbar button:hover { background: #0052a3; }
+    #toolbar span { font-size: 13px; color: #666; }
+    #preview { flex: 1; border: none; width: 100%; }
+    @media (prefers-color-scheme: dark) {
+      #toolbar { background: #222; border-color: #444; }
+      #toolbar span { color: #aaa; }
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <button type="button" id="download-btn" style="display:none">⬇ ダウンロード</button>
+    <span id="status">読み込み中...</span>
+  </div>
+  <iframe id="preview" title="HTML生成プレビュー" sandbox="allow-scripts"></iframe>
+  <script type="module" src="/src/ui/preview-view.ts"></script>
+</body>
+</html>
