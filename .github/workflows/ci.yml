@@ -31,20 +31,38 @@ jobs:
       - run: pnpm test
       - run: pnpm build:ui
 
-  # ---- 以下は実装が入り次第有効化する骨格（billing-mcp の CDK / agent-app）----
-  #
-  # billing-mcp-cdk:
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: billing-mcp
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: jdx/mise-action@v2
-  #     - run: pnpm install --frozen-lockfile
-  #     - run: cp parameter.sample.ts parameter.ts
-  #     - run: pnpm typecheck && pnpm test
-  #     - run: pnpm cdk synth --quiet
+  billing-mcp-cdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      # CDK のバンドル（esbuild）はサーバーの依存を解決し、
+      # vite singlefile の出力を zip に同梱するため、先に server を用意する
+      - name: サーバーの依存と UI ビルド
+        working-directory: billing-mcp/server
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build:ui
+      - name: CDK の依存
+        working-directory: billing-mcp
+        run: pnpm install --frozen-lockfile
+      - name: パラメータ雛形を配置（parameter.ts は gitignore）
+        working-directory: billing-mcp
+        run: cp parameter.sample.ts parameter.ts
+      - name: 型検査とスタックのテスト
+        working-directory: billing-mcp
+        run: |
+          pnpm typecheck
+          pnpm test
+      # 合成した成果物が実際に読み込めるかまで見る。ESM 出力に CJS 配布の依存を
+      # 同梱すると実行時に落ちるが、これはデプロイするまで露見しないため
+      - name: 合成とバンドル検証
+        working-directory: billing-mcp
+        run: |
+          pnpm synth
+          pnpm verify:bundle
+
+  # ---- 以下は実装が入り次第有効化する骨格（agent-app）----
   #
   # agent-app（スキャフォールドのパッケージマネージャに従う。npm 想定 = DESIGN.md 決定15）:
   #   runs-on: ubuntu-latest

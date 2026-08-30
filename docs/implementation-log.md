@@ -2,6 +2,75 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-08-30: フェーズ②後半 — 売り手を Lambda へ転換し、CDK でデプロイ直前まで
+
+### 着工前の詰め（grill-me）で崩れた前提
+
+着工前に依頼の前提を調べ直したところ、技術的前提が3つ崩れた。
+
+1. **「server/ は実装済み・テスト17件グリーン」が成り立たない。** AgentCore Runtime は
+   `Mcp-Session-Id` を持たないリクエストにプラットフォーム側が勝手に付与する仕様
+   （MCP protocol contract）だが、当時の `server.ts` は知らないセッション ID を 404 で
+   弾いていた。デプロイ後の最初の `initialize` で落ちる状態だった
+2. **「API Gateway は 29秒上限」は REST API には当てはまらない。** 2024年6月に統合
+   タイムアウトの引き上げが可能になっており、当アカウントの L-E5AE38E3 も
+   Adjustable: True だった（HTTP API の 30秒上限は引き上げ不可のまま）
+3. **「AgentCore は匿名アクセス不可」は authorizer の設定項目に限った話だった。**
+   Cognito Identity Pool の未認証（ゲスト）ID で AWS 一時クレデンシャルを取れば、
+   実質匿名の公開も可能だった
+
+### 設計の転換
+
+ユーザーの指摘「IAM で絞るなら x402 で課金する必要がそもそもなくない？」が決定打になり、
+売り手を **AgentCore Runtime から無認証の Lambda Function URL へ移した**（決定19）。
+AgentCore の authorizer は IAM か JWT の二択で、IAM で絞ると認可の主体が「支払い」ではなく
+「権限付与」になり、x402 で課金する筋書きが崩れる。買い手側の AgentCore Payments は
+Runtime 非依存と調査済みだったため、売り手を AgentCore に置く必然性は残っていなかった。
+
+検討して不採用にした構成（REST API + クォータ引き上げ / AgentCore + Identity Pool ゲスト /
+AgentCore + 公開プロキシ）は理由ごと決定20 に記録した。
+
+### やったこと
+
+- ドキュメント更新: 決定4・5・6・10・17 を追随更新、決定19〜22 を追加、U3 を決着
+- x402 の支払いフローを `upfront` に切り替え（決定21）。テストの支払いペイロードは、
+  サーバーが広告した accepts の写しから組み立てる方式に変更した
+- express を廃し、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから
+  使う形に作り替え（決定22）。MCP セッションはステートレス
+- CDK（billing-mcp/ 直下、ops-agent 方式）で NodejsFunction（arm64 / Node.js 22 / zip）+
+  Function URL（AuthType NONE）+ reserved concurrency + CloudWatch Logs + Bedrock IAM
+- CI に billing-mcp-cdk ジョブを追加（型・テスト・合成・バンドル検証）
+- テスト 17件 → 32件（サーバー）+ 7件（CDK）
+
+### 実測で分かったこと・つまずき
+
+- **AgentCore のデータプレーンは CORS 全開だった**（allow-origin `*`、リクエストヘッダは
+  エコーで全許可、`Mcp-Session-Id` は expose 済み）。決定10 のブラウザ直接取得は IAM でも
+  JWT でも成立すると分かり、U3 の判断材料が一つ減った
+- **旧 express サーバーが実際に 404 を返すことを実物で確認した。** 本体チェックアウト側で
+  起動しっぱなしだった旧サーバーに未知の `Mcp-Session-Id` 付きで `initialize` を投げると
+  `404 {"error":"Session not found"}`。同じリクエストが新実装では 200 で通る
+- **合成した Lambda バンドルをそのまま実行して、デプロイ後にしか出ない不具合を2件潰した**:
+  ①`@aws-sdk/*` は NodejsFunction の既定で external になりランタイム同梱版に依存する
+  → `externalModules: []` で同梱。②AWS SDK v3 は CJS 配布で動的 require を持つため、
+  ESM 出力に同梱すると `Dynamic require of "node:stream" is not supported` で落ちる
+  → `createRequire` バナーを追加。再発検知のため `scripts/verify-bundle.mjs` を CI に載せた
+- **`jp.` 推論プロファイルは ap-northeast-1 と ap-northeast-3 に跨る**（`aws bedrock
+  list-inference-profiles` で実測）。IAM はプロファイル ARN だけでは足りず、跨ぐ全リージョンの
+  基盤モデル ARN も要る。片方だけだとデプロイ成功後に AccessDenied になる
+- **買い手クライアントの upfront 対応を、テスト USDC を使わずに検証した。** `@x402/mcp` の
+  実クライアント + 使い捨て viem 鍵（署名は本物）+ 偽 facilitator で往復を通した
+- `pnpm exec tsx --env-file-if-exists=.env` は pnpm がフラグを食うため動かない。
+  `./node_modules/.bin/tsx` を直接呼ぶ必要がある
+- mise の設定が未信頼だと `pnpm install` が黙って失敗する（`| tail` で終了コードが隠れた）
+
+### 残していること
+
+- **デプロイは未実施**（ユーザーの判断で、公開前に一度止める着地）
+- クラウド上での実オンチェーン決済検証（決定18 の仕上げ）は未実施
+- ワークツリー側に `.env` が無い（本体チェックアウト側にある）。`pnpm buy:once` を
+  動かすには複製が要る
+
 ## 2026-08-30: フェーズ②前半 — billing-mcp サーバー実装とローカル実決済検証
 
 ### やったこと
