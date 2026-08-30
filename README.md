@@ -27,7 +27,9 @@ AWS Blocks 製のエージェント + Web アプリがそれを「支払いな�
 
 ## ステータス
 
-土台（構成・規約・記録の仕組み）のみ。実装はこれから。
+- billing-mcp: サーバー実装済み。ローカルで実オンチェーン決済（Base Sepolia のテスト USDC）まで検証済み。CDK / AgentCore デプロイはこれから
+- agent-app: これから
+
 経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。
 
 ## 参考リポジトリ

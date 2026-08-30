@@ -17,9 +17,23 @@ jobs:
           test -f docs/implementation-log.md
           test -f CLAUDE.md
 
-  # ---- 以下は実装が入り次第有効化する骨格（billing-mcp / agent-app）----
+  billing-mcp-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: billing-mcp/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build:ui
+
+  # ---- 以下は実装が入り次第有効化する骨格（billing-mcp の CDK / agent-app）----
   #
-  # billing-mcp:
+  # billing-mcp-cdk:
   #   runs-on: ubuntu-latest
   #   defaults:
   #     run:
@@ -29,7 +43,7 @@ jobs:
   #     - uses: jdx/mise-action@v2
   #     - run: pnpm install --frozen-lockfile
   #     - run: cp parameter.sample.ts parameter.ts
-  #     - run: pnpm typecheck && pnpm lint && pnpm test
+  #     - run: pnpm typecheck && pnpm test
   #     - run: pnpm cdk synth --quiet
   #
   # agent-app（スキャフォールドのパッケージマネージャに従う。npm 想定 = DESIGN.md 決定15）:

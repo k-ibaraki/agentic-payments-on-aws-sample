@@ -16,11 +16,13 @@ interface FacilitatorLog {
 function startFakeFacilitator(): Promise<{
   url: string;
   log: FacilitatorLog;
+  failNextSettle: () => void;
   close: () => void;
 }> {
   const app = express();
   app.use(express.json());
   const log: FacilitatorLog = { verify: [], settle: [] };
+  let settleShouldFail = false;
 
   app.get("/supported", (_req, res) => {
     res.json({
@@ -38,6 +40,16 @@ function startFakeFacilitator(): Promise<{
   });
   app.post("/settle", (req, res) => {
     log.settle.push(req.body);
+    if (settleShouldFail) {
+      settleShouldFail = false;
+      res.json({
+        success: false,
+        errorReason: "invalid_exact_evm_transaction_failed",
+        transaction: "",
+        network: "eip155:84532",
+      });
+      return;
+    }
     res.json({
       success: true,
       transaction: "0xfaketx",
@@ -53,6 +65,9 @@ function startFakeFacilitator(): Promise<{
       resolve({
         url: `http://localhost:${port}`,
         log,
+        failNextSettle: () => {
+          settleShouldFail = true;
+        },
         close: () => server.close(),
       });
     });
@@ -172,6 +187,25 @@ describe("billing-mcp server（x402 課金付き MCP Apps）", () => {
     expect(converse).toHaveBeenCalledTimes(1);
     expect(facilitator.log.verify.length).toBeGreaterThan(0);
     expect(facilitator.log.settle.length).toBeGreaterThan(0);
+  });
+
+  it("決済（settle）が失敗した場合は生成物を渡さない", async () => {
+    // 実検証で実際に発生した経路（facilitator の一過性エラー）。
+    // 支払いが完了しないのに成果物だけ渡る退行を防ぐ
+    const { client, converse } = await connect("<p>settle-fail page</p>");
+    facilitator.failNextSettle();
+    const result = await client.callTool({
+      name: "generate-html",
+      arguments: { prompt: "決済が失敗するページ" },
+      _meta: { "x402/payment": FAKE_PAYMENT },
+    });
+    expect(converse).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBe(true);
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.html).toBeUndefined();
+    expect(String(structured.error)).toContain("settlement failed");
+    const meta = result._meta as Record<string, unknown> | undefined;
+    expect(meta?.["x402/payment-response"]).toBeUndefined();
   });
 
   it("生成が失敗した場合は決済（settle）しない", async () => {

@@ -113,4 +113,9 @@ if (payTo) {
 }
 
 await client.close();
+// 検証スクリプトとして、決済が完了しなかった場合は失敗終了する
+if (!result.paymentResponse?.success) {
+  console.error("決済が完了しませんでした");
+  process.exit(1);
+}
 process.exit(0);
