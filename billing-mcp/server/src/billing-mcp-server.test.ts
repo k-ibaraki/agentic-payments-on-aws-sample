@@ -1,78 +1,12 @@
-import type { Server } from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import express from "express";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createBillingMcpServer } from "./billing-mcp-server.js";
+import { startFakeFacilitator } from "./testing/fake-facilitator.js";
 import { PREVIEW_VIEW_RESOURCE_URI } from "./tools/generate-html.js";
-
-// ---- 偽 facilitator（x402.org の代役。/supported /verify /settle を提供）----
-
-interface FacilitatorLog {
-  verify: unknown[];
-  settle: unknown[];
-}
-
-function startFakeFacilitator(): Promise<{
-  url: string;
-  log: FacilitatorLog;
-  failNextSettle: () => void;
-  close: () => void;
-}> {
-  const app = express();
-  app.use(express.json());
-  const log: FacilitatorLog = { verify: [], settle: [] };
-  let settleShouldFail = false;
-
-  app.get("/supported", (_req, res) => {
-    res.json({
-      kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:84532" }],
-      extensions: [],
-      signers: {},
-    });
-  });
-  app.post("/verify", (req, res) => {
-    log.verify.push(req.body);
-    res.json({
-      isValid: true,
-      payer: "0x1111111111111111111111111111111111111111",
-    });
-  });
-  app.post("/settle", (req, res) => {
-    log.settle.push(req.body);
-    if (settleShouldFail) {
-      settleShouldFail = false;
-      res.json({
-        success: false,
-        errorReason: "invalid_exact_evm_transaction_failed",
-        transaction: "",
-        network: "eip155:84532",
-      });
-      return;
-    }
-    res.json({
-      success: true,
-      transaction: "0xfaketx",
-      network: "eip155:84532",
-      payer: "0x1111111111111111111111111111111111111111",
-    });
-  });
-
-  return new Promise((resolve) => {
-    const server: Server = app.listen(0, () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      resolve({
-        url: `http://localhost:${port}`,
-        log,
-        failNextSettle: () => {
-          settleShouldFail = true;
-        },
-        close: () => server.close(),
-      });
-    });
-  });
-}
 
 const PAY_TO = "0x2222222222222222222222222222222222222222";
 
@@ -178,6 +112,39 @@ describe("billing-mcp server（x402 課金付き MCP Apps）", () => {
     });
     // 未払いでは生成処理も呼ばれない
     expect(converse).not.toHaveBeenCalled();
+  });
+
+  it("ui:// の HTML は UI_HTML_PATH から読む（バンドル後のパス崩れ対策）", async () => {
+    // Lambda ではバンドル後に import.meta.dirname が変わるため、CDK が
+    // UI_HTML_PATH で明示する。この経路が生きていることを固定する
+    const file = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "billing-mcp-ui-")),
+      "preview-view.html",
+    );
+    fs.writeFileSync(file, "<html><body>from-UI_HTML_PATH</body></html>");
+    const previous = process.env.UI_HTML_PATH;
+    process.env.UI_HTML_PATH = file;
+    try {
+      const mcpServer = await createBillingMcpServer({
+        converse: vi.fn(),
+        facilitatorUrl: facilitator.url,
+        payTo: PAY_TO,
+      });
+      const client = new Client({ name: "test-client", version: "0.0.0" });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        mcpServer.connect(serverTransport),
+        client.connect(clientTransport),
+      ]);
+      const result = await client.readResource({
+        uri: PREVIEW_VIEW_RESOURCE_URI,
+      });
+      expect(result.contents[0]?.text).toContain("from-UI_HTML_PATH");
+    } finally {
+      if (previous === undefined) delete process.env.UI_HTML_PATH;
+      else process.env.UI_HTML_PATH = previous;
+    }
   });
 
   it("支払い条件は upfront フローを広告する（決定21）", async () => {

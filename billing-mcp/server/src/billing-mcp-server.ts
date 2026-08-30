@@ -37,9 +37,12 @@ export interface BillingMcpServerOptions {
   loadUiHtml?: () => string;
 }
 
-// vite build（singlefile）の出力をそのまま配信する
-function defaultLoadUiHtml(): string {
-  return fs.readFileSync(
+// ui:// で配信する HTML の場所を決める。
+// ローカルは vite build（singlefile）の出力をそのまま読む。Lambda ではバンドル後に
+// import.meta.dirname が変わるため、パスを推測させず UI_HTML_PATH で明示する
+export function resolveUiHtmlPath(): string {
+  return (
+    process.env.UI_HTML_PATH ??
     path.join(
       import.meta.dirname,
       "..",
@@ -48,9 +51,12 @@ function defaultLoadUiHtml(): string {
       "src",
       "ui",
       "preview-view.html",
-    ),
-    "utf-8",
+    )
   );
+}
+
+function defaultLoadUiHtml(): string {
+  return fs.readFileSync(resolveUiHtmlPath(), "utf-8");
 }
 
 // 支払いラッパー（有料ツール用）を作る。facilitator への /supported 照会を伴う

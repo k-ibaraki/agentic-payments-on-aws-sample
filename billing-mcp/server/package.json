@@ -6,7 +6,7 @@
   "scripts": {
     "build:ui": "INPUT=src/ui/preview-view.html vite build",
     "build": "pnpm build:ui && tsc",
-    "dev": "pnpm build:ui && tsx watch --env-file-if-exists=.env src/server.ts",
+    "dev": "pnpm build:ui && tsx watch --env-file-if-exists=.env src/dev-server.ts",
     "buy:once": "tsx --env-file-if-exists=.env scripts/buy-once.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -20,8 +20,6 @@
     "@x402/core": "~2.24.0",
     "@x402/evm": "~2.24.0",
     "@x402/mcp": "~2.24.0",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
     "zod": "^3.25.0"
   },
   "pnpm": {
@@ -31,8 +29,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
-    "@types/cors": "^2.8.19",
+    "@types/aws-lambda": "^8.10.162",
     "@types/express": "^5.0.6",
+    "express": "^5.2.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "viem": "^2.37.0",
