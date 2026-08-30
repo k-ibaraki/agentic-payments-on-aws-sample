@@ -32,7 +32,7 @@ jobs:
   #     - run: pnpm typecheck && pnpm lint && pnpm test
   #     - run: pnpm cdk synth --quiet
   #
-  # agent-app:
+  # agent-app（スキャフォールドのパッケージマネージャに従う。npm 想定 = DESIGN.md 決定15）:
   #   runs-on: ubuntu-latest
   #   defaults:
   #     run:
@@ -40,5 +40,5 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - uses: jdx/mise-action@v2
-  #     - run: pnpm install --frozen-lockfile
-  #     - run: pnpm typecheck && pnpm test
+  #     - run: npm ci
+  #     - run: npm run typecheck && npm run test

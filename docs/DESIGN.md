@@ -20,7 +20,7 @@
 | 12 | リージョン | 基本 ap-northeast-1（東京）。AgentCore Payments 一式のみ ap-southeast-1 に作成しクロスリージョン呼び出し | Payments は東京非対応。リスク: クロスリージョン利用は公式に禁止も保証もされていない。支障が出たら全リソースを ap-southeast-1 に集約する切替案を用意 |
 | 13 | agent-app の実装 | AWS Blocks。Agent Building Block + AuthCognito 等、handson-aws-blocks を参考。雛形はスキャフォールド生成 | ユーザー要件 |
 | 14 | 作業記録 | 本書（設計決定録）+ implementation-log.md（日付別記録）+ CLAUDE.md で更新義務化 | ユーザー要件（経緯を必ず残す）。ops-agent の運用を踏襲。Issue/PR 駆動は今回は採らない |
-| 15 | ツールチェーン | mise（node 24 / pnpm 10）、pnpm。billing-mcp サーバーは Biome + Vitest、CDK テストは jest + @swc/jest | 参照元2リポジトリの選定の折衷（CDK 側は ops-agent、サーバー側は html-creator の系譜） |
+| 15 | ツールチェーン | mise（node 24 / pnpm 10）。pnpm の適用は billing-mcp のみ。agent-app はスキャフォールドが採用するパッケージマネージャ（npm 想定）に従う。billing-mcp サーバーは Biome + Vitest、CDK テストは jest + @swc/jest | 参照元2リポジトリの選定の折衷（CDK 側は ops-agent、サーバー側は html-creator の系譜）。当初は全体 pnpm としていたが、決定13「雛形はスキャフォールド生成・手書きしない」と衝突するためセルフレビューで適用範囲を限定（2026-08-30） |
 | 16 | 進行順 | ①土台のみ → ②billing-mcp 単独で動作確認 → ③agent-app → ④結合（Agent が支払って UI が出る） | 一気通貫で作るより手戻りが小さい。各段階の区切りで implementation-log.md に記録 |
 
 ## 未決論点
