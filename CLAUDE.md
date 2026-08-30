@@ -4,7 +4,7 @@
 
 AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
-- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で AgentCore Runtime にデプロイ
+- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で Lambda（Function URL・無認証）にデプロイ
 - `agent-app/` — 買い手。AWS Blocks 製のエージェント + 制御 Web アプリ
 
 ## 必ず守ること（作業記録）
@@ -32,6 +32,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - CDK は ops-agent-sample-on-aws 方式: 関数ベースのスタック定義、`parameter.ts`（gitignore、`parameter.sample.ts` をコミット）、jest + @swc/jest で Template テスト、cdk.json は tsx 実行
 - サーバー実装は Biome（lint / format）+ Vitest
 - MCP は `@modelcontextprotocol/sdk` 1.30 系 + `@modelcontextprotocol/ext-apps` 1.7 系に固定。SDK v2（`@modelcontextprotocol/server` 等）へは ext-apps の v2 対応後に移行（DESIGN.md 決定3）
+- サーバーは express を使わず、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから使う。MCP セッションはステートレス（DESIGN.md 決定22）
+- 売り手は無認証の公開エンドポイント。認可は x402 の支払いのみが担う（DESIGN.md 決定19・21）
 - x402 は `@x402/*`（v2 系）のみ使用。旧 `x402-express` 等の v1 パッケージは deprecated のため使わない
 
 ### agent-app/
