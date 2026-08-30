@@ -1,0 +1,20 @@
+# 依存・ビルド成果物
+node_modules/
+dist/
+cdk.out/
+coverage/
+
+# 環境変数・シークレット
+.env
+.env.*
+!.env.example
+
+# CDK パラメータ（parameter.sample.ts をコミットする）
+billing-mcp/parameter.ts
+
+# AWS Blocks サンドボックス
+.blocks-sandbox/
+
+# その他
+*.log
+.DS_Store
