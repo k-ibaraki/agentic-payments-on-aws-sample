@@ -92,6 +92,16 @@ describe("billing-mcp スタック", () => {
     template.resourceCountIs("AWS::Logs::LogGroup", 1);
   });
 
+  test("payToAddress がゼロアドレスのままなら合成で落とす（売上が焼却されるため）", () => {
+    const app = new App();
+    expect(() =>
+      createBillingMcpStack(app, "BillingMcpStackZero", {
+        ...parameter,
+        payToAddress: "0x0000000000000000000000000000000000000000",
+      }),
+    ).toThrow(/ゼロアドレス/);
+  });
+
   test("Function URL とロググループ名を出力する", () => {
     const outputs = template.findOutputs("*");
     expect(Object.keys(outputs)).toEqual(

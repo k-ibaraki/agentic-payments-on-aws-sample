@@ -46,9 +46,14 @@ jobs:
       - name: CDK の依存
         working-directory: billing-mcp
         run: pnpm install --frozen-lockfile
+      # 雛形の payToAddress はゼロアドレスで、スタックのガードが合成を止める
+      # （書き換え忘れたままのデプロイで売上が焼却されるのを防ぐため）。
+      # CI は合成のみでデプロイしないので、検証用のダミーに置換して通す
       - name: パラメータ雛形を配置（parameter.ts は gitignore）
         working-directory: billing-mcp
-        run: cp parameter.sample.ts parameter.ts
+        run: |
+          cp parameter.sample.ts parameter.ts
+          sed -i 's/0x0000000000000000000000000000000000000000/0x2222222222222222222222222222222222222222/' parameter.ts
       - name: 型検査とスタックのテスト
         working-directory: billing-mcp
         run: |

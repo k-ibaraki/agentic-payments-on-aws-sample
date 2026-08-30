@@ -6,6 +6,7 @@ import {
   createBillingMcpServer,
   createPaidWrapper,
 } from "./billing-mcp-server.js";
+import { createDefaultConverse } from "./tools/generate-html.js";
 
 /** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
 export const MCP_PATH = "/mcp";
@@ -45,6 +46,13 @@ function jsonResponse(status: number, body: unknown): Response {
 export function createMcpFetchHandler(
   options: BillingMcpServerOptions,
 ): (request: Request) => Promise<Response> {
+  // ステートレス化でサーバーは毎リクエスト作り直すが、Bedrock クライアント
+  // （資格情報チェーンと接続プール）は作り捨てにしない。ここで1度だけ解決して
+  // 全リクエストで共有する
+  const resolvedOptions: BillingMcpServerOptions = {
+    ...options,
+    converse: options.converse ?? createDefaultConverse(),
+  };
   let paidPromise: ReturnType<typeof createPaidWrapper> | undefined;
 
   const getPaid = () => {
@@ -87,7 +95,7 @@ export function createMcpFetchHandler(
 
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに
     // サーバーとトランスポートを立て、応答を読み切ってから閉じる
-    const server = await createBillingMcpServer(options, paid);
+    const server = await createBillingMcpServer(resolvedOptions, paid);
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });

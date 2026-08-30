@@ -29,7 +29,8 @@ export interface BillingMcpStackProps extends StackProps {
   readonly price?: string;
   /**
    * Lambda の同時実行数の上限。
-   * 無認証で公開する（決定19）ため、損失の上限として必ず設定する
+   * 無認証で公開する（決定19）ため必ず設定する。押さえられるのは瞬間的な
+   * 流量であって累積コストではない（上限が要るなら AWS Budgets 等を併用）
    */
   readonly reservedConcurrency: number;
   /** 呼び出しを許可する Bedrock 推論プロファイル ID（jp. プレフィックス） */
@@ -104,6 +105,15 @@ export function createBillingMcpStack(
 ): Stack {
   const stack = new Stack(scope, id, props);
 
+  // ゼロアドレスは雛形（parameter.sample.ts）の初期値。このままデプロイすると
+  // 売上がゼロアドレスへ送られて焼却される。settle 自体は成功しレシートも返る
+  // ため、エラーが出ないまま資金だけが消える。合成の段階で止める
+  if (/^0x0{40}$/i.test(props.payToAddress)) {
+    throw new Error(
+      "payToAddress がゼロアドレスのままです。parameter.ts で自分の受取アドレスに書き換えてください（このままデプロイすると売上が焼却されます）",
+    );
+  }
+
   const projectRoot = path.join(__dirname, "..");
   const uiHtmlPath = path.join(projectRoot, UI_HTML_RELATIVE_PATH);
   if (!fs.existsSync(uiHtmlPath)) {
@@ -127,7 +137,7 @@ export function createBillingMcpStack(
     architecture: Architecture.ARM_64,
     timeout: LAMBDA_TIMEOUT,
     memorySize: 1024,
-    // 無認証の公開エンドポイントなので、損失の上限を同時実行数で押さえる
+    // 無認証の公開エンドポイントなので、瞬間的な流量を同時実行数で押さえる
     reservedConcurrentExecutions: props.reservedConcurrency,
     logGroup,
     projectRoot,
@@ -157,7 +167,8 @@ export function createBillingMcpStack(
         beforeInstall: () => [],
         // vite singlefile の出力を zip に同梱する（UI_HTML_PATH が指す先）
         afterBundling: (inputDir: string, outputDir: string) => [
-          `cp ${path.join(inputDir, UI_HTML_RELATIVE_PATH)} ${outputDir}/preview-view.html`,
+          // パスに空白が入っても壊れないよう引用する
+          `cp "${path.join(inputDir, UI_HTML_RELATIVE_PATH)}" "${outputDir}/preview-view.html"`,
         ],
       },
     },
