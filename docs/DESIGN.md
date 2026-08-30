@@ -22,6 +22,8 @@
 | 14 | 作業記録 | 本書（設計決定録）+ implementation-log.md（日付別記録）+ CLAUDE.md で更新義務化 | ユーザー要件（経緯を必ず残す）。ops-agent の運用を踏襲。Issue/PR 駆動は今回は採らない |
 | 15 | ツールチェーン | mise（node 24 / pnpm 10）。pnpm の適用は billing-mcp のみ。agent-app はスキャフォールドが採用するパッケージマネージャ（npm 想定）に従う。billing-mcp サーバーは Biome + Vitest、CDK テストは jest + @swc/jest | 参照元2リポジトリの選定の折衷（CDK 側は ops-agent、サーバー側は html-creator の系譜）。当初は全体 pnpm としていたが、決定13「雛形はスキャフォールド生成・手書きしない」と衝突するためセルフレビューで適用範囲を限定（2026-08-30） |
 | 16 | 進行順 | ①土台のみ → ②billing-mcp 単独で動作確認 → ③agent-app → ④結合（Agent が支払って UI が出る） | 一気通貫で作るより手戻りが小さい。各段階の区切りで implementation-log.md に記録 |
+| 17 | x402 の MCP バインディング | `@x402/mcp`（2.24 系）のインプロトコル方式を採用。支払い要求はツール結果（isError + structuredContent の PaymentRequired）、支払い証明は tools/call の `_meta["x402/payment"]`、レシートは結果の `_meta["x402/payment-response"]`。HTTP 402 ステータス・ヘッダは使わない | AgentCore Runtime はレスポンスの 402 ステータスやカスタムヘッダを返せない（U2 の調査結果）ため、HTTP レイヤの x402 は成立しない。インプロトコル方式なら制約を丸ごと回避でき、`createPaymentWrapper` で有料ツールと無償の ui:// リソースを同居できる。MCP 公式の支払い拡張 SEP-2007 はまだ Draft のため今回は採らない（2026-08-30） |
+| 18 | フェーズ②の検証手段 | TDD は facilitator を偽 HTTP サーバーで差し替えて進め、仕上げに使い捨てウォレット（viem 鍵 + Circle Faucet のテスト USDC + x402.org facilitator）で実オンチェーン決済を 1 回流す。価格は 0.01 テスト USDC / 呼び出し（exact スキーム）を仮決め | テストの安定性と実決済の証拠取りを両立。買い手本命（AgentCore Payments）の検証はフェーズ③以降 |
 
 ## 未決論点
 
@@ -30,7 +32,8 @@
 | # | 論点 | 現状 | 検証方法 |
 | --- | --- | --- | --- |
 | U1 | TypeScript から AgentCore Payments API を呼べるか | Python SDK（bedrock-agentcore + Strands プラグイン）には統合があるが、JS SDK の GA API 追随は未確認 | `@aws-sdk/client-bedrock-agentcore` に ProcessPayment / CreatePaymentSession 等があるか実装冒頭で確認。無ければ SigV4 直呼びか Python 薄層 Lambda を検討 |
-| U2 | X-PAYMENT ヘッダの搬送方法 | InvokeAgentRuntime（bedrock-agentcore エンドポイント経由）がカスタム HTTP ヘッダを透過するか未確認 | 実測する。不可ならツール引数または _meta で支払いペイロードを運ぶ（Cloudflare paidTool 型） |
+| U2 | X-PAYMENT ヘッダの搬送方法 | 決着（2026-08-30）: ヘッダ搬送そのものを不要化。リクエストヘッダは requestHeaderAllowlist で透過できるが、レスポンスの 402 ステータス・カスタムヘッダは返せないことが判明（aws-samples が売り手を CloudFront + Lambda@Edge に置くのはこのため）。インプロトコル方式（決定17）を採用して回避 | - |
 | U3 | 認証の共有 | MCP Runtime のインバウンド JWT authorizer に agent-app（AWS Blocks）の User Pool を使えるか。Agent（Lambda）がユーザーの JWT を取得できるか | AWS Blocks の認可コンテキスト仕様を確認。不可なら Runtime を IAM 認可にし、ブラウザの ui:// 取得は別経路を検討 |
-| U4 | 402 応答（payment-required）の MCP 上の表現 | x402 の MCP バインディングに標準・確立した慣行があるか未調査 | 実装時に Cloudflare paidTool / Vercel x402-mcp / Coinbase Bazaar の実装を再調査して決める |
+| U4 | 402 応答（payment-required）の MCP 上の表現 | 決着（2026-08-30）: x402 公式モノレポの `@x402/mcp` を採用（決定17）。Cloudflare（HTTP レイヤ寄り）・Vercel x402-mcp（停滞中）・SEP-2007（Draft）と比較のうえ、公式 SDK かつインプロトコルの同パッケージが最適と判断 | - |
 | U5 | ext-apps の SDK v2 対応時期 | 移植 PR（Port to SDK v2）は未完了で closed。2026-07-28 適合性違反 issue が open | 実装フェーズの節目で ext-apps のリリースを確認し、対応したら決定3を更新 |
+| U6 | 有料ツール結果の structuredContent 搬送 | `@x402/mcp` の x402MCPClient は有料ツールの結果から content / isError / _meta のみを写し、structuredContent（HTML 本体）を落とすことが実測で判明（2026-08-30）。billing-mcp 側は正しく返している | agent-app（買い手）実装時に対処。候補: 低レベル API（PaymentClient で支払いペイロードを作り素の mcpClient.callTool に _meta を積む）／上流への issue・PR |

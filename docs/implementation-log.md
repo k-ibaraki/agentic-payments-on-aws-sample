@@ -2,6 +2,29 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-08-30: フェーズ②前半 — billing-mcp サーバー実装とローカル実決済検証
+
+### やったこと
+
+- 着工前調査で U2・U4 を決着（決定17・18 を追加。`@x402/mcp` インプロトコル方式の採用と検証手段）
+- `billing-mcp/server/` を新規実装（TDD、テスト16件）:
+  - `generate-html` ツール（Bedrock Converse。呼び出しを関数注入にしてテスト可能化。踏襲元のロジックを移植）
+  - `createPaymentWrapper` で generate-html だけを有料化（0.01 テスト USDC）。ui:// リソース（プレビュー UI）は無償
+  - Streamable HTTP + Express（AgentCore 契約に合わせポート 8000 の /mcp）
+  - テストは偽 facilitator（/supported /verify /settle を持つ express）を立てて統合的に検証
+- 買い手テストスクリプト `scripts/buy-once.ts`（`createx402MCPClient` + viem 使い捨て鍵）
+- 実オンチェーン検証: Circle Faucet のテスト USDC → x402.org facilitator 経由で決済 2 回成功（Base Sepolia、売り手残高が 0.01 USDC ずつ増加、トランザクション確定を確認）
+
+### 実測で分かったこと・つまずき
+
+- x402 v2 の照合は `accepted`（クライアントが選んだ支払い条件の完全な写し）必須。scheme/network だけでは「No matching payment requirements found」になる
+- 価格 "$0.01" は SDK が Base Sepolia のテスト USDC（0x036C…）と amount 10000 に自動解決してくれる
+- `@x402/mcp` クライアントは有料ツール結果の structuredContent を落とす（U6 として記録。サーバー側は正しく返している）
+- 決済（settle）が `invalid_exact_evm_transaction_failed` で失敗することが 3 回中 1 回あった。一過性（facilitator 側）と判断。失敗時に買い手へ課金されないことは確認できたが、settle-after-handler フローのため Bedrock の生成コストは売り手が被る（悪意ある買い手が無効な支払いで生成だけ走らせる余地。本サンプルでは許容し、対策するなら verify 強化か前払いフロー）
+- 決済直後の残高照会はブロック確定前で 0 に見えることがある（数秒待てば反映）
+- Biome の `vcs.useIgnoreFile` は同ディレクトリに .gitignore が無いとエラーになるため、明示的な `files.includes` 除外に切り替えた
+- 検証用ウォレットは使い捨て（`.env` に保存、gitignore 済み）。買い手 0xd98A…3Ebf / 売り手 0x833E…B94D
+
 ## 2026-08-30: リポジトリ立ち上げ（技術調査・設計決定・土台作成）
 
 ### やったこと

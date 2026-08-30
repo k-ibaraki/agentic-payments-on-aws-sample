@@ -1,6 +1,17 @@
 # billing-mcp（売り手: x402 課金付き MCP Apps）
 
-x402 で課金する MCP Apps（HTML 生成ツール + プレビュー UI）を CDK で AgentCore Runtime にデプロイする。実装はこれから。
+x402 で課金する MCP Apps（HTML 生成ツール + プレビュー UI）を CDK で AgentCore Runtime にデプロイする。
+`server/` は実装済み（ローカルで実オンチェーン決済まで検証済み）。CDK はこれから。
+
+## ローカル実行
+
+```bash
+cd server
+cp .env.example .env   # PAY_TO_ADDRESS 等を設定
+pnpm install
+pnpm dev               # http://localhost:8000/mcp
+pnpm buy:once          # 使い捨てウォレットで実決済テスト
+```
 
 ## 予定構成（ops-agent-sample-on-aws 方式）
 

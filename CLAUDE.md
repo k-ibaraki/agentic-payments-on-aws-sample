@@ -46,4 +46,10 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
 ## コマンド
 
-実装が入り次第ここに追記する（現状は土台のみ）。
+### billing-mcp/server/
+
+- `pnpm dev` — UI ビルド + ローカル起動（ポート 8000。`.env` の `PAY_TO_ADDRESS` が必要）
+- `pnpm test` / `pnpm typecheck` / `pnpm lint` — コミット前に必ず全て通すこと
+- `pnpm buy:once` — 使い捨てウォレットで実オンチェーン決済テスト（`.env` の `BUYER_PRIVATE_KEY`。未設定なら鍵を生成して表示）
+
+agent-app・billing-mcp の CDK は実装が入り次第追記する。
