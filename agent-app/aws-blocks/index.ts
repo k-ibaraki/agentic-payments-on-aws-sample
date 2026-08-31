@@ -1,11 +1,12 @@
 import { ApiNamespace, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { createBuyerAgent } from './buyer-agent.js';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
-const scope = new Scope('my-app');
+const scope = new Scope('agent-app');
 
 // Building Blocks: Use these instead of creating custom storage
 const store = new KVStore(scope, 'app-store', {});
@@ -108,6 +109,46 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
   async greet(name: string) {
     return { message: `Hello, ${name}!`, timestamp: Date.now() };
   }
+}));
+
+// ── 買い手エージェント（決定26・27） ────────────────────────────────────
+// billing-mcp の有料ツールを AgentCore Payments で支払いながら使う。
+// 構成と配線は buyer-agent.ts 参照
+const { agent: buyerAgent, artifacts: purchasedHtml } = createBuyerAgent(scope);
+
+// エージェントの会話 API。読み取り系は listConversations で所有を検証する
+// （Agent BB は読み取り経路の認可を呼び出し側に委ねる仕様のため）
+export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
+  async createConversation() {
+    const user = await auth.requireAuth(context);
+    return { conversationId: await buyerAgent.createConversationId(user.userSub) };
+  },
+
+  async sendMessage(conversationId: string, message: string, channelId: string) {
+    const user = await auth.requireAuth(context);
+    await buyerAgent.stream(message, { conversationId, channelId, userId: user.userSub });
+    return { accepted: true };
+  },
+
+  async getMessages(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const owned = await buyerAgent.listConversations(user.userSub);
+    if (!owned.some((c) => c.conversationId === conversationId)) {
+      throw new Error('会話が見つかりません');
+    }
+    return { messages: await buyerAgent.getConversation(conversationId) };
+  },
+
+  async getChannel(channelId: string) {
+    await auth.requireAuth(context);
+    return buyerAgent.getChannel(channelId);
+  },
+
+  // 購入済み HTML の取得（決定10: ツール結果はエージェント経由でブラウザへ渡す）
+  async getPurchasedHtml(resultId: string) {
+    await auth.requireAuth(context);
+    return await purchasedHtml.get(resultId);
+  },
 }));
 
 // State machine driving the <Authenticator> UI component
