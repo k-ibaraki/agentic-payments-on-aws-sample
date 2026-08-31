@@ -2,6 +2,57 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-08-31: フェーズ②完了 — クラウドへデプロイし実オンチェーン決済を検証
+
+### やったこと
+
+- 価格を 0.01 → **0.1 テスト USDC / 呼び出し**へ引き上げ（決定18 更新）。記録と実物が
+  ずれないよう DEFAULT_PRICE・parameter.sample.ts・.env.example・テスト期待額を揃えた
+- `cdk deploy` を実行し、無認証の Function URL を公開
+  - エンドポイント: `https://aadgxm2l6a6n77igxsqrdeelja0ivxmo.lambda-url.ap-northeast-1.on.aws/mcp`
+  - ロググループ: `BillingMcpStack-dev-McpFunctionLogsDE22E4A3-qqKrCgVjY6cX`
+- **実オンチェーン決済を 2 回成功**（Base Sepolia、各 0.1 テスト USDC）
+  - 1回目: [0x1f05b837…39221](https://sepolia.basescan.org/tx/0x1f05b837dd19da8a8c10928766afeaf05146a0efc9f313b2de958a8479939221)
+  - 2回目: [0xbe8f1bdf…90f4](https://sepolia.basescan.org/tx/0xbe8f1bdfa1040c9998a81d8b91e0ed010f8ae08e86f2557800c4a2ac795590f4)
+  - 売り手 0.02 → 0.12 → 0.22 USDC（1回あたり +0.1）／買い手 19.98 → 19.88 USDC
+- これでフェーズ②（billing-mcp 単独での動作確認）は完了
+
+### 実測値
+
+- **コールドスタート**: INIT 363.81ms + 初回実行 1,530ms（facilitator への `/supported`
+  照会を含む）。遅延構築にした判断（決定22）が効いており、INIT の 10 秒制限には遠い
+- **ウォームの MCP 往復**: 4〜95ms（initialize / tools/list / 支払い要求）
+- **有料ツール呼び出し**: 7,013ms（Bedrock の HTML 生成込み）。タイムアウト 600 秒に対し十分
+- **メモリ**: 1,024MB 中 132〜143MB しか使っていない。削れる余地あり
+- クラウド初回の疎通は 2.2 秒（コールドスタート込みの initialize）
+
+### 見つけて直した不具合: GET（SSE ストリーム要求）で Lambda が落ちる
+
+初回の実決済は成功したが、CloudWatch に `Runtime.NodeJsExit`
+（"a Promise that was never settled"）が 1 件記録されていた。
+
+- **原因**: MCP クライアントが initialize 後に開く単独の SSE ストリーム要求（GET）。
+  ステートレス + enableJsonResponse では SSE を提供しないが、GET をそのまま SDK に
+  渡すと終わらないストリームが返り、それを `response.text()` でバッファしようとして
+  Promise が永久に未解決になっていた
+- **再現**: ローカルで GET を投げると 5 秒待っても応答が返らないことを確認
+- **対処**: GET は SDK へ渡さず 405（Allow: POST, DELETE, OPTIONS）を返す。加えて
+  万一ストリーミング応答が来ても待ち続けないよう `isStreamingResponse` で防護し、
+  body を cancel して 500 を返す。両方をテストで固定（決定22 に追記）
+- **確認**: 再デプロイ後に 2 回目の実決済を通し、6 回の実行でエラーゼロ
+
+決済フロー自体は最初から成功しており、この不具合は副次的な GET 経路にのみ現れていた。
+ローカルのテストでは MCP クライアントの `fetch` を差し替えていたため GET 経路を
+踏んでおらず、クラウドのログを読んで初めて露見した。
+
+### 残していること
+
+- **公開エンドポイントは出したまま**。誰でも叩ける状態なので、不要になったら
+  `cd billing-mcp && pnpm cdk destroy` で片付ける
+- フェーズ③（agent-app）着工。着工前に U1（JS SDK から AgentCore Payments を
+  呼べるか）の検証と、U6（x402MCPClient が structuredContent を落とす）の
+  対処方針決めが必要
+
 ## 2026-08-30: フェーズ②後半 — 売り手を Lambda へ転換し、CDK でデプロイ直前まで
 
 ### 着工前の詰め（grill-me）で崩れた前提
