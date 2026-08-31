@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   buildAttachmentBlock,
   buildUserMessage,
+  GENERATE_HTML_INPUT_SCHEMA,
   generateHtmlWithBedrock,
   sanitizeDocumentName,
 } from "./generate-html.js";
@@ -107,6 +109,21 @@ describe("generateHtmlWithBedrock", () => {
     const content = converse.mock.calls[0][0].messages[0].content;
     expect(content[0]).toHaveProperty("image");
     expect(content[1]).toHaveProperty("text", "画像を使って");
+  });
+
+  it("添付ファイルは最大1件（決定23。2件目はスキーマで弾く）", () => {
+    const schema = z.object(GENERATE_HTML_INPUT_SCHEMA);
+    const att = {
+      name: "a.png",
+      mediaType: "image/png",
+      data: Buffer.from("x").toString("base64"),
+    };
+    expect(schema.safeParse({ prompt: "p", attachments: [att] }).success).toBe(
+      true,
+    );
+    expect(
+      schema.safeParse({ prompt: "p", attachments: [att, att] }).success,
+    ).toBe(false);
   });
 
   it("空応答なら例外を投げる", async () => {

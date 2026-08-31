@@ -4,7 +4,7 @@
 
 AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
-- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で AgentCore Runtime にデプロイ
+- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で Lambda（Function URL・無認証）にデプロイ
 - `agent-app/` — 買い手。AWS Blocks 製のエージェント + 制御 Web アプリ
 
 ## 必ず守ること（作業記録）
@@ -32,6 +32,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - CDK は ops-agent-sample-on-aws 方式: 関数ベースのスタック定義、`parameter.ts`（gitignore、`parameter.sample.ts` をコミット）、jest + @swc/jest で Template テスト、cdk.json は tsx 実行
 - サーバー実装は Biome（lint / format）+ Vitest
 - MCP は `@modelcontextprotocol/sdk` 1.30 系 + `@modelcontextprotocol/ext-apps` 1.7 系に固定。SDK v2（`@modelcontextprotocol/server` 等）へは ext-apps の v2 対応後に移行（DESIGN.md 決定3）
+- サーバーは express を使わず、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから使う。MCP セッションはステートレス（DESIGN.md 決定22）
+- 売り手は無認証の公開エンドポイント。認可は x402 の支払いのみが担う（DESIGN.md 決定19・21）
 - x402 は `@x402/*`（v2 系）のみ使用。旧 `x402-express` 等の v1 パッケージは deprecated のため使わない
 
 ### agent-app/
@@ -50,6 +52,13 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
 - `pnpm dev` — UI ビルド + ローカル起動（ポート 8000。`.env` の `PAY_TO_ADDRESS` が必要）
 - `pnpm test` / `pnpm typecheck` / `pnpm lint` — コミット前に必ず全て通すこと
-- `pnpm buy:once` — 使い捨てウォレットで実オンチェーン決済テスト（`.env` の `BUYER_PRIVATE_KEY`。未設定なら鍵を生成して表示）
+- `pnpm buy:once` — 使い捨てウォレットで実オンチェーン決済テスト（`.env` の `BUYER_PRIVATE_KEY`。未設定なら鍵を生成して表示）。`MCP_SERVER_URL` で接続先を差し替えられる
 
-agent-app・billing-mcp の CDK は実装が入り次第追記する。
+### billing-mcp/
+
+- `pnpm test` / `pnpm typecheck` — CDK の Template テストと型検査
+- `pnpm synth` — 合成。`server` 側で先に `pnpm build:ui` が必要
+- `pnpm verify:bundle` — 合成したバンドルが実際に読み込めるかの検証（synth の後に実行）
+- `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**
+
+agent-app は実装が入り次第追記する。

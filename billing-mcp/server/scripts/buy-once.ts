@@ -1,10 +1,18 @@
-// ローカル検証用の買い手スクリプト（DESIGN.md 決定18）
+// 実オンチェーン決済の検証用スクリプト（DESIGN.md 決定18）
 // 使い捨てウォレットで billing-mcp の有料ツールを x402 支払い付きで1回呼ぶ。
+//
+// 売り手は無認証で公開されている（決定19）ため、認証ヘッダは要らない。
+// 接続先を差し替えるだけでローカルにもクラウドにも同じように向けられる。
 //
 // 使い方:
 //   1回目（鍵なし）: pnpm buy:once → 鍵を生成して表示するので .env に保存し、
 //                     表示されたアドレスに Circle Faucet でテスト USDC を入金する
-//   2回目以降:       サーバーを起動したうえで pnpm buy:once
+//   ローカル:        サーバーを起動したうえで pnpm buy:once
+//   デプロイ済み:    MCP_SERVER_URL に cdk deploy が出力する McpEndpointUrl を渡す
+//                     MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
+//
+// なお支払いフローは upfront（決定21）なので、決済が確定してから生成が走る。
+// 決済が通らなければ生成物は返らない
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { createx402MCPClient } from "@x402/mcp";

@@ -1,0 +1,31 @@
+{
+  "name": "billing-mcp-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "cdk": "cdk",
+    "test": "jest",
+    "typecheck": "tsc --noEmit",
+    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "synth": "cdk synth --quiet"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.15.0",
+    "@swc/jest": "^0.2.39",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "aws-cdk": "^2.1000.0",
+    "aws-cdk-lib": "^2.267.0",
+    "constructs": "^10.4.2",
+    "esbuild": "^0.25.0",
+    "jest": "^30.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@swc/core"
+    ]
+  }
+}

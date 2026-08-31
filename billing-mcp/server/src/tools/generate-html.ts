@@ -29,7 +29,7 @@ export type ConverseFn = (
   input: ConverseCommandInput,
 ) => Promise<ConverseCommandOutput>;
 
-function createDefaultConverse(): ConverseFn {
+export function createDefaultConverse(): ConverseFn {
   const bedrock = new BedrockRuntimeClient({
     region: process.env.AWS_REGION ?? "ap-northeast-1",
     requestHandler: { requestTimeout: BEDROCK_TIMEOUT_MS },
@@ -180,9 +180,13 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
   previousHtml: z.string().optional().describe("前回生成したHTML（修正時）"),
   attachments: z
     .array(AttachmentSchema)
-    .max(3)
+    // Function URL のリクエスト上限 6MB に収めるため1件に絞る（DESIGN.md 決定23）
+    .max(1)
     .optional()
-    .describe("添付ファイル（画像・ドキュメント、最大3件、base64エンコード）"),
+    .describe(
+      "添付ファイル（画像・ドキュメント、最大1件、base64エンコード。" +
+        "リクエスト全体で base64 後 6MB 以内 = 元データ約4.4MB まで）",
+    ),
 };
 
 // ツール本体のハンドラ。x402 の支払いラッパーで包めるよう register とは分離する

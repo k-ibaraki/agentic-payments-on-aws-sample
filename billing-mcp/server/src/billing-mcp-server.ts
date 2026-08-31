@@ -17,8 +17,12 @@ import {
 
 // Base Sepolia（テストネット）。DESIGN.md 決定8参照
 export const NETWORK = "eip155:84532";
-// 0.01 テスト USDC / 呼び出し。DESIGN.md 決定18参照
-export const DEFAULT_PRICE = "$0.01";
+// 0.1 テスト USDC / 呼び出し。DESIGN.md 決定18参照
+export const DEFAULT_PRICE = "$0.1";
+// 決済（settle）をハンドラ実行前に行う。無認証の公開エンドポイントで、
+// 署名は有効だが決済が通らない支払いにより Bedrock の生成コストだけを
+// 負わされる経路を塞ぐ。DESIGN.md 決定21参照
+export const PAYMENT_FLOW = "upfront";
 
 export interface BillingMcpServerOptions {
   /** x402 facilitator の URL（テストでは偽サーバーに差し替える） */
@@ -33,9 +37,12 @@ export interface BillingMcpServerOptions {
   loadUiHtml?: () => string;
 }
 
-// vite build（singlefile）の出力をそのまま配信する
-function defaultLoadUiHtml(): string {
-  return fs.readFileSync(
+// ui:// で配信する HTML の場所を決める。
+// ローカルは vite build（singlefile）の出力をそのまま読む。Lambda ではバンドル後に
+// import.meta.dirname が変わるため、パスを推測させず UI_HTML_PATH で明示する
+export function resolveUiHtmlPath(): string {
+  return (
+    process.env.UI_HTML_PATH ??
     path.join(
       import.meta.dirname,
       "..",
@@ -44,9 +51,12 @@ function defaultLoadUiHtml(): string {
       "src",
       "ui",
       "preview-view.html",
-    ),
-    "utf-8",
+    )
   );
+}
+
+function defaultLoadUiHtml(): string {
+  return fs.readFileSync(resolveUiHtmlPath(), "utf-8");
 }
 
 // 支払いラッパー（有料ツール用）を作る。facilitator への /supported 照会を伴う
@@ -67,8 +77,9 @@ export async function createPaidWrapper(options: {
     network: NETWORK,
     payTo: options.payTo,
     price: options.price ?? DEFAULT_PRICE,
-    // EIP-712 ドメインパラメータ（Base Sepolia のテスト USDC）
-    extra: { name: "USDC", version: "2" },
+    // EIP-712 ドメインパラメータ（Base Sepolia のテスト USDC）と支払いフロー。
+    // exact スキームは eip3009 で authorization / upfront に対応する
+    extra: { name: "USDC", version: "2", paymentFlow: PAYMENT_FLOW },
   });
 
   return createPaymentWrapper(resourceServer, {

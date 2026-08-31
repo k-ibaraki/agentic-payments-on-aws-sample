@@ -2,6 +2,172 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-08-31: フェーズ②完了 — クラウドへデプロイし実オンチェーン決済を検証
+
+### やったこと
+
+- 価格を 0.01 → **0.1 テスト USDC / 呼び出し**へ引き上げ（決定18 更新）。記録と実物が
+  ずれないよう DEFAULT_PRICE・parameter.sample.ts・.env.example・テスト期待額を揃えた
+- `cdk deploy` を実行し、無認証の Function URL を公開
+  - エンドポイント: `https://aadgxm2l6a6n77igxsqrdeelja0ivxmo.lambda-url.ap-northeast-1.on.aws/mcp`
+  - ロググループ: `BillingMcpStack-dev-McpFunctionLogsDE22E4A3-qqKrCgVjY6cX`
+- **実オンチェーン決済を 2 回成功**（Base Sepolia、各 0.1 テスト USDC）
+  - 1回目: [0x1f05b837…39221](https://sepolia.basescan.org/tx/0x1f05b837dd19da8a8c10928766afeaf05146a0efc9f313b2de958a8479939221)
+  - 2回目: [0xbe8f1bdf…90f4](https://sepolia.basescan.org/tx/0xbe8f1bdfa1040c9998a81d8b91e0ed010f8ae08e86f2557800c4a2ac795590f4)
+  - 売り手 0.02 → 0.12 → 0.22 USDC（1回あたり +0.1）／買い手 19.98 → 19.88 USDC
+- これでフェーズ②（billing-mcp 単独での動作確認）は完了
+
+### 実測値
+
+- **コールドスタート**: INIT 363.81ms + 初回実行 1,530ms（facilitator への `/supported`
+  照会を含む）。遅延構築にした判断（決定22）が効いており、INIT の 10 秒制限には遠い
+- **ウォームの MCP 往復**: 4〜95ms（initialize / tools/list / 支払い要求）
+- **有料ツール呼び出し**: 7,013ms（Bedrock の HTML 生成込み）。タイムアウト 600 秒に対し十分
+- **メモリ**: 1,024MB 中 132〜143MB しか使っていない。削れる余地あり
+- クラウド初回の疎通は 2.2 秒（コールドスタート込みの initialize）
+
+### 見つけて直した不具合: GET（SSE ストリーム要求）で Lambda が落ちる
+
+初回の実決済は成功したが、CloudWatch に `Runtime.NodeJsExit`
+（"a Promise that was never settled"）が 1 件記録されていた。
+
+- **原因**: MCP クライアントが initialize 後に開く単独の SSE ストリーム要求（GET）。
+  ステートレス + enableJsonResponse では SSE を提供しないが、GET をそのまま SDK に
+  渡すと終わらないストリームが返り、それを `response.text()` でバッファしようとして
+  Promise が永久に未解決になっていた
+- **再現**: ローカルで GET を投げると 5 秒待っても応答が返らないことを確認
+- **対処**: GET は SDK へ渡さず 405（Allow: POST, DELETE, OPTIONS）を返す。加えて
+  万一ストリーミング応答が来ても待ち続けないよう `isStreamingResponse` で防護し、
+  body を cancel して 500 を返す。両方をテストで固定（決定22 に追記）
+- **確認**: 再デプロイ後に 2 回目の実決済を通し、6 回の実行でエラーゼロ
+
+決済フロー自体は最初から成功しており、この不具合は副次的な GET 経路にのみ現れていた。
+ローカルのテストでは MCP クライアントの `fetch` を差し替えていたため GET 経路を
+踏んでおらず、クラウドのログを読んで初めて露見した。
+
+### 後片付け
+
+検証が済んだので `cdk destroy` でスタックを削除し、公開エンドポイントを閉じた
+（スタック不存在とエンドポイントの 403 応答を確認）。フェーズ④で結合検証をする際は
+`cdk deploy` で作り直す（URL は変わる）。
+
+### 残していること
+
+- フェーズ③（agent-app）着工。着工前に U1（JS SDK から AgentCore Payments を
+  呼べるか）の検証と、U6（x402MCPClient が structuredContent を落とす）の
+  対処方針決めが必要
+- Lambda のメモリは 1,024MB 中 143MB しか使っていない。コスト最適化の余地があるが、
+  コールドスタートとのトレードオフなので結合検証まで様子を見る
+
+## 2026-08-30: フェーズ②後半 — 売り手を Lambda へ転換し、CDK でデプロイ直前まで
+
+### 着工前の詰め（grill-me）で崩れた前提
+
+着工前に依頼の前提を調べ直したところ、技術的前提が3つ崩れた。
+
+1. **「server/ は実装済み・テスト17件グリーン」が成り立たない。** AgentCore Runtime は
+   `Mcp-Session-Id` を持たないリクエストにプラットフォーム側が勝手に付与する仕様
+   （MCP protocol contract）だが、当時の `server.ts` は知らないセッション ID を 404 で
+   弾いていた。デプロイ後の最初の `initialize` で落ちる状態だった
+2. **「API Gateway は 29秒上限」は REST API には当てはまらない。** 2024年6月に統合
+   タイムアウトの引き上げが可能になっており、当アカウントの L-E5AE38E3 も
+   Adjustable: True だった（HTTP API の 30秒上限は引き上げ不可のまま）
+3. **「AgentCore は匿名アクセス不可」は authorizer の設定項目に限った話だった。**
+   Cognito Identity Pool の未認証（ゲスト）ID で AWS 一時クレデンシャルを取れば、
+   実質匿名の公開も可能だった
+
+### 設計の転換
+
+ユーザーの指摘「IAM で絞るなら x402 で課金する必要がそもそもなくない？」が決定打になり、
+売り手を **AgentCore Runtime から無認証の Lambda Function URL へ移した**（決定19）。
+AgentCore の authorizer は IAM か JWT の二択で、IAM で絞ると認可の主体が「支払い」ではなく
+「権限付与」になり、x402 で課金する筋書きが崩れる。買い手側の AgentCore Payments は
+Runtime 非依存と調査済みだったため、売り手を AgentCore に置く必然性は残っていなかった。
+
+検討して不採用にした構成（REST API + クォータ引き上げ / AgentCore + Identity Pool ゲスト /
+AgentCore + 公開プロキシ）は理由ごと決定20 に記録した。
+
+### やったこと
+
+- ドキュメント更新: 決定4・5・6・10・17 を追随更新、決定19〜22 を追加、U3 を決着
+- x402 の支払いフローを `upfront` に切り替え（決定21）。テストの支払いペイロードは、
+  サーバーが広告した accepts の写しから組み立てる方式に変更した
+- express を廃し、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから
+  使う形に作り替え（決定22）。MCP セッションはステートレス
+- CDK（billing-mcp/ 直下、ops-agent 方式）で NodejsFunction（arm64 / Node.js 22 / zip）+
+  Function URL（AuthType NONE）+ reserved concurrency + CloudWatch Logs + Bedrock IAM
+- CI に billing-mcp-cdk ジョブを追加（型・テスト・合成・バンドル検証）
+- テスト 17件 → 32件（サーバー）+ 7件（CDK）
+
+### 実測で分かったこと・つまずき
+
+- **AgentCore のデータプレーンは CORS 全開だった**（allow-origin `*`、リクエストヘッダは
+  エコーで全許可、`Mcp-Session-Id` は expose 済み）。決定10 のブラウザ直接取得は IAM でも
+  JWT でも成立すると分かり、U3 の判断材料が一つ減った
+- **旧 express サーバーが実際に 404 を返すことを実物で確認した。** 本体チェックアウト側で
+  起動しっぱなしだった旧サーバーに未知の `Mcp-Session-Id` 付きで `initialize` を投げると
+  `404 {"error":"Session not found"}`。同じリクエストが新実装では 200 で通る
+- **合成した Lambda バンドルをそのまま実行して、デプロイ後にしか出ない不具合を2件潰した**:
+  ①`@aws-sdk/*` は NodejsFunction の既定で external になりランタイム同梱版に依存する
+  → `externalModules: []` で同梱。②AWS SDK v3 は CJS 配布で動的 require を持つため、
+  ESM 出力に同梱すると `Dynamic require of "node:stream" is not supported` で落ちる
+  → `createRequire` バナーを追加。再発検知のため `scripts/verify-bundle.mjs` を CI に載せた
+- **`jp.` 推論プロファイルは ap-northeast-1 と ap-northeast-3 に跨る**（`aws bedrock
+  list-inference-profiles` で実測）。IAM はプロファイル ARN だけでは足りず、跨ぐ全リージョンの
+  基盤モデル ARN も要る。片方だけだとデプロイ成功後に AccessDenied になる
+- **買い手クライアントの upfront 対応を、テスト USDC を使わずに検証した。** `@x402/mcp` の
+  実クライアント + 使い捨て viem 鍵（署名は本物）+ 偽 facilitator で往復を通した
+- `pnpm exec tsx --env-file-if-exists=.env` は pnpm がフラグを食うため動かない。
+  `./node_modules/.bin/tsx` を直接呼ぶ必要がある
+- mise の設定が未信頼だと `pnpm install` が黙って失敗する（`| tail` で終了コードが隠れた）
+- 支払いラッパーの構築（facilitator への `/supported` 照会）は全リクエスト経路で走るため、
+  x402.org に到達できないと無課金のはずの `ui://` 取得まで 503 になる。決定11 の
+  「ui:// は無課金」は価格については成り立つが、可用性については facilitator に連座する
+- 認証情報なしでも `pnpm synth` が通ることを確認済み（CI ジョブは資格情報を持たない）
+- 決定16（進行順 ①②③④）は今回の転換でも変わらないため、書き換えていない
+
+### セルフレビュー（同日・フェーズ②後半）
+
+指摘5件を全件修正した。あわせて添付ファイルの上限をユーザー判断で最大1件に変更（決定23）。
+
+1. 添付上限の退行: 旧 express の 25mb 上限が消え、ツールは「3件まで」と広告したまま
+   Function URL の 6MB に当たる状態だった → 上限を1件に絞り、サイズの目安を説明文に明記
+2. Bedrock クライアントの作り捨て: ステートレス化の副作用で毎リクエスト
+   `new BedrockRuntimeClient` が走っていた → fetch ハンドラ生成時に1度だけ解決して共有
+3. 「損失の上限」の誇張: reserved concurrency が押さえるのは瞬間的な流量であって
+   累積コストではない → 4箇所の文言を修正し、累積の上限には AWS Budgets 等を併用と明記
+4. ゼロアドレスの罠: 雛形のまま deploy すると売上が焼却される（settle は成功しレシートも
+   返るため無音）→ 合成の段階でゼロアドレスを弾くガードを追加（テスト付き）。
+   CI は合成のみなので、雛形コピー後に検証用ダミーへ sed 置換して通す
+5. commandHooks の cp が未引用: 空白を含むパスで bundling が壊れる → 引用を追加
+
+### 残していること（次回セッションの作業）
+
+フェーズ②の完了に向けて、上から順に:
+
+1. **デプロイ実施**: `billing-mcp/` で `pnpm cdk diff` を再確認して `pnpm cdk deploy`。
+   無認証の公開エンドポイントが出るため、parameter.ts の `payToAddress`（設定済み:
+   0x833E…B94D）と `reservedConcurrency` を確認してから。出力の `McpEndpointUrl` を控える
+2. **クラウド実オンチェーン決済**（決定18 の仕上げ・upfront の実地初検証）:
+   ワークツリーに `.env` が無いので本体チェックアウト側から複製し、
+   `MCP_SERVER_URL=<McpEndpointUrl> pnpm buy:once`。買い手 0xd98A…3Ebf に
+   約19.98 テスト USDC 残あり。売り手残高の増分とトランザクション確定を確認
+3. **検証結果の記録**: CloudWatch Logs（出力 `LogGroupName`）でコールドスタートと
+   facilitator 疎通を確認し、結果を DESIGN.md（決定18・21 の理由欄）と本記録に反映。
+   検証が済んだらフェーズ②完了
+4. **フェーズ③着工（agent-app）**: AWS Blocks のスキャフォールド生成から。着工前に
+   U1（JS SDK から AgentCore Payments を呼べるか）の検証と、U6（x402MCPClient が
+   structuredContent を落とす）の対処方針決めが必要
+5. 小物: PR マージ後に CI（billing-mcp-cdk ジョブ初回実行）がグリーンか確認
+
+注意事項:
+
+- **ポート 8000 で本体チェックアウト側の旧 express サーバーが動いたまま**（PID 15052、
+  2026-08-30 22:02 起動）。`buy-once.ts` の既定接続先と衝突するので、ローカル検証の前に
+  止めること
+- デプロイ後の売り手は誰でも叩ける。検証が長引く場合も出しっぱなしにせず、
+  終わったら `pnpm cdk destroy` で片付けるか、残す判断を記録すること
+
 ## 2026-08-30: フェーズ②前半 — billing-mcp サーバー実装とローカル実決済検証
 
 ### やったこと
