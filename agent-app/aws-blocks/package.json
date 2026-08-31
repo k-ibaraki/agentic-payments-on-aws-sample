@@ -11,5 +11,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1121.0"
   }
 }
