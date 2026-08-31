@@ -27,7 +27,7 @@ AWS Blocks 製のエージェント + Web アプリがそれを「支払いな�
 
 ## ステータス
 
-- billing-mcp: サーバー実装済み。ローカルで実オンチェーン決済（Base Sepolia のテスト USDC）まで検証済み。CDK（Lambda + Function URL）とクラウド上での決済検証はこれから
+- billing-mcp: 実装・CDK・デプロイ・クラウド上での実オンチェーン決済検証まで完了（フェーズ②完了）。検証後にスタックは削除済みで、必要なときに `cdk deploy` で作り直す
 - agent-app: これから
 
 経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。

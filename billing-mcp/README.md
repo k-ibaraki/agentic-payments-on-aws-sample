@@ -1,7 +1,8 @@
 # billing-mcp（売り手: x402 課金付き MCP Apps）
 
 x402 で課金する MCP Apps（HTML 生成ツール + プレビュー UI）を、CDK で **Lambda（Function URL・無認証）** にデプロイする。
-サーバー・CDK ともに実装済み。クラウド上での実オンチェーン決済検証は未実施。
+実装・デプロイ・クラウド上での実オンチェーン決済まで検証済み（DESIGN.md 決定18）。
+検証後にスタックは削除しているため、使うときは下記の手順で作り直す。
 
 認証は掛けない。**「支払った者にツールが開く」を x402 が単独で担う**のがこのサンプルの主張であり、
 その手前に IAM や JWT のゲートを置くと認可の主体が支払いではなく権限付与になってしまうため（DESIGN.md 決定19）。
@@ -73,6 +74,18 @@ MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
 
 > **注意**: `pnpm cdk deploy` は無認証の公開エンドポイントをインターネットに出す。
 > 誰でも Bedrock を動かせる状態になるため、`reservedConcurrency` と価格の設定を確認してから実行すること。
+
+## 後片付け
+
+検証が済んだら公開を閉じる。出しっぱなしにすると、支払いなしで叩ける経路
+（`initialize` / `tools/list` / `ui://` 取得）の Lambda 実行時間とログの課金が
+積み上がり続ける。
+
+```bash
+pnpm cdk destroy
+```
+
+再び必要になったら `pnpm cdk deploy` で作り直せる（Function URL は変わる）。
 
 ## 採らなかった構成
 
