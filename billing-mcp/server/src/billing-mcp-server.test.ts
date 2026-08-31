@@ -108,7 +108,7 @@ describe("billing-mcp server（x402 課金付き MCP Apps）", () => {
       scheme: "exact",
       network: "eip155:84532",
       payTo: PAY_TO,
-      amount: "10000",
+      amount: "100000",
     });
     // 未払いでは生成処理も呼ばれない
     expect(converse).not.toHaveBeenCalled();

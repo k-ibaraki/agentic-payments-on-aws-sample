@@ -17,8 +17,8 @@ import {
 
 // Base Sepolia（テストネット）。DESIGN.md 決定8参照
 export const NETWORK = "eip155:84532";
-// 0.01 テスト USDC / 呼び出し。DESIGN.md 決定18参照
-export const DEFAULT_PRICE = "$0.01";
+// 0.1 テスト USDC / 呼び出し。DESIGN.md 決定18参照
+export const DEFAULT_PRICE = "$0.1";
 // 決済（settle）をハンドラ実行前に行う。無認証の公開エンドポイントで、
 // 署名は有効だが決済が通らない支払いにより Bedrock の生成コストだけを
 // 負わされる経路を塞ぐ。DESIGN.md 決定21参照
