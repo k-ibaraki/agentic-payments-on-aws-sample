@@ -29,6 +29,19 @@ function withCors(headers: Headers): Headers {
   return headers;
 }
 
+/**
+ * 本文をバッファしてはいけない（終わらない）応答か。
+ *
+ * SSE ストリームに対して `response.text()` を呼ぶと永久に解決しない Promise が
+ * でき、Lambda では Runtime.NodeJsExit（Promise が未解決のまま Node が終了）に
+ * なって実行環境ごと落ちる。クラウドで実際に踏んだため防護を残す
+ */
+export function isStreamingResponse(response: Response): boolean {
+  return (
+    response.headers.get("content-type")?.includes("text/event-stream") ?? false
+  );
+}
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -82,6 +95,23 @@ export function createMcpFetchHandler(
       return jsonResponse(404, { error: "Not Found" });
     }
 
+    // ステートレス + enableJsonResponse では単独の SSE ストリームを提供しない。
+    // GET をそのまま SDK へ渡すと終わらないストリームが返り、応答が返らなくなる。
+    // MCP 仕様上、SSE を提供しないサーバーは GET に 405 を返してよい
+    if (request.method === "GET") {
+      const response = jsonResponse(405, {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32000,
+          message:
+            "Method Not Allowed: このサーバーは単独の SSE ストリームを提供しません",
+        },
+      });
+      response.headers.set("allow", "POST, DELETE, OPTIONS");
+      return response;
+    }
+
     let paid: Awaited<ReturnType<typeof createPaidWrapper>>;
     try {
       paid = await getPaid();
@@ -102,6 +132,21 @@ export function createMcpFetchHandler(
     try {
       await server.connect(transport);
       const response = await transport.handleRequest(request);
+      if (isStreamingResponse(response)) {
+        // ここに来る経路は塞いだつもりだが、万一残っていても待ち続けない
+        await response.body?.cancel();
+        console.error(
+          "ストリーミング応答は Function URL のバッファ応答では返せません",
+        );
+        return jsonResponse(500, {
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32603,
+            message: "Streaming responses are not supported",
+          },
+        });
+      }
       const body = await response.text();
       return new Response(body === "" ? null : body, {
         status: response.status,

@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMcpFetchHandler, MCP_PATH } from "./app.js";
+import { createMcpFetchHandler, isStreamingResponse, MCP_PATH } from "./app.js";
 import { startFakeFacilitator } from "./testing/fake-facilitator.js";
 import { PREVIEW_VIEW_RESOURCE_URI } from "./tools/generate-html.js";
 
@@ -125,6 +125,39 @@ describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => 
     expect(response.headers.get("access-control-allow-headers")).toContain(
       "mcp-protocol-version",
     );
+  });
+
+  it("GET（SSE ストリーム要求）は 405 を返し、応答を待たせない", async () => {
+    // ステートレス + enableJsonResponse では単独の SSE ストリームを提供しない。
+    // これを SDK に渡すと終わらないストリームが返り、本文をバッファする実装が
+    // 永久に待つ。クラウドで Runtime.NodeJsExit（Promise が未解決のまま Node が
+    // 終了）として実際に発生したため、応答が返ることをテストで固定する
+    const response = await Promise.race([
+      app(
+        new Request(`${ORIGIN}${MCP_PATH}`, {
+          method: "GET",
+          headers: { accept: "text/event-stream" },
+        }),
+      ),
+      new Promise<Response>((_, reject) =>
+        setTimeout(() => reject(new Error("応答が返りませんでした")), 5000),
+      ),
+    ]);
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toContain("POST");
+  });
+
+  it("ストリーミング応答はバッファ対象と判定しない", () => {
+    expect(
+      isStreamingResponse(
+        new Response("", { headers: { "content-type": "text/event-stream" } }),
+      ),
+    ).toBe(true);
+    expect(
+      isStreamingResponse(
+        new Response("{}", { headers: { "content-type": "application/json" } }),
+      ),
+    ).toBe(false);
   });
 
   it("MCP エンドポイント以外のパスは 404", async () => {
