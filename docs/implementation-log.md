@@ -44,6 +44,37 @@ CreatePaymentInstrument / GetResourcePaymentToken 等 **Payments 系 11 コマ�
 旧買い手ウォレットから新ウォレットへテスト USDC 送金 → 実オンチェーン決済で縦串検証 →
 CI の agent-app ジョブ有効化。push はユーザー指示があるまでしない。
 
+### 同日の実装（縦串の買い手側まで完了、決済検証はブロック中）
+
+- **スキャフォールド生成**: `npx @aws-blocks/create-blocks-app agent-app --template auth-cognito`。
+  生成物そのままを基線コミットし、以後の差分を追えるようにした（決定13・15。npm 管理）
+- **Payments セットアップスクリプト**（`agent-app/scripts/payments-setup.ts`、冪等）を実装し、
+  ap-southeast-1 に IAM サービスロールと PaymentManager（`agenticpaymentssample-btbtr1e6q9`、READY）
+  を作成した。実測で公式ドキュメントと食い違った点が2つ:
+  - 信頼ポリシーはグローバルの `bedrock-agentcore.amazonaws.com` だけでは
+    `Role validation failed` になり、**リージョン付き `bedrock-agentcore.ap-southeast-1.amazonaws.com`
+    の併記が必要**だった
+  - PaymentManager / Connector の name は**英数字のみ**（`[a-zA-Z][a-zA-Z0-9]{0,47}`）。
+    ARN では小文字化される（信頼ポリシーの ArnLike に影響）
+- **Coinbase コネクタ作成は `SubscriptionRequiredException` でブロック中**。AWS Marketplace の
+  「Coinbase Wallets for AgentCore Payments」への加入（ユーザー操作）が前提と判明。
+  加入後に同スクリプトを再実行 → OAuth 同意（QUICK_CREATE、URL 有効期限約10分）→
+  ウォレット作成・委任 → 送金 → 縦串検証、の順で再開する
+- **x402 支払いモジュールを TDD で実装**（`agent-app/aws-blocks/payments/`。unit 12件グリーン）:
+  - `x402-payer`: ProcessPayment(CRYPTO_X402) に「受諾した支払い条件」を渡して
+    支払い証明を得る。PaymentStatus は `PROOF_GENERATED` のみで、**清算は売り手側
+    facilitator の仕事**（署名だけウォレットが行う）という分担も型から確認
+  - `paid-tool-caller`: 素の callTool を「要求受領 → 支払い → `_meta["x402/payment"]` 付き
+    再呼び出し」の2段で叩く。structuredContent が欠けないことをテストで固定（U6 回避）
+- **買い手エージェント配線**（`aws-blocks/buyer-agent.ts`）: generateHtml ツールで購入し、
+  HTML 本体は KVStore へ、会話には resultId だけ返す（決定10 の最終形を見据えた設計）。
+  ローカルの LLM は canned プロバイダで、支払い・売り手側生成・決済は本物が動く
+- スキャフォールド由来の todos デモ（DistributedTable）はフロントが強く依存しているため
+  ③では残置し、④の UI 置き換えと同時に撤去する
+- CI に agent-app ジョブを追加（npm ci + typecheck + unit テスト）
+- つまずき: `aws login` の資格情報が途中でローテーション失敗の一時エラーを出した
+  （数分後に自走回復）。IAM の Description は Latin-1 のみで日本語不可
+
 ## 2026-08-31: フェーズ②完了 — クラウドへデプロイし実オンチェーン決済を検証
 
 ### やったこと
