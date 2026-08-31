@@ -2,6 +2,48 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-08-31: フェーズ③着工 — 前提検証（grill-me）と方針決定
+
+### 着工前の詰め（grill-me）で崩れた前提
+
+- 「PR #1 をマージするか判断」→ **既にマージ済み**（163a161、08:58 UTC）。main から
+  新ブランチ `feat/agent-app` を切って着工
+- 「作業 worktree は plush-breeze」→ 実際は **teal-linden**（main と同一コミットの
+  detached HEAD だった）。`billing-mcp/server/.env` も無かったため plush-breeze から複製
+- 「U1 は未検証」→ **事実確認だけで決着**（下記）。SigV4 直呼び・Python 薄層の検討は不要に
+
+### U1 の検証（決定24 に昇格）
+
+`@aws-sdk/client-bedrock-agentcore` 3.1121.0 を一時ディレクトリへ実インストールして
+型定義を検分。データプレーンに ProcessPayment / CreatePaymentSession /
+CreatePaymentInstrument / GetResourcePaymentToken 等 **Payments 系 11 コマンド**、
+`-control` に PaymentManager / PaymentConnector / PaymentCredentialProvider の CRUD を確認。
+`PaymentType.CRYPTO_X402` + `CryptoX402PaymentInput/Output` で x402 ペイロードを
+そのまま搬送できる。JS SDK だけで完結する。
+
+あわせて実測した周辺事実:
+
+- ap-southeast-1 の PaymentManager は**ゼロ件**。セットアップは完全にゼロから
+- Coinbase コネクタの provision は `MANUAL`（CDP の API キー持参）か
+  `QUICK_CREATE`（サービスが OAuth 同意を仲介）の二択
+- `@x402/mcp` は 2.24.0 のまま。U6（structuredContent 欠落）の上流修正は出ていない
+
+### ユーザー決定（grill-me の問答）
+
+1. ③の完了条件は**売り手ローカルで縦串**（billing-mcp は pnpm dev、agent-app もローカル、
+   Payments のみクラウド実物で実オンチェーン決済まで）→ 決定27
+2. Coinbase コネクタは **QUICK_CREATE**（OAuth 同意はユーザーが実施）→ 決定27
+3. U6 は**低レベル API で回避** → 決定25
+4. U6 の上流 issue 報告は**③完了後に改めて判断**（保留）→ 決定25 理由欄
+5. 使用ブロックは想定4つに **Realtime を加えた5つ**で確定（配線は④）→ 決定26
+
+### 段取り
+
+ブランチ作成・.env 複製・本記録 → AWS Blocks スキャフォールド → TDD で
+支払いクライアント〜有料ツール呼び出し → Payments セットアップ（QUICK_CREATE）→
+旧買い手ウォレットから新ウォレットへテスト USDC 送金 → 実オンチェーン決済で縦串検証 →
+CI の agent-app ジョブ有効化。push はユーザー指示があるまでしない。
+
 ## 2026-08-31: フェーズ②完了 — クラウドへデプロイし実オンチェーン決済を検証
 
 ### やったこと
