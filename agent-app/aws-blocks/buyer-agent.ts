@@ -27,6 +27,12 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// 購入物のキーは購入者で名前空間を切る。resultId は推測困難な UUID だが、
+// それだけを防壁にせず「他人の resultId は取得できない」を構造で担保する
+export function purchasedHtmlKey(userId: string, resultId: string): string {
+  return `${userId}/${resultId}`;
+}
+
 export function createBuyerAgent(scope: Scope) {
   // 購入した HTML の置き場。会話には resultId だけを返す
   const artifacts = new KVStore(scope, 'purchased-html', {
@@ -49,6 +55,8 @@ export function createBuyerAgent(scope: Scope) {
       'あなたのウォレット（AgentCore Payments）から x402 プロトコルで支払います。',
       '結果は resultId で参照できる旨をユーザーに伝えてください。',
     ].join('\n'),
+    // 購入物を購入者に紐づけるため、呼び出しごとに userId を必須で受け取る
+    toolContextSchema: z.object({ userId: z.string() }),
     tools: (tool) => ({
       generateHtml: tool({
         description:
@@ -59,7 +67,10 @@ export function createBuyerAgent(scope: Scope) {
           prompt: z.string().describe('生成したいページの内容の指示'),
         }),
         // 戻り値は JSONValue（undefined を含む余地のある推論を避けるため明示的に組む）
-        handler: async ({ input }): Promise<{ [key: string]: string | number | boolean }> => {
+        handler: async ({
+          input,
+          context,
+        }): Promise<{ [key: string]: string | number | boolean }> => {
           const payer = createAgentCorePayer(
             new BedrockAgentCoreClient({ region: PAYMENTS_REGION }),
             {
@@ -79,7 +90,7 @@ export function createBuyerAgent(scope: Scope) {
             };
           }
           const resultId = randomUUID();
-          await artifacts.put(resultId, {
+          await artifacts.put(purchasedHtmlKey(context.userId, resultId), {
             html: outcome.html,
             ...(outcome.filename ? { filename: outcome.filename } : {}),
             ...(outcome.paymentResponse?.transaction

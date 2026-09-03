@@ -13,7 +13,7 @@
 // ローカルの LLM は既定で canned プロバイダ（モック）だが、
 // 支払い・billing-mcp 側の Bedrock 生成・オンチェーン決済はすべて本物が動く
 import { Scope } from '@aws-blocks/blocks';
-import { createBuyerAgent } from '../aws-blocks/buyer-agent.js';
+import { createBuyerAgent, purchasedHtmlKey } from '../aws-blocks/buyer-agent.js';
 
 const prompt =
   process.argv[2] ??
@@ -34,6 +34,8 @@ console.log(`エージェントへの依頼: generateHtml ツールで ${prompt}
 const result = await agent.stream(`generateHtml ツールを使ってください: ${prompt}`, {
   conversationId,
   userId,
+  // toolContextSchema が userId を必須にしている（購入物を購入者に紐づけるため）
+  context: { userId },
 });
 
 const channel = await result.channel;
@@ -77,7 +79,7 @@ if (!body.resultId) {
   }
 }
 if (body.resultId) {
-  const stored = await artifacts.get(body.resultId);
+  const stored = await artifacts.get(purchasedHtmlKey(userId, body.resultId));
   console.log('');
   console.log(`resultId: ${body.resultId}`);
   console.log(`決済トランザクション: ${body.transaction ?? '(なし)'}`);

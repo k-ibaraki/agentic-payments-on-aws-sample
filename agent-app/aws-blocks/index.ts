@@ -1,7 +1,7 @@
 import { ApiNamespace, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { createBuyerAgent } from './buyer-agent.js';
+import { createBuyerAgent, purchasedHtmlKey } from './buyer-agent.js';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -116,8 +116,11 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 // 構成と配線は buyer-agent.ts 参照
 const { agent: buyerAgent, artifacts: purchasedHtml } = createBuyerAgent(scope);
 
-// エージェントの会話 API。読み取り系は listConversations で所有を検証する
-// （Agent BB は読み取り経路の認可を呼び出し側に委ねる仕様のため）
+// エージェントの会話 API。
+// Agent BB は conversationId / channelId の認可を呼び出し側に委ねる仕様なので、
+// 会話に触れる経路（読み書き・購読）はすべて listConversations で所有を検証する。
+// 特に sendMessage は実費（0.1 テスト USDC）を発生させる書き込み経路であり、
+// 本アプリは自己サインアップを許しているため検証を省けない
 export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   async createConversation() {
     const user = await auth.requireAuth(context);
@@ -126,30 +129,46 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
 
   async sendMessage(conversationId: string, message: string, channelId: string) {
     const user = await auth.requireAuth(context);
-    await buyerAgent.stream(message, { conversationId, channelId, userId: user.userSub });
+    await requireOwnedConversation(user.userSub, conversationId);
+    await buyerAgent.stream(message, {
+      conversationId,
+      channelId,
+      userId: user.userSub,
+      // 購入物を購入者に紐づけるため、ツールへ userId を渡す
+      context: { userId: user.userSub },
+    });
     return { accepted: true };
   },
 
   async getMessages(conversationId: string) {
     const user = await auth.requireAuth(context);
-    const owned = await buyerAgent.listConversations(user.userSub);
-    if (!owned.some((c) => c.conversationId === conversationId)) {
-      throw new Error('会話が見つかりません');
-    }
+    await requireOwnedConversation(user.userSub, conversationId);
     return { messages: await buyerAgent.getConversation(conversationId) };
   },
 
+  // channelId の既定値は conversationId（Agent BB の解決順）。他人の会話の
+  // ストリームを購読できないよう、同じ所有検証を通す
   async getChannel(channelId: string) {
-    await auth.requireAuth(context);
+    const user = await auth.requireAuth(context);
+    await requireOwnedConversation(user.userSub, channelId);
     return buyerAgent.getChannel(channelId);
   },
 
-  // 購入済み HTML の取得（決定10: ツール結果はエージェント経由でブラウザへ渡す）
+  // 購入済み HTML の取得（決定10: ツール結果はエージェント経由でブラウザへ渡す）。
+  // キーが購入者で名前空間を切られているため、他人の resultId では引けない
   async getPurchasedHtml(resultId: string) {
-    await auth.requireAuth(context);
-    return await purchasedHtml.get(resultId);
+    const user = await auth.requireAuth(context);
+    return await purchasedHtml.get(purchasedHtmlKey(user.userSub, resultId));
   },
 }));
+
+// 会話の所有者でなければ弾く。存在の有無を漏らさないよう文言は一本化する
+async function requireOwnedConversation(userSub: string, conversationId: string): Promise<void> {
+  const owned = await buyerAgent.listConversations(userSub);
+  if (!owned.some((c) => c.conversationId === conversationId)) {
+    throw new Error('会話が見つかりません');
+  }
+}
 
 // State machine driving the <Authenticator> UI component
 export const authApi = auth.createApi();
