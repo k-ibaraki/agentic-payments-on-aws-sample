@@ -198,7 +198,8 @@
 - **売り手のクラウド再デプロイと結合**（`pnpm cdk deploy` → `BILLING_MCP_URL` 差し替え → ブラウザから
   実決済 → CloudWatch を読む → `cdk destroy`）。ユーザー判断で同日は見送り。`billing-mcp/parameter.ts`
   は plush-breeze から本体へ複製済み。買い手ウォレットは CDP faucet で補充済み（1.1 テスト USDC）
-- 売り手側の冪等化（同じ支払い証明の再提示には再決済せず成果物を返す）。決定31 の限界
+- 売り手側の冪等化（同じ支払い証明の再提示には再決済せず成果物を返す）。決定31 の限界。
+  返金に相当する仕組み（`authorization` / `escrow` フロー）と合わせて **U7** に起票（今回の実装では踏み込まない。ユーザー決定）
 - ⑤（agent-app のクラウド deploy）: 支払い主体の二重化、selfSignUp とレート制限、`PAYMENT_*` の
   Lambda 配線と AppSetting 化、別オリジンでの HTML 配信の検討
 - PaymentSession は 60 分で失効。WalletHub の委任は 2026-09-10 まで（決定27）
