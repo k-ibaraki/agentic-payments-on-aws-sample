@@ -4,6 +4,7 @@
 import {
   PAYMENT_META_KEY,
   PAYMENT_RESPONSE_META_KEY,
+  type PaymentPayload,
   type PaymentRequired,
   paymentRequiredSchema,
   type SettleResponse,
@@ -12,11 +13,42 @@ import type { X402Payer } from './x402-payer.js';
 
 // MCP SDK の Client.callTool と互換の最小の形（テストで差し替えるため）
 export interface McpClientLike {
-  callTool(params: {
-    name: string;
-    arguments?: Record<string, unknown>;
-    _meta?: Record<string, unknown>;
-  }): Promise<Record<string, unknown>>;
+  callTool(
+    params: {
+      name: string;
+      arguments?: Record<string, unknown>;
+      _meta?: Record<string, unknown>;
+    },
+    options?: CallOptions,
+  ): Promise<Record<string, unknown>>;
+}
+
+export interface CallOptions {
+  /**
+   * 応答を待つ上限（ミリ秒）。MCP SDK の既定は 60 秒で、売り手の生成（Bedrock を 570 秒で打ち切り、
+   * その外側の Lambda が 600 秒）より短い。既定のまま使うと、売り手が決済済みで生成を続けている
+   * 最中に買い手が諦め、成果物だけが失われる（2026-09-03 に実際に起きた二重支払いの原因）
+   */
+  timeout?: number;
+}
+
+/**
+ * 支払いが成立した後にツール呼び出しが失敗したことを表す。
+ * 呼び出し側はこれを「未払いの失敗」と区別し、レシートを残して自動再試行しないこと
+ */
+export class PaidToolError extends Error {
+  readonly paymentMade = true as const;
+  /** EIP-3009 の nonce。売り手側の清算をオンチェーンで辿る手がかり */
+  readonly authorizationNonce?: string;
+
+  constructor(message: string, readonly paymentPayload: PaymentPayload, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'PaidToolError';
+    const inner = paymentPayload.payload as { authorization?: { nonce?: unknown } } | undefined;
+    if (typeof inner?.authorization?.nonce === 'string') {
+      this.authorizationNonce = inner.authorization.nonce;
+    }
+  }
 }
 
 export interface PaidToolOutcome {
@@ -46,19 +78,32 @@ export async function callPaidTool(
   name: string,
   args: Record<string, unknown>,
   payer: X402Payer,
+  options?: CallOptions,
 ): Promise<PaidToolOutcome> {
-  const first = await mcp.callTool({ name, arguments: args });
+  const first = await mcp.callTool({ name, arguments: args }, options);
   const required = parsePaymentRequired(first);
   if (!required) {
     return { result: first, paymentMade: false };
   }
 
   const paymentPayload = await payer.pay(required);
-  const second = await mcp.callTool({
-    name,
-    arguments: args,
-    _meta: { [PAYMENT_META_KEY]: paymentPayload },
-  });
+  let second: Record<string, unknown>;
+  try {
+    second = await mcp.callTool(
+      {
+        name,
+        arguments: args,
+        _meta: { [PAYMENT_META_KEY]: paymentPayload },
+      },
+      options,
+    );
+  } catch (error) {
+    // 支払い証明は送った後。売り手は upfront（決定21）で決済済みの可能性が高い
+    const message = error instanceof Error ? error.message : String(error);
+    throw new PaidToolError(`支払い後のツール呼び出しに失敗しました: ${message}`, paymentPayload, {
+      cause: error,
+    });
+  }
 
   if (parsePaymentRequired(second)) {
     throw new Error('支払い後の再呼び出しでも支払い要求が返りました（決済が受理されていません）');

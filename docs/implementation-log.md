@@ -2,6 +2,56 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-03: フェーズ④着工 — 前提検証（grill-me）と方針決定
+
+### 着工前の詰め（grill-me）で崩れた前提
+
+- worktree は 3 つではなく **4 つ**（`glacial-salmon` が detached HEAD で増えていた）。作業は本体 worktree で
+  `main` から `feat/integration` を切って行うことにした
+- `.env` は本体 worktree に**既に両方あり**、複製は不要だった。一方 `agent-app/node_modules` が無く
+  `npm install` が要った。`billing-mcp/parameter.ts` は本体にも teal-linden にも無く、②の
+  worktree（plush-breeze）からのみ複製できた
+- **CORS は③時点で実装済み**（`billing-mcp/server/src/app.ts` が allow-origin `*` と OPTIONS 応答を
+  自前で返す）。依頼文の「設定が要る」は「クラウド上でブラウザから未検証」が正確
+- 依頼文が見落としていた重い事実: 売り手の preview-view は `app.ontoolresult` を待つだけの作りで、
+  ui:// を iframe に入れただけでは何も映らない。ブラウザが MCP Apps の**ホスト**（`AppBridge`）を
+  実装し、`getPurchasedHtml` で取った HTML を `sendToolResult` で注入して初めて描画される（決定29）
+- `tool-result` チャンクは `toolName` しか運ばない（bb-agent 0.3.1 の実装を読んで確認）。
+  ブラウザが resultId を知るには会話メッセージの `metadata.toolOutput` を読む経路が要る
+
+### 裏が取れた前提
+
+- PaymentManager READY / Connector READY / Instrument ACTIVE。ウォレット残高 0.7 テスト USDC
+  （Base Sepolia の RPC で `balanceOf` を実測）。WalletHub 委任の期限は API から読めず未検証
+- `BillingMcpStack-dev` は DELETE_COMPLETE で AWS 上に無い
+- `useChat`（`@aws-blocks/bb-agent/client`）は React 非依存で、雛形の vanilla DOM のまま使える
+
+### 節目の確認事項
+
+- **U5**: ext-apps の npm 最新は 1.7.5（2026-07-23 公開）、peer は sdk ^1.29 のまま。v2 対応は無く
+  決定3 は据え置き（DESIGN.md U5 に追記）
+- **Coinbase の課金**: Cost Explorer の AWS Marketplace 明細（8/25〜9/2）に Coinbase の行は**ゼロ**。
+  表示されるのは Bedrock の Claude（Marketplace 経由）のみ。9/3 分は反映待ちで後日再確認する
+
+### ユーザー決定（grill-me の問答）
+
+1. ④の完了条件は agent-app ローカル + 売り手クラウド。クラウド deploy は⑤へ（決定28）
+2. 描画経路は「ui:// ホスト実装 + getPurchasedHtml 注入」（決定29）
+3. ローカルの LLM は `model.local` に Bedrock を指定（決定28）
+4. ④で扱う繰り越し課題は「buyer API を通る e2e」と「購入単位の冪等キー」（決定30）。
+   支払い主体の二重化・selfSignUp とレート制限は⑤へ
+5. 売り手の再デプロイは UI がローカル売り手で通ってから。deploy と destroy の直前に確認を取る
+6. 作業場所は本体 worktree の新ブランチ
+
+### 段取り
+
+1. 決定録・実装記録の追記（本エントリ）
+2. バックエンド: todos デモと雛形 API の撤去、`model.local`、冪等キー、購入一覧 API、
+   売り手情報 API（ブラウザが ui:// を取りに行く先）。TDD
+3. フロント: 認証 + チャット（useChat）+ チャンク表示 + MCP Apps ホスト（AppBridge）
+4. buyer API を通る e2e（認証込み・所有検証込み）
+5. ローカル売り手で縦串 → 売り手をクラウドへ（確認）→ CORS・CloudWatch を実測 → destroy（確認）
+
 ## 2026-09-02〜03: フェーズ③ 縦串検証成功 — Agent が AgentCore Payments で実決済
 
 ### 結果
@@ -98,6 +148,95 @@
 - WalletHub の Delegated signing 許可は7日で失効する（切れたら redirectUrl から再許可）
 - ローカル LLM は canned プロバイダのまま。④はデプロイ（Bedrock）で実施
 - スキャフォールド由来の todos デモの撤去と UI 置き換え、Realtime 配線、売り手の再デプロイ
+
+### 実装（同日）
+
+- バックエンド: todos デモ・DistributedTable・雛形 API を撤去し、`buyer` 名前空間に
+  `listPurchases` / `getSellerInfo` / `resume` / `getPendingInterrupts` を追加。`model.local` を Bedrock に
+  （`BUYER_LOCAL_MODEL=canned` で偽 LLM）。購入単位の冪等キー（決定30）
+- フロント: 認証 + チャット（`useChat`）+ チャンク表示 + MCP Apps ホスト（`src/mcp-apps-host.ts`。
+  `AppBridge` + `PostMessageTransport`、sandbox iframe + srcdoc）。決定29
+- buyer API を通る e2e（`test/e2e.test.ts`）: サインアップ → 会話 → 送信 → 履歴 → 購入一覧 →
+  売り手情報、他人の会話の拒否、未認証の拒否。3 件通過。開発サーバーが生成する
+  `aws-blocks/client.js` を待ってから import する必要があった（無いと ERR_MODULE_NOT_FOUND）
+- Realtime 配線の実測（決定26 の補足）: ブラウザから `useChat` で購読し、Bedrock（ローカル）の
+  返答が `text-delta` → `done` で届いた。`tool-call` / `tool-result` も届く（後述）
+
+### 事故: タイムアウトで決済後に諦め、LLM が自動再試行して二重に支払った
+
+ブラウザから「猫カフェの紹介ページを作って」と依頼したところ、ツール呼び出しが 2 回走り、
+どちらも成果物なしで終わった。オンチェーンでは 20:01〜20:03 に 0.1 USDC の送金が 4 件
+（うち 2 件は並行して行われた別セッションの操作分）。買い手残高 0.7 → 0.3。
+
+- 原因1: MCP SDK の `callTool` 既定タイムアウトが 60 秒で、売り手の Bedrock 生成（今回 60 秒超）
+  より短い。売り手は upfront で決済済みのまま生成を続け、買い手だけが諦めた。③では生成が
+  短く露見しなかった
+- 原因2: 例外は決済後に起きるのに「支払い済み」の情報を持たず、レシートも残らず、
+  LLM は「失敗」と見て自動で再購入した
+- 原因3（記録の不手際）: 両サーバーの標準出力を `head` / `grep` のパイプで受けていたため、
+  決定的な場面のログが残らなかった。ファイルへのリダイレクトに改めた
+- 対処: 決定31（タイムアウト 600 秒、`PaidToolError`、会話に未解決の支払いがあれば
+  `interrupt` で人の承認、プロンプトでも再試行禁止）。ユーザー決定
+
+### 防護を入れて再検証（同日）
+
+- 通常のタイムアウト（600 秒）で再度ブラウザから依頼: ツール呼び出し 1 回、支払い 1 回
+  （tx `0x095937df…66520`、0.1 USDC）、HTML 9,667 バイトを受領。購入一覧に表示され、
+  「表示」で **ブラウザが売り手の ui:// を取得（別オリジン、CORS 実証）→ AppBridge で初期化 →
+  HTML を注入 → 二重の sandbox iframe に描画**まで通った（決定29 の実地確認）。
+  ブラウザのコンソールに 405 が 1 件出るが、MCP クライアントが単独 SSE（GET）を試みて
+  売り手が仕様どおり 405 を返すもの（決定22）で無害
+- 決定31 の防護を実地で検証: `BUYER_TOOL_TIMEOUT_MS=4000` で決済後の失敗を故意に起こし
+  （0.1 USDC、成果物なし）、①レシート（resultId・nonce）が購入一覧に「失敗・支払い済み」で出る
+  ②LLM は自動再試行せず報告する ③同じ会話で再依頼すると `interrupt` が Realtime で届き、
+  画面に承認ボタンが出る ④「やめる」で購入せず残高が変わらない（0.1 のまま）ことを確認
+- ブラウザは直近の会話 ID を localStorage に持ち、再読込後に `loadConversation` で再開する
+  （購入一覧とプレビューに戻れるようにするため）
+
+### PR #3 レビュー（2026-09-03、9観点の並列レビュー）
+
+10 件の指摘のうち、意図的な運用方針である「Issue が無い」（決定14）を除く 9 件を修正した。
+セルフレビューを素通りした指摘が複数あり、特に UI の後始末とコメントの正確さに漏れが集中していた。
+
+- **承認しても未解決の支払いが解消されない**（設計。決定31 の意図と食い違い）→ 判定対象を最後の成功より後の
+  失敗に限定。事故 → 承認して成功 → 次は承認不要、という流れを実測で確認
+- **サインアウトしてもプレビューの iframe と状態表示が消えない** → `discardConversation` で必ず外すようにし、
+  ブラウザで「前の利用者のページが次の利用者に見えない」ことを確認
+- **購入一覧の取得失敗が画面に出ない**（`void` で握りつぶし）→ 失敗を events と一覧の両方に出す
+- **一時的な失敗でも会話を丸ごと忘れる** → 会話を捨てるのは所有検証で弾かれたときだけにし、
+  購入一覧の取得失敗では捨てない
+- **タイムアウトの根拠「Lambda 570 秒」が誤り** → 実際は Bedrock 570 秒・Lambda 600 秒。2 箇所を是正
+- **新設した `resume` / `getPendingInterrupts` が所有検証の e2e から漏れていた**（③と同じ「検証が変更面を
+  迂回する」失敗形）→ 他人の会話への承認・確認も拒否されることをテストに追加
+- **MCP Apps ホストにテストが無い** → DOM に依存しない解釈の部分（`pickUiHtml` / `parseDownloadRequest`）を
+  純関数に切り出してテスト。`npm run test` の対象を `aws-blocks src` に広げ、`src/` が検査範囲から
+  構造的に外れていた状態を解消した（③の「CI の検査範囲を疑う」と同じ形）
+- コメントの不正確さ 2 件（e2e の前提、View 初期化のタイムアウトが待つ対象）を是正
+
+
+### 残していること（④の続き・⑤へ）
+
+- **売り手のクラウド再デプロイと結合**（`pnpm cdk deploy` → `BILLING_MCP_URL` 差し替え → ブラウザから
+  実決済 → CloudWatch を読む → `cdk destroy`）。ユーザー判断で同日は見送り。`billing-mcp/parameter.ts`
+  は plush-breeze から本体へ複製済み。買い手ウォレットは CDP faucet で補充済み（1.1 テスト USDC）
+- 売り手側の冪等化（同じ支払い証明の再提示には再決済せず成果物を返す）。決定31 の限界。
+  返金に相当する仕組み（`authorization` / `escrow` フロー）と合わせて **U7** に起票（今回の実装では踏み込まない。ユーザー決定）
+- ⑤（agent-app のクラウド deploy）: 支払い主体の二重化、selfSignUp とレート制限、`PAYMENT_*` の
+  Lambda 配線と AppSetting 化、別オリジンでの HTML 配信の検討。
+  **着手前条件**: Agent を実行する AsyncJob の Lambda タイムアウトを `BUYER_TOOL_TIMEOUT_MS`（600 秒）以上にする。
+  短いと買い手側のタイムアウトが働かず「決済後に諦める」事故（決定31）が再発する
+- **PaymentSession の作成をアプリに組み込む**（ユーザー決定）: 手動が避けられないのは WalletHub の委任と
+  初回 provisioning のみ。ツールハンドラが有効なセッションを KVStore で確認し、無ければ
+  `CreatePaymentSession` で切る。失効で `ProcessPayment` が拒否されたら一度だけ作り直す（支払い証明を
+  送る前なので二重支払いにはならない）。残る設定は `PAYMENT_MANAGER_ARN` と `PAYMENT_INSTRUMENT_ID`
+- **残高の推移を画面に出す**（ユーザー決定）: 購入の前後でウォレット残高を表示する。AgentCore Payments の
+  API に残高取得があるか要確認。無ければ Base Sepolia の RPC で `balanceOf`（本セッションの検証で使った方法）
+- PaymentSession は 60 分で失効（上記の組み込みまでは `payments-setup.ts` の再実行）。WalletHub の委任は
+  2026-09-10 まで（決定27）
+- Coinbase の Marketplace 課金は 9/3 分の反映後に再確認
+- ブラウザの MCP クライアントが単独 SSE（GET）を試みてコンソールに 405 が出る（無害）。気になるなら
+  クライアント側で GET を抑止する方法を探す
+
 
 ## 2026-08-31: フェーズ③着工 — 前提検証（grill-me）と方針決定
 

@@ -3,26 +3,32 @@
 // HTML 本体は LLM のコンテキストに流さず KVStore に置き、ID だけを会話に返す
 // （決定10 の最終形＝ブラウザへは Realtime/取得系 API で渡す、を見据えた形）。
 //
-// 接続設定は環境変数で受ける（③はローカル実行。④のデプロイ時に AppSetting 化を検討）:
+// 接続設定は環境変数で受ける（③④はローカル実行。⑤のデプロイ時に AppSetting 化を検討）:
 //   BILLING_MCP_URL       … 既定 http://localhost:8000/mcp
+//   BUYER_LOCAL_MODEL     … ローカル実行時の LLM。既定 bedrock（決定28）。canned で決定的な偽 LLM
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力
 //   PAYMENT_SESSION_ID    … 〃（セッションは有効期限つき。切れたら作り直す）
 //   PAYMENT_INSTRUMENT_ID … 〃
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
 //   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 100000 = 0.1 USDC）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
+//   BUYER_TOOL_TIMEOUT_MS … 有料ツールの応答を待つ上限。既定 600000（売り手の Lambda タイムアウトと同じ 600 秒。
+//                            売り手は Bedrock 呼び出しを 570 秒で打ち切り、その外側の Lambda が 600 秒）。
+//                            MCP SDK の既定 60 秒のままだと決済後に諦めて成果物を失う（決定31）
 //
-// 支払い主体について（④への繰り越し）:
+// 支払い主体について（⑤への繰り越し。決定28）:
 //   ProcessPayment の userId はウォレット（PaymentInstrument）の持ち主 ID であり、
 //   ③では PAYMENTS_USER_ID の単一ウォレットを全利用者で共有している。一方、購入物の
 //   所有者は Cognito の userSub（ツールコンテキスト）で分けている。利用者ごとの支出上限や
 //   Payments 側の監査で「誰が支払わせたか」を追うには、利用者ごとに instrument と
-//   WalletHub 委任が要るため④で扱う（implementation-log「残していること」参照）
+//   WalletHub 委任が要るため⑤で扱う（implementation-log「残していること」参照）
 import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
-import { Agent, BedrockModels, KVStore, type Scope } from '@aws-blocks/blocks';
+import { Agent, BedrockModels, KVStore, type ModelConfig, type Scope } from '@aws-blocks/blocks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buyHtml } from './payments/buy-html.js';
+import { extractPurchases } from './purchases.js';
+import { unresolvedPayments } from './repurchase-guard.js';
 import { createAgentCorePayer } from './payments/x402-payer.js';
 import type { PaymentPolicy } from './payments/x402-types.js';
 
@@ -56,6 +62,29 @@ export function paymentPolicyFromEnv(): PaymentPolicy {
   };
 }
 
+/** ui:// で配信される MCP Apps の UI。売り手（billing-mcp-server.ts の PREVIEW_VIEW_RESOURCE_URI）と一致させる */
+export const PREVIEW_VIEW_RESOURCE_URI = 'ui://billing-mcp/preview-view.html';
+
+// ブラウザが ui:// リソースを直接取りに行く先（決定10・29）
+export function sellerInfoFromEnv(): { mcpUrl: string; resourceUri: string } {
+  return {
+    mcpUrl: process.env.BILLING_MCP_URL ?? 'http://localhost:8000/mcp',
+    resourceUri: PREVIEW_VIEW_RESOURCE_URI,
+  };
+}
+
+// ローカル実行時の LLM（決定28）。canned は「依頼文にツール名を含めると発火」する偽 LLM で、
+// e2e のような決定的な検証に使う。既定は Bedrock（AWS 資格情報が要る。無ければ canned に落ちる）
+export function localModelFromEnv(): ModelConfig | undefined {
+  return process.env.BUYER_LOCAL_MODEL === 'canned' ? undefined : BedrockModels.BALANCED;
+}
+
+// 有料ツールの応答を待つ上限（決定31）
+export function toolTimeoutMsFromEnv(): number {
+  const value = Number(process.env.BUYER_TOOL_TIMEOUT_MS ?? '600000');
+  return Number.isFinite(value) && value > 0 ? value : 600_000;
+}
+
 // 購入物のキーは購入者で名前空間を切る。resultId は推測困難な UUID だが、
 // それだけを防壁にせず「他人の resultId は取得できない」を構造で担保する
 export function purchasedHtmlKey(userId: string, resultId: string): string {
@@ -71,15 +100,17 @@ export function createBuyerAgent(scope: Scope) {
       html: z.string().optional(),
       filename: z.string().optional(),
       transaction: z.string().optional(),
+      // 支払い後に応答を得られなかった場合の手がかり（tx が無いときの代わり）
+      authorizationNonce: z.string().optional(),
       purchasedAt: z.number(),
       error: z.string().optional(),
     }),
   });
 
   const agent = new Agent(scope, 'buyer-agent', {
-    // ローカル開発時は既定の canned プロバイダ（ツール名への言及でツール呼び出しが発火する）。
-    // 支払い〜有料ツール実行の縦串は本物が動く。デプロイ時は Bedrock（決定26 の Agent ブロック）
-    model: { deployed: BedrockModels.BALANCED },
+    // ローカルでも Bedrock を使う（決定28。BUYER_LOCAL_MODEL=canned で偽 LLM に切替）。
+    // 支払い〜有料ツール実行の縦串はどちらでも本物が動く
+    model: { deployed: BedrockModels.BALANCED, local: localModelFromEnv() },
     systemPrompt: [
       'あなたは HTML ページの調達エージェントです。',
       'ユーザーがページの生成を求めたら generateHtml ツールを使ってください。',
@@ -87,9 +118,12 @@ export function createBuyerAgent(scope: Scope) {
       'あなたのウォレット（AgentCore Payments）から x402 プロトコルで支払います。',
       '金額は売り手の提示によりますが、1回あたりの上限を超える提示には応じません。',
       '結果は resultId で参照できる旨をユーザーに伝えてください。',
+      'ツールが失敗しても自動で再試行してはいけません。支払いが済んでいる可能性があるため、',
+      '失敗の内容（paymentMade と resultId）をユーザーに報告し、指示を待ってください。',
     ].join('\n'),
-    // 購入物を購入者に紐づけるため、呼び出しごとに userId を必須で受け取る
-    toolContextSchema: z.object({ userId: z.string() }),
+    // 購入物を購入者に紐づけるため userId を、二重支払いの防護（決定31）のため
+    // conversationId を、呼び出しごとに必須で受け取る
+    toolContextSchema: z.object({ userId: z.string(), conversationId: z.string() }),
     tools: (tool) => ({
       generateHtml: tool({
         description:
@@ -103,7 +137,35 @@ export function createBuyerAgent(scope: Scope) {
         handler: async ({
           input,
           context,
+          interrupt,
         }): Promise<{ [key: string]: string | number | boolean }> => {
+          // 硬い防護（決定31）: この会話に「支払い済みなのに成果物が無い」購入があれば、
+          // LLM の判断だけでは次の支払いに進ませない。人の承認（interrupt）を要求する。
+          // interrupt は承認前なら処理を中断し、resume 後にこのハンドラが先頭から再実行される
+          const unresolved = unresolvedPayments(
+            extractPurchases(await agent.getConversation(context.conversationId)),
+          );
+          if (unresolved.length > 0) {
+            const answer = interrupt<string>({
+              name: 'confirm-repurchase',
+              reason: {
+                message:
+                  'この会話には支払い済みで成果物を受け取れなかった購入があります。もう一度支払って購入しますか？',
+                unresolved: unresolved.map((u) => u.resultId),
+                prompt: input.prompt,
+              },
+            });
+            if (answer !== 'yes' && answer !== 'trust') {
+              return {
+                ok: false,
+                paymentMade: false,
+                message: 'ユーザーの承認が得られなかったため購入しませんでした',
+              };
+            }
+          }
+
+          // 購入 1 件の ID を先に採番し、KVStore のキーと ProcessPayment の冪等キーに共用する（決定30）
+          const resultId = randomUUID();
           // セッションは期限切れで作り直される前提なので、環境変数は呼び出しごとに読む
           const payer = createAgentCorePayer(
             paymentsClient,
@@ -112,12 +174,13 @@ export function createBuyerAgent(scope: Scope) {
               paymentManagerArn: requireEnv('PAYMENT_MANAGER_ARN'),
               paymentSessionId: requireEnv('PAYMENT_SESSION_ID'),
               paymentInstrumentId: requireEnv('PAYMENT_INSTRUMENT_ID'),
+              purchaseId: resultId,
             },
             paymentPolicyFromEnv(),
           );
-          const mcpUrl = process.env.BILLING_MCP_URL ?? 'http://localhost:8000/mcp';
-          const outcome = await buyHtml(mcpUrl, input.prompt, payer);
-          const resultId = randomUUID();
+          const outcome = await buyHtml(sellerInfoFromEnv().mcpUrl, input.prompt, payer, {
+            timeout: toolTimeoutMsFromEnv(),
+          });
           const transaction = outcome.paymentResponse?.transaction;
 
           if (outcome.isError || !outcome.html) {
@@ -133,12 +196,14 @@ export function createBuyerAgent(scope: Scope) {
                 purchasedAt: Date.now(),
                 error: message,
                 ...(transaction ? { transaction } : {}),
+                ...(outcome.authorizationNonce ? { authorizationNonce: outcome.authorizationNonce } : {}),
               });
               console.error(
-                `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'}`,
+                `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'} nonce=${outcome.authorizationNonce ?? '(なし)'}`,
               );
               summary.resultId = resultId;
               if (transaction) summary.transaction = transaction;
+              if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
             }
             return summary;
           }

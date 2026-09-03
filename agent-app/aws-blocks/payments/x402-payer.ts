@@ -23,6 +23,11 @@ export interface AgentCorePayerContext {
   paymentManagerArn: string;
   paymentSessionId: string;
   paymentInstrumentId: string;
+  /**
+   * 購入単位の冪等キー（決定30）。指定すると ProcessPayment の clientToken にそのまま使う。
+   * 購入物の resultId と同じ値にして、Payments 側の記録から購入物へ辿れるようにする
+   */
+  purchaseId?: string;
 }
 
 // テストで差し替えられるよう、SDK クライアントは send を持つ最小の形で受ける
@@ -98,7 +103,7 @@ export function createAgentCorePayer(
               payload: accepted as DocumentType,
             },
           },
-          clientToken: randomUUID(),
+          clientToken: context.purchaseId ?? randomUUID(),
         }),
       )) as {
         status?: string;

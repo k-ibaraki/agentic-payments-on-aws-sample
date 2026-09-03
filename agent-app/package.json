@@ -25,10 +25,12 @@
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
-    "test": "vitest run aws-blocks"
+    "test": "vitest run aws-blocks src"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.3.0"
   },
   "devDependencies": {

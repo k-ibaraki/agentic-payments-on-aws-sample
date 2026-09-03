@@ -183,3 +183,23 @@ describe('createAgentCorePayer', () => {
     });
   });
 });
+
+describe('購入単位の冪等キー（決定30）', () => {
+  it('purchaseId を渡すと ProcessPayment の clientToken にそのまま使う', async () => {
+    const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+    const payer = createAgentCorePayer(client, { ...CONTEXT, purchaseId: 'result-123' }, POLICY);
+    await payer.pay(PAYMENT_REQUIRED);
+    const command = send.mock.calls[0]?.[0] as { input: { clientToken: string } };
+    expect(command.input.clientToken).toBe('result-123');
+  });
+
+  it('purchaseId が無ければ呼び出しごとに一意なトークンを採番する', async () => {
+    const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
+    await payer.pay(PAYMENT_REQUIRED);
+    await payer.pay(PAYMENT_REQUIRED);
+    const tokens = send.mock.calls.map((c) => (c[0] as { input: { clientToken: string } }).input.clientToken);
+    expect(tokens[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(tokens[0]).not.toBe(tokens[1]);
+  });
+});
