@@ -202,7 +202,14 @@
   返金に相当する仕組み（`authorization` / `escrow` フロー）と合わせて **U7** に起票（今回の実装では踏み込まない。ユーザー決定）
 - ⑤（agent-app のクラウド deploy）: 支払い主体の二重化、selfSignUp とレート制限、`PAYMENT_*` の
   Lambda 配線と AppSetting 化、別オリジンでの HTML 配信の検討
-- PaymentSession は 60 分で失効。WalletHub の委任は 2026-09-10 まで（決定27）
+- **PaymentSession の作成をアプリに組み込む**（ユーザー決定）: 手動が避けられないのは WalletHub の委任と
+  初回 provisioning のみ。ツールハンドラが有効なセッションを KVStore で確認し、無ければ
+  `CreatePaymentSession` で切る。失効で `ProcessPayment` が拒否されたら一度だけ作り直す（支払い証明を
+  送る前なので二重支払いにはならない）。残る設定は `PAYMENT_MANAGER_ARN` と `PAYMENT_INSTRUMENT_ID`
+- **残高の推移を画面に出す**（ユーザー決定）: 購入の前後でウォレット残高を表示する。AgentCore Payments の
+  API に残高取得があるか要確認。無ければ Base Sepolia の RPC で `balanceOf`（本セッションの検証で使った方法）
+- PaymentSession は 60 分で失効（上記の組み込みまでは `payments-setup.ts` の再実行）。WalletHub の委任は
+  2026-09-10 まで（決定27）
 - Coinbase の Marketplace 課金は 9/3 分の反映後に再確認
 - ブラウザの MCP クライアントが単独 SSE（GET）を試みてコンソールに 405 が出る（無害）。気になるなら
   クライアント側で GET を抑止する方法を探す
