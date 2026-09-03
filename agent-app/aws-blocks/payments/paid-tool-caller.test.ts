@@ -110,4 +110,57 @@ describe('callPaidTool', () => {
     expect(outcome.result).toBe(failure);
     expect(outcome.paymentMade).toBe(false);
   });
+
+  // ── パース失敗を「支払い要求ではない」と混同しない ─────────────────────
+  it('支払い要求らしき応答（accepts あり）が解釈できなければ無言で素通りせず失敗させる', async () => {
+    const malformed = {
+      isError: true,
+      content: [{ type: 'text', text: 'payment required' }],
+      // accepts はあるが amount が無い＝壊れた支払い要求
+      structuredContent: { x402Version: 2, accepts: [{ scheme: 'exact', network: 'eip155:84532' }] },
+    };
+    const callTool = vi.fn().mockResolvedValue(malformed);
+    const payer = fakePayer();
+
+    await expect(
+      callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, payer),
+    ).rejects.toThrow(/支払い要求を解釈できません/);
+    expect(payer.pay).not.toHaveBeenCalled();
+  });
+
+  it('上流仕様どおり extra が無い支払い要求も受け付ける', async () => {
+    const { extra: _omitted, ...withoutExtra } = REQUIREMENT;
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [],
+        structuredContent: { ...PAYMENT_REQUIRED, accepts: [withoutExtra] },
+      })
+      .mockResolvedValueOnce(structuredClone(PAID_RESULT));
+    const payer = fakePayer();
+
+    const outcome = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, payer);
+
+    expect(payer.pay).toHaveBeenCalledTimes(1);
+    expect(outcome.paymentMade).toBe(true);
+  });
+
+  it('売り手が増やした未知のフィールドを削らずに支払い手へ渡す（照合不成立を防ぐ）', async () => {
+    const extended = { ...REQUIREMENT, futureField: 'keep-me' };
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce({
+        isError: true,
+        content: [],
+        structuredContent: { ...PAYMENT_REQUIRED, accepts: [extended] },
+      })
+      .mockResolvedValueOnce(structuredClone(PAID_RESULT));
+    const payer = fakePayer();
+
+    await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, payer);
+
+    const passed = payer.pay.mock.calls[0][0];
+    expect(passed.accepts[0]).toEqual(extended);
+  });
 });

@@ -26,10 +26,19 @@ export interface PaidToolOutcome {
   paymentResponse?: SettleResponse;
 }
 
+// 支払い要求かどうかを判定する。「支払い要求らしいのに解釈できない」は
+// 「支払い要求ではない」と区別して例外にする。混同すると 402 を受けても支払わずに
+// 素通りし、購入が無言で失敗するため
 function parsePaymentRequired(result: Record<string, unknown>): PaymentRequired | undefined {
   if (!result.isError || !result.structuredContent) return undefined;
   const parsed = paymentRequiredSchema.safeParse(result.structuredContent);
-  return parsed.success ? parsed.data : undefined;
+  if (parsed.success) return parsed.data;
+  const looksLikePaymentRequired =
+    typeof result.structuredContent === 'object' && 'accepts' in result.structuredContent;
+  if (looksLikePaymentRequired) {
+    throw new Error(`支払い要求を解釈できません: ${parsed.error.message}`);
+  }
+  return undefined;
 }
 
 export async function callPaidTool(

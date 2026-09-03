@@ -2,6 +2,7 @@ import { ApiNamespace, Scope, KVStore, AuthCognito, DistributedTable } from '@aw
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { createBuyerAgent, purchasedHtmlKey } from './buyer-agent.js';
+import { assertOwnedConversation } from './conversation-guard.js';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -127,17 +128,19 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     return { conversationId: await buyerAgent.createConversationId(user.userSub) };
   },
 
-  async sendMessage(conversationId: string, message: string, channelId: string) {
+  // チャンネルは会話 ID と同一に固定する（Agent BB の既定）。別の channelId を受け付けると
+  // 他人の会話へストリームを注入できてしまうため、引数として受け取らない
+  async sendMessage(conversationId: string, message: string) {
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
     await buyerAgent.stream(message, {
       conversationId,
-      channelId,
+      channelId: conversationId,
       userId: user.userSub,
       // 購入物を購入者に紐づけるため、ツールへ userId を渡す
       context: { userId: user.userSub },
     });
-    return { accepted: true };
+    return { accepted: true, channelId: conversationId };
   },
 
   async getMessages(conversationId: string) {
@@ -146,12 +149,12 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     return { messages: await buyerAgent.getConversation(conversationId) };
   },
 
-  // channelId の既定値は conversationId（Agent BB の解決順）。他人の会話の
-  // ストリームを購読できないよう、同じ所有検証を通す
-  async getChannel(channelId: string) {
+  // チャンネルは会話 ID と同一（sendMessage 参照）。他人の会話のストリームを
+  // 購読できないよう、同じ所有検証を通す
+  async getChannel(conversationId: string) {
     const user = await auth.requireAuth(context);
-    await requireOwnedConversation(user.userSub, channelId);
-    return buyerAgent.getChannel(channelId);
+    await requireOwnedConversation(user.userSub, conversationId);
+    return buyerAgent.getChannel(conversationId);
   },
 
   // 購入済み HTML の取得（決定10: ツール結果はエージェント経由でブラウザへ渡す）。
@@ -162,12 +165,9 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   },
 }));
 
-// 会話の所有者でなければ弾く。存在の有無を漏らさないよう文言は一本化する
+// 会話の所有者でなければ弾く（判定の規則は conversation-guard.ts でテスト済み）
 async function requireOwnedConversation(userSub: string, conversationId: string): Promise<void> {
-  const owned = await buyerAgent.listConversations(userSub);
-  if (!owned.some((c) => c.conversationId === conversationId)) {
-    throw new Error('会話が見つかりません');
-  }
+  assertOwnedConversation(await buyerAgent.listConversations(userSub), conversationId);
 }
 
 // State machine driving the <Authenticator> UI component

@@ -1,6 +1,7 @@
 // AgentCore Payments を x402 の支払い手として使うモジュールのテスト（決定24・25）。
 // ProcessPayment はモックし、支払い要求（PaymentRequired）から
-// _meta["x402/payment"] に積む PaymentPayload を組み立てる責務を検証する
+// _meta["x402/payment"] に積む PaymentPayload を組み立てる責務と、
+// 「提示された条件を無条件に払わない」ための支払いポリシーの検証を固定する
 import { describe, expect, it, vi } from 'vitest';
 import { createAgentCorePayer } from './x402-payer.js';
 
@@ -28,6 +29,13 @@ const CONTEXT = {
   paymentInstrumentId: 'instrument-1',
 };
 
+// 買い手が受け入れる条件（決定8: Base Sepolia + テスト USDC、決定18: 1回 0.1 USDC）
+const POLICY = {
+  network: 'eip155:84532',
+  asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  maxAmount: '100000',
+};
+
 // 署名済みの内側ペイロード（ExactEvmScheme が作るものに相当）
 const SIGNED = { signature: '0xsig', authorization: { from: '0xbuyer' } };
 
@@ -39,7 +47,7 @@ function fakeClient(paymentOutput: unknown, status = 'PROOF_GENERATED') {
 describe('createAgentCorePayer', () => {
   it('accepts から exact スキームを選び ProcessPayment に渡す', async () => {
     const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
-    const payer = createAgentCorePayer(client, CONTEXT);
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     await payer.pay(PAYMENT_REQUIRED);
 
@@ -56,7 +64,7 @@ describe('createAgentCorePayer', () => {
 
   it('出力が内側ペイロードだけの場合、PaymentPayload に包んで返す', async () => {
     const { client } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
-    const payer = createAgentCorePayer(client, CONTEXT);
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     const payload = await payer.pay(PAYMENT_REQUIRED);
 
@@ -75,7 +83,7 @@ describe('createAgentCorePayer', () => {
       payload: SIGNED,
     };
     const { client } = fakeClient({ cryptoX402: { version: '2', payload: complete } });
-    const payer = createAgentCorePayer(client, CONTEXT);
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     const payload = await payer.pay(PAYMENT_REQUIRED);
 
@@ -84,7 +92,7 @@ describe('createAgentCorePayer', () => {
 
   it('exact スキームが accepts に無ければ支払いを拒む', async () => {
     const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
-    const payer = createAgentCorePayer(client, CONTEXT);
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     await expect(
       payer.pay({ ...PAYMENT_REQUIRED, accepts: [{ ...REQUIREMENT, scheme: 'upto' }] }),
@@ -94,8 +102,84 @@ describe('createAgentCorePayer', () => {
 
   it('ProcessPayment が支払い証明を返さなければ失敗させる', async () => {
     const { client } = fakeClient(undefined, 'PROOF_GENERATED');
-    const payer = createAgentCorePayer(client, CONTEXT);
+    const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/支払い証明/);
+  });
+
+  // ── 支払いポリシー（売り手の提示を無条件に払わない）──────────────────
+  describe('支払いポリシー', () => {
+    it('ネットワークが違えば支払わない（メインネットへの誘導を防ぐ）', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, POLICY);
+
+      await expect(
+        payer.pay({ ...PAYMENT_REQUIRED, accepts: [{ ...REQUIREMENT, network: 'eip155:8453' }] }),
+      ).rejects.toThrow(/ネットワーク/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('資産（トークン）が違えば支払わない', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, POLICY);
+
+      await expect(
+        payer.pay({
+          ...PAYMENT_REQUIRED,
+          accepts: [{ ...REQUIREMENT, asset: '0x1111111111111111111111111111111111111111' }],
+        }),
+      ).rejects.toThrow(/資産/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('金額が上限を超えていれば支払わない', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, POLICY);
+
+      await expect(
+        payer.pay({ ...PAYMENT_REQUIRED, accepts: [{ ...REQUIREMENT, amount: '100001' }] }),
+      ).rejects.toThrow(/上限/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('payTo を指定した場合、宛先が違えば支払わない', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, {
+        ...POLICY,
+        payTo: '0x833E0000000000000000000000000000000AB94D',
+      });
+
+      await expect(
+        payer.pay({
+          ...PAYMENT_REQUIRED,
+          accepts: [{ ...REQUIREMENT, payTo: '0xAttacker000000000000000000000000000000000' }],
+        }),
+      ).rejects.toThrow(/宛先/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('アドレスの大文字小文字は同一視する', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, {
+        ...POLICY,
+        asset: POLICY.asset.toLowerCase(),
+      });
+
+      await payer.pay(PAYMENT_REQUIRED);
+
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('条件に合う要素が複数候補の中にあればそれを選ぶ', async () => {
+      const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, POLICY);
+
+      await payer.pay({
+        ...PAYMENT_REQUIRED,
+        accepts: [{ ...REQUIREMENT, network: 'eip155:8453' }, REQUIREMENT],
+      });
+
+      expect(send.mock.calls[0][0].input.paymentInput.cryptoX402.payload).toEqual(REQUIREMENT);
+    });
   });
 });
