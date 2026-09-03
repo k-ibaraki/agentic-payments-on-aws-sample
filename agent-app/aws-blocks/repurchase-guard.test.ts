@@ -17,4 +17,22 @@ describe('unresolvedPayments', () => {
     expect(unresolvedPayments([paidOk, unpaidFailed])).toEqual([]);
     expect(unresolvedPayments([])).toEqual([]);
   });
+
+  // 承認して買い直しが成功したら、その前の失敗は解決済みとして扱う。
+  // さもないと一度事故が起きた会話は以後ずっと承認待ちになり、決定31 が
+  // 「毎回の承認を必須にする案は不採用」とした意図と食い違う
+  it('最後の成功より前の失敗は未解決に数えない', () => {
+    expect(unresolvedPayments([paidFailed, paidOk])).toEqual([]);
+    expect(unresolvedPayments([paidFailed, paidOk, unpaidFailed])).toEqual([]);
+  });
+
+  it('最後の成功より後の失敗は未解決に数える', () => {
+    const later = { resultId: 'd', ok: false, paymentMade: true, error: '再び失敗' };
+    expect(unresolvedPayments([paidFailed, paidOk, later])).toEqual([later]);
+  });
+
+  it('成功が一度も無ければ、支払い済みの失敗をすべて返す', () => {
+    const another = { resultId: 'e', ok: false, paymentMade: true, error: '二度目の失敗' };
+    expect(unresolvedPayments([paidFailed, another])).toEqual([paidFailed, another]);
+  });
 });

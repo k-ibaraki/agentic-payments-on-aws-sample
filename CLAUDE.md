@@ -68,7 +68,7 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   （既定 localhost:8000）。有料ツールの待ち時間は `BUYER_TOOL_TIMEOUT_MS`（既定 600 秒。短くすると決済後に
   失敗して支払いだけが残る。DESIGN.md 決定31）
 - ブラウザからの依頼は**実オンチェーン決済（テスト USDC）が発生する**。検証で送る前に確認を取ること
-- `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` 配下）
+- `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` と `src/` 配下）
 - `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。CI では回さない）
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。`.env` に CDP 資格情報と
   `PAYMENTS_LINK_EMAIL`。AWS Marketplace の Coinbase サブスクリプション加入が前提。出力される WalletHub の

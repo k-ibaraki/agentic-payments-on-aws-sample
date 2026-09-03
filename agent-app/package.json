@@ -25,7 +25,7 @@
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
-    "test": "vitest run aws-blocks"
+    "test": "vitest run aws-blocks src"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

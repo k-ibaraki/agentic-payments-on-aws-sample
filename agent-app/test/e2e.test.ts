@@ -2,7 +2,8 @@
 // ローカルの開発サーバー（mock 認証・偽 LLM）に対して、会話の作成 → 送信 → 履歴 →
 // 購入一覧 → 売り手情報 と、他人の会話・未認証の拒否を実際の API 経路で確かめる。
 // サーバーを自分で起動する場合は LLM を BUYER_LOCAL_MODEL=canned に固定する。起動済みのサーバーを
-// 再利用する場合はその設定（既定は Bedrock）に従う。いずれもツール名を含めない依頼にして実費が出ないようにする
+// 再利用する場合はその設定（既定は Bedrock）に従う。実費が出ないよう、エージェントに届く依頼には
+// ツール名を含めない（他人の会話への発注は所有検証で弾かれるため、そちらには含めてよい）
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -120,7 +121,7 @@ test('サインインした利用者は会話を作り、依頼を送り、履�
   assert.strictEqual(await buyer.getPurchasedHtml('no-such-result'), null);
 });
 
-test('他人の会話には発注・閲覧・購読・購入一覧のいずれもできない', async () => {
+test('他人の会話には発注・閲覧・購読・購入一覧・承認のいずれもできない', async () => {
   await signOut();
   await signUpAndSignIn(userB);
 
@@ -128,6 +129,11 @@ test('他人の会話には発注・閲覧・購読・購入一覧のいずれ�
   await assert.rejects(buyer.getMessages(conversationA));
   await assert.rejects(buyer.getChannel(conversationA));
   await assert.rejects(buyer.listPurchases(conversationA));
+  // 再購入の承認（決定31）は実費に直結するため、読み取り系と同じく所有者に限る
+  await assert.rejects(
+    buyer.resume(conversationA, [{ interruptId: 'no-such-interrupt', approved: true }]),
+  );
+  await assert.rejects(buyer.getPendingInterrupts(conversationA));
 
   // 自分の会話は問題なく作れる
   const { conversationId } = await buyer.createConversation();

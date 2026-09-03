@@ -20,6 +20,14 @@ function showMessage(target: HTMLElement, text: string, cls?: 'success' | 'error
   target.replaceChildren(span);
 }
 
+function showError(target: HTMLElement, text: string) {
+  showMessage(target, text, 'error');
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function appendEvent(text: string) {
   const events = el('events');
   const line = document.createElement('div');
@@ -91,7 +99,10 @@ function createChat() {
     },
     onChunk: (chunk) => {
       appendEvent(describeChunk(chunk));
-      if (chunk.type === 'tool-result' || chunk.type === 'done') void refreshPurchases();
+      if (chunk.type === 'tool-result' || chunk.type === 'done') {
+      // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
+      refreshPurchases().catch(() => {});
+    }
     },
     onError: (error) => appendEvent(`エラー: ${error}`),
     onInterrupt: renderInterrupts,
@@ -100,7 +111,8 @@ function createChat() {
 
 let chat = createChat();
 
-// 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない
+// 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない。
+// プレビューの iframe には前の利用者が買ったページが残るため、ここで必ず外す
 function discardConversation() {
   chat.destroy();
   chat = createChat();
@@ -109,6 +121,15 @@ function discardConversation() {
   el('interrupts').replaceChildren();
   el('conversation-id').textContent = '（未作成）';
   showMessage(el('purchases'), 'まだありません');
+  discardPreview();
+}
+
+// 購入したページの表示を消す。MCP Apps の View は次の表示でまた載せ直す
+function discardPreview() {
+  previewHost?.destroy();
+  previewHost = null;
+  el('purchase-status').replaceChildren();
+  el<HTMLIFrameElement>('preview-frame').removeAttribute('srcdoc');
 }
 
 // エージェントが人の承認を求めてきた（決定31: 支払い済みで成果物の無い購入がある会話での再購入）
@@ -152,7 +173,7 @@ async function sendCurrentInput() {
     el('conversation-id').textContent = conversationId ?? '（未作成）';
     if (conversationId) localStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
   } catch (error) {
-    appendEvent(`送信に失敗: ${error instanceof Error ? error.message : String(error)}`);
+    appendEvent(`送信に失敗: ${describeError(error)}`);
   }
 }
 
@@ -160,7 +181,16 @@ async function sendCurrentInput() {
 async function refreshPurchases() {
   const conversationId = chat.getConversationId();
   if (!conversationId) return;
-  const { purchases } = await buyer.listPurchases(conversationId);
+  // 購入一覧は「支払ったのに成果物が無い」ことを利用者に伝える唯一の経路なので、
+  // 取得に失敗したら黙って諦めず、必ず画面に出す
+  let purchases: Purchase[];
+  try {
+    ({ purchases } = await buyer.listPurchases(conversationId));
+  } catch (error) {
+    appendEvent(`購入一覧を取得できませんでした: ${describeError(error)}`);
+    showError(el('purchases'), '購入一覧を取得できませんでした（支払いは記録されている可能性があります）');
+    throw error;
+  }
   const container = el('purchases');
   if (purchases.length === 0) {
     showMessage(container, 'まだありません');
@@ -214,7 +244,7 @@ async function showPurchase(resultId: string) {
     await host.showHtml(artifact.html, artifact.filename);
     showMessage(status, `resultId ${resultId} を表示中${artifact.transaction ? `（tx ${artifact.transaction}）` : ''}`, 'success');
   } catch (error) {
-    showMessage(status, `表示に失敗: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    showError(status, `表示に失敗: ${describeError(error)}`);
   }
 }
 
@@ -241,16 +271,19 @@ async function resumeLastConversation() {
   if (!conversationId) return;
   try {
     await chat.loadConversation(conversationId);
-    el('conversation-id').textContent = conversationId;
-    appendEvent(`前回の会話 ${conversationId} を再開しました`);
-    await refreshPurchases();
   } catch (error) {
     // 他の利用者の会話やサーバー再起動後の ID は所有検証で弾かれる。忘れて新規に始める。
     // loadConversation は失敗しても conversationId を保持するため、インスタンスごと捨てる
     localStorage.removeItem(LAST_CONVERSATION_KEY);
     discardConversation();
-    appendEvent(`前回の会話を再開できませんでした: ${error instanceof Error ? error.message : String(error)}`);
+    appendEvent(`前回の会話を再開できませんでした: ${describeError(error)}`);
+    return;
   }
+  el('conversation-id').textContent = conversationId;
+  appendEvent(`前回の会話 ${conversationId} を再開しました`);
+  // 一覧の取得に失敗しても会話は捨てない（一時的な不調で履歴を見失わせない）。
+  // 失敗は refreshPurchases が画面に出す
+  await refreshPurchases().catch(() => {});
 }
 
 // ── 起動 ──────────────────────────────────────────────────────────────
@@ -263,10 +296,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (user) {
       void resumeLastConversation();
     } else {
-      // 同じブラウザで別の利用者がサインインしても前の会話が見えないよう、画面ごと捨てる
+      // 同じブラウザで別の利用者がサインインしても前の会話とページが見えないよう、画面ごと捨てる
       discardConversation();
-      previewHost?.destroy();
-      previewHost = null;
     }
   });
 
