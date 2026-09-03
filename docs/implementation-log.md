@@ -201,7 +201,9 @@
 - 売り手側の冪等化（同じ支払い証明の再提示には再決済せず成果物を返す）。決定31 の限界。
   返金に相当する仕組み（`authorization` / `escrow` フロー）と合わせて **U7** に起票（今回の実装では踏み込まない。ユーザー決定）
 - ⑤（agent-app のクラウド deploy）: 支払い主体の二重化、selfSignUp とレート制限、`PAYMENT_*` の
-  Lambda 配線と AppSetting 化、別オリジンでの HTML 配信の検討
+  Lambda 配線と AppSetting 化、別オリジンでの HTML 配信の検討。
+  **着手前条件**: Agent を実行する AsyncJob の Lambda タイムアウトを `BUYER_TOOL_TIMEOUT_MS`（600 秒）以上にする。
+  短いと買い手側のタイムアウトが働かず「決済後に諦める」事故（決定31）が再発する
 - **PaymentSession の作成をアプリに組み込む**（ユーザー決定）: 手動が避けられないのは WalletHub の委任と
   初回 provisioning のみ。ツールハンドラが有効なセッションを KVStore で確認し、無ければ
   `CreatePaymentSession` で切る。失効で `ProcessPayment` が拒否されたら一度だけ作り直す（支払い証明を

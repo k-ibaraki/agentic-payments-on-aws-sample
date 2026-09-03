@@ -52,7 +52,7 @@ function describeChunk(chunk: AgentStreamChunk): string {
     case 'tool-call':
       return `tool-call ${chunk.toolName ?? ''} ${chunk.input !== undefined ? JSON.stringify(chunk.input) : ''}`;
     case 'tool-result':
-      return `tool-result ${chunk.toolName ?? ''}（支払いと生成が完了。購入一覧を更新します）`;
+      return `tool-result ${chunk.toolName ?? ''}（ツールの実行が終わりました。購入一覧を更新します）`;
     case 'done':
       return `done${chunk.usage ? ` tokens=${chunk.usage.totalTokens}` : ''}`;
     case 'error':
@@ -64,35 +64,52 @@ function describeChunk(chunk: AgentStreamChunk): string {
   }
 }
 
-const chat = useChat({
-  api: {
-    // buyer API は channelId を受け取らない（会話 ID に固定。他人の会話へのストリーム注入を防ぐ）
-    sendMessage: async (conversationId, message) => {
-      await buyer.sendMessage(conversationId, message);
+// useChat の destroy() は購読を外すだけで conversationId と messages を保持する。
+// 会話を捨てる（新規会話・サインアウト・再開失敗）ときはインスタンスごと作り直す
+function createChat() {
+  return useChat({
+    api: {
+      // buyer API は channelId を受け取らない（会話 ID に固定。他人の会話へのストリーム注入を防ぐ）
+      sendMessage: async (conversationId, message) => {
+        await buyer.sendMessage(conversationId, message);
+      },
+      createConversation: () => buyer.createConversation(),
+      getConversation: (id) => buyer.getMessages(id),
+      // 二重支払いの防護（決定31）: 人の承認待ちへの応答と、未応答の確認
+      resume: async (channelId, responses) => {
+        await buyer.resume(channelId, responses.map((r) => ({ interruptId: r.interruptId, approved: r.approved, ...(r.trust !== undefined ? { trust: r.trust } : {}) })));
+      },
+      getPendingInterrupts: (id) => buyer.getPendingInterrupts(id),
     },
-    createConversation: () => buyer.createConversation(),
-    getConversation: (id) => buyer.getMessages(id),
-    // 二重支払いの防護（決定31）: 人の承認待ちへの応答と、未応答の確認
-    resume: async (channelId, responses) => {
-      await buyer.resume(channelId, responses.map((r) => ({ interruptId: r.interruptId, approved: r.approved, ...(r.trust !== undefined ? { trust: r.trust } : {}) })));
+    subscribe: async (channelId, handler) => {
+      const channel = await buyer.getChannel(channelId);
+      return channel.subscribe(handler);
     },
-    getPendingInterrupts: (id) => buyer.getPendingInterrupts(id),
-  },
-  subscribe: async (channelId, handler) => {
-    const channel = await buyer.getChannel(channelId);
-    return channel.subscribe(handler);
-  },
-  onMessagesChange: renderMessages,
-  onLoadingChange: (loading) => {
-    (el<HTMLButtonElement>('chat-send-btn')).disabled = loading;
-  },
-  onChunk: (chunk) => {
-    appendEvent(describeChunk(chunk));
-    if (chunk.type === 'tool-result' || chunk.type === 'done') void refreshPurchases();
-  },
-  onError: (error) => appendEvent(`エラー: ${error}`),
-  onInterrupt: renderInterrupts,
-});
+    onMessagesChange: renderMessages,
+    onLoadingChange: (loading) => {
+      (el<HTMLButtonElement>('chat-send-btn')).disabled = loading;
+    },
+    onChunk: (chunk) => {
+      appendEvent(describeChunk(chunk));
+      if (chunk.type === 'tool-result' || chunk.type === 'done') void refreshPurchases();
+    },
+    onError: (error) => appendEvent(`エラー: ${error}`),
+    onInterrupt: renderInterrupts,
+  });
+}
+
+let chat = createChat();
+
+// 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない
+function discardConversation() {
+  chat.destroy();
+  chat = createChat();
+  el('chat-log').replaceChildren();
+  el('events').replaceChildren();
+  el('interrupts').replaceChildren();
+  el('conversation-id').textContent = '（未作成）';
+  showMessage(el('purchases'), 'まだありません');
+}
 
 // エージェントが人の承認を求めてきた（決定31: 支払い済みで成果物の無い購入がある会話での再購入）
 function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?: any }>) {
@@ -228,20 +245,12 @@ async function resumeLastConversation() {
     appendEvent(`前回の会話 ${conversationId} を再開しました`);
     await refreshPurchases();
   } catch (error) {
-    // 他の利用者の会話やサーバー再起動後の ID は所有検証で弾かれる。忘れて新規に始める
+    // 他の利用者の会話やサーバー再起動後の ID は所有検証で弾かれる。忘れて新規に始める。
+    // loadConversation は失敗しても conversationId を保持するため、インスタンスごと捨てる
     localStorage.removeItem(LAST_CONVERSATION_KEY);
+    discardConversation();
     appendEvent(`前回の会話を再開できませんでした: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-function resetConversationUi() {
-  chat.destroy();
-  localStorage.removeItem(LAST_CONVERSATION_KEY);
-  el('chat-log').replaceChildren();
-  el('events').replaceChildren();
-  el('interrupts').replaceChildren();
-  el('conversation-id').textContent = '（未作成）';
-  showMessage(el('purchases'), 'まだありません');
 }
 
 // ── 起動 ──────────────────────────────────────────────────────────────
@@ -254,7 +263,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (user) {
       void resumeLastConversation();
     } else {
-      chat.destroy();
+      // 同じブラウザで別の利用者がサインインしても前の会話が見えないよう、画面ごと捨てる
+      discardConversation();
       previewHost?.destroy();
       previewHost = null;
     }
@@ -273,7 +283,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   el('chat-new-btn').addEventListener('click', () => {
     // 会話を捨てて新しい ID を採番させる（次の送信時に createConversation が走る）
-    resetConversationUi();
+    localStorage.removeItem(LAST_CONVERSATION_KEY);
+    discardConversation();
     appendEvent('新しい会話を始めます');
   });
 });

@@ -1,7 +1,8 @@
 // buyer API を認証込みで通す e2e（決定28。③の「検証が変更面を迂回している」失敗形への手当て）。
 // ローカルの開発サーバー（mock 認証・偽 LLM）に対して、会話の作成 → 送信 → 履歴 →
 // 購入一覧 → 売り手情報 と、他人の会話・未認証の拒否を実際の API 経路で確かめる。
-// LLM は BUYER_LOCAL_MODEL=canned に固定し、ツール名を含めない依頼で実費が出ないようにする
+// サーバーを自分で起動する場合は LLM を BUYER_LOCAL_MODEL=canned に固定する。起動済みのサーバーを
+// 再利用する場合はその設定（既定は Bedrock）に従う。いずれもツール名を含めない依頼にして実費が出ないようにする
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';

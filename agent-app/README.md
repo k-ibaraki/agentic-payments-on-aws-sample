@@ -22,7 +22,8 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - `npm run dev` — ローカル起動（ポート 3000）。LLM はローカルでも Bedrock（`BUYER_LOCAL_MODEL=canned` で偽 LLM）。
   ブラウザからの依頼は**実オンチェーン決済（テスト USDC）が発生する**
 - `npm run test` / `npm run typecheck` — コミット前に必ず通すこと
-- `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。buyer API を認証込みで通す。実費は出ない）
+- `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。buyer API を認証込みで通す。実費は出ない。
+  自前で起動するサーバーは偽 LLM、起動済みのサーバーを再利用する場合はその LLM 設定に従う）
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。
   `PAYMENTS_LINK_EMAIL` と CDP の資格情報3点を `.env` に置く。`.env.example` 参照。
   前提として AWS Marketplace の Coinbase サブスクリプション加入が要る）

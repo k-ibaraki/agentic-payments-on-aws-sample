@@ -27,15 +27,22 @@ export interface PreviewHost {
 /** 売り手から ui:// リソースの HTML 本文を取得する（無課金の resources/read） */
 export async function fetchUiResource(seller: SellerInfo): Promise<{ client: Client; html: string }> {
   const client = new Client({ name: 'agent-app-browser', version: '0.1.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(seller.mcpUrl)));
-  const result = await client.readResource({ uri: seller.resourceUri });
-  const content = result.contents.find((c) => 'text' in c && typeof c.text === 'string');
-  if (!content || !('text' in content)) {
-    await client.close();
-    throw new Error(`ui:// リソースに HTML が含まれていません: ${seller.resourceUri}`);
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(seller.mcpUrl)));
+    const result = await client.readResource({ uri: seller.resourceUri });
+    const content = result.contents.find((c) => 'text' in c && typeof c.text === 'string');
+    if (!content || !('text' in content)) {
+      throw new Error(`ui:// リソースに HTML が含まれていません: ${seller.resourceUri}`);
+    }
+    return { client, html: content.text as string };
+  } catch (error) {
+    await client.close().catch(() => {});
+    throw error;
   }
-  return { client, html: content.text as string };
 }
+
+/** View が ui/initialize を送ってくるまで待つ上限。売り手 UI のスクリプトが動かない場合に永久に待たないため */
+const VIEW_INITIALIZE_TIMEOUT_MS = 15_000;
 
 /**
  * 与えられた iframe に View を載せ、初期化が済んだホストを返す。
@@ -66,8 +73,15 @@ export async function mountPreviewHost(
     return {};
   };
 
-  const initialized = new Promise<void>((resolve) => {
-    bridge.oninitialized = () => resolve();
+  const initialized = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`MCP Apps の View が ${VIEW_INITIALIZE_TIMEOUT_MS / 1000} 秒以内に初期化されませんでした`)),
+      VIEW_INITIALIZE_TIMEOUT_MS,
+    );
+    bridge.oninitialized = () => {
+      clearTimeout(timer);
+      resolve();
+    };
   });
 
   // srcdoc を設定してから接続する。contentWindow は srcdoc 設定直後から同じオブジェクトが
@@ -76,9 +90,15 @@ export async function mountPreviewHost(
   iframe.setAttribute('sandbox', 'allow-scripts');
   iframe.srcdoc = html;
   const target = iframe.contentWindow;
-  if (!target) throw new Error('iframe の contentWindow を取得できません');
-  await bridge.connect(new PostMessageTransport(target, target));
-  await initialized;
+  try {
+    if (!target) throw new Error('iframe の contentWindow を取得できません');
+    await bridge.connect(new PostMessageTransport(target, target));
+    await initialized;
+  } catch (error) {
+    await bridge.close().catch(() => {});
+    await client.close().catch(() => {});
+    throw error;
+  }
 
   return {
     async showHtml(htmlBody, filename) {
