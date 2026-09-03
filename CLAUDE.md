@@ -61,4 +61,13 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - `pnpm verify:bundle` — 合成したバンドルが実際に読み込めるかの検証（synth の後に実行）
 - `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**
 
-agent-app は実装が入り次第追記する。
+### agent-app/
+
+- `npm run dev` — ローカル起動（ポート 3000。ローカルの LLM は canned プロバイダ）
+- `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` 配下）
+- `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。CI では回さない）
+- `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。`.env` に CDP 資格情報と
+  `PAYMENTS_LINK_EMAIL`。AWS Marketplace の Coinbase サブスクリプション加入が前提。出力される WalletHub の
+  URL で署名権限の委任を人間が行う）
+- `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給
+- `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**

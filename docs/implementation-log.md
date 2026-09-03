@@ -2,6 +2,176 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-02〜03: フェーズ③ 縦串検証成功 — Agent が AgentCore Payments で実決済
+
+### 結果
+
+**Agent が AgentCore Payments のウォレットで 0.1 テスト USDC を支払い、billing-mcp の
+有料ツールを実行して HTML を受領・保存する縦串が通った**（決定27 の検証完了）。
+
+- 決済: tx `0xa0e35a61…29ca5`（Base Sepolia、成功）。買い手 1.0 → 0.9 / 売り手 0.22 → 0.32 USDC
+- 成果物: HTML 3,149 バイトが structuredContent のまま欠損なく届き、KVStore に保存
+  （U6 回避＝決定25 の実地確認）。会話には resultId のみが返る（決定10 の形）
+- 経路: Agent（ローカル、LLM は canned）→ ProcessPayment(CRYPTO_X402) で支払い証明
+  → `_meta["x402/payment"]` 付き再呼び出し → 売り手が x402.org facilitator で清算（upfront）
+  → Bedrock 生成 → 成果物返却。支払い・清算・生成はすべて本物
+
+### セットアップで実測した事実（ドキュメントに無い・薄いもの）
+
+- Coinbase コネクタは AWS Marketplace サブスクリプション加入後も、QUICK_CREATE（OAuth）が
+  AWS コンソールの支払い画面の白画面（描画不能）で3回失敗。**MANUAL（CDP キー持参）へ切替**して解決。
+  CDP の API キー発行時、IP allowlist は空にする（キーを使うのは AWS 側サービスのため）
+- サービスロールの許可ポリシーの workload-identity パターンも **PaymentManager 名の小文字化**の
+  影響を受ける（camelCase のままだと GetWorkloadAccessToken が拒否され
+  「Failed to obtain workload access token」で CreatePaymentInstrument が落ちる）
+- ウォレットは作成直後から status ACTIVE だが、**WalletHub での Delegated signing 許可
+  （エンドユーザー操作・有効期限つき）が済むまで ProcessPayment は
+  「Delegated signing grant is not active」で拒否される**。ステータスでは判別できない
+- WalletHub のログインには CDP プロジェクトの Domains 許可リストへの
+  `https://hub.cdp.coinbase.com` 追加が必要（無いと OAuth が CORS エラー）。
+  ④のブラウザ UI 用に `http://localhost:3000` も追加済み
+- 旧使い捨て買い手はガス用 ETH ゼロで ERC-20 送金不可（フェーズ②は EIP-3009 の
+  gasless 署名のみだったため）。資金供給は **CDP faucet**（`agent-app/scripts/faucet.ts`）へ切替
+- ProcessPayment の応答 status は `PROOF_GENERATED` のみ。清算（settle）は売り手側
+  facilitator の仕事で、AgentCore は署名だけを担う分担が API 面からも確認できた
+- `aws login` の資格情報は12時間で切れる。切れた際の再認証はユーザー操作
+
+### 不手際と対処（詳細はリポジトリ外に記録）
+
+ウォレットの紐づけメールアドレスを、ユーザーの明示的な事前許可なく設定して作成する
+不手際があった。当該ウォレットは削除し（リポジトリ・git 履歴への個人情報の混入が
+無いことも全域検査で確認）、ユーザー指定のアドレスで再作成した。再発防止策は
+リポジトリ外のグローバル設定に記録した（個人情報に類する値は、明示的な事前承認なく
+外部サービス・コマンド・リポジトリ内ファイルに一切使わない）。
+
+### セルフレビュー（2026-09-03、PR 作成前）
+
+4件を指摘して修正した。
+
+1. buyer API の所有検証が `getMessages` にしか無く、他人の会話へ発注（実費が発生）・
+   ストリーム購読・購入物の取得ができた → `sendMessage` / `getChannel` にも検証を追加し、
+   購入物のキーを `${userSub}/${resultId}` で名前空間分離
+2. 決定9 が Quick Create のまま → MANUAL への変更経緯を追記
+3. QUICK_CREATE 前提のコメント3箇所と README → MANUAL の実態に是正
+4. `@smithy/types` が未宣言 → dependencies へ
+
+修正後に縦串を再実行し、決済〜受領が通ることを確認（tx `0x539952ca…ce8b9`、0.1 テスト USDC）。
+ただしこの再検証は `buy-via-agent.ts` が Agent を直接叩くため、修正した buyer API 自体は
+通っていなかった（下記 PR レビューで指摘）。
+
+### PR #2 レビュー（2026-09-03、9観点の並列レビュー）
+
+26件の指摘のうち上位21件を修正した。自分のセルフレビューを素通りした指摘が複数あり、
+「**検証が変更面を迂回している**」という失敗形（フェーズ②の GET/SSE と同型）が再発していた。
+
+修正した主なもの:
+
+- **`sendMessage` の channelId が未検証**（セルフレビューの修正漏れ）→ channelId 引数を廃し
+  会話 ID に固定。`getChannel` も会話 ID で受ける
+- **支払い条件の未検証** → 支払いポリシー（ネットワーク・資産・1回上限・任意で宛先）を
+  `x402-payer` に入れ、合致しない提示には署名を求めない。上限は `PAYMENT_MAX_AMOUNT`
+- **決定25 の記述が着工前の見込みのまま**（`PaymentClient` / `@x402/*` 依存）→ 実装に合わせて更新
+- **委任 URL が ACTIVE 時に表示されない**（決定27 が記録した失敗モードそのもの）→ 常に表示
+- **支払い済みで成果物を得られない経路で tx を捨てていた** → レシートを KVStore に残し signal を出す
+- **`tsconfig` の include に `scripts/` が無く CI 未検査** → 追加したところ型エラー3件が即座に露出
+- パース失敗と「支払い要求でない」の混同 → `accepts` があるのに解釈できなければ例外。
+  上流に合わせ extra は任意、未知フィールドは通す（passthrough）
+- 所有ガードを純関数に切り出してテスト、SDK クライアントの作り捨て解消、
+  `loadEnvFile` の `fileURLToPath` 化、Secrets Manager の絞り込み、fund-wallet の revert 判定、
+  価格のハードコード除去、CLAUDE.md のコマンド節、決定9/26 の補足、など
+
+修正後に縦串を再実行し、支払いポリシーが本物の売り手提示（Base Sepolia / テスト USDC /
+100000 = 0.1 USDC）を受け入れて決済〜受領が通ることを確認した
+（tx `0x05bdf33e…b986d`、HTML 3,079 バイト）。`tsconfig` に `scripts/` を含めた
+ことで露出した型エラー3件（`PaymentInstrumentStatus` に無い `INACTIVE` との比較など）も
+同時に修正した。
+
+### 残していること（フェーズ④へ）
+
+- **支払い主体の二重化**: ProcessPayment の userId はウォレットの持ち主（`PAYMENTS_USER_ID`、
+  全利用者で共有）で、購入物の所有者は Cognito の userSub。利用者ごとの支出上限や
+  Payments 側の監査で「誰が支払わせたか」を追うには、利用者ごとの instrument 発行と
+  WalletHub 委任が要る。自己サインアップ + 実費 API の組み合わせにレート制限も無い
+- **buyer API を通る自動テストが無い**: 所有ガードの規則は純関数でテストしたが、API 経路
+  （認証込み）は e2e で押さえていない。④の UI 実装と合わせて e2e を足す
+- 検証用 PaymentSession は60分で失効する。④の結合検証時は `payments-setup.ts` を再実行して作り直す
+- WalletHub の Delegated signing 許可は7日で失効する（切れたら redirectUrl から再許可）
+- ローカル LLM は canned プロバイダのまま。④はデプロイ（Bedrock）で実施
+- スキャフォールド由来の todos デモの撤去と UI 置き換え、Realtime 配線、売り手の再デプロイ
+
+## 2026-08-31: フェーズ③着工 — 前提検証（grill-me）と方針決定
+
+### 着工前の詰め（grill-me）で崩れた前提
+
+- 「PR #1 をマージするか判断」→ **既にマージ済み**（163a161、08:58 UTC）。main から
+  新ブランチ `feat/agent-app` を切って着工
+- 「作業 worktree は plush-breeze」→ 実際は **teal-linden**（main と同一コミットの
+  detached HEAD だった）。`billing-mcp/server/.env` も無かったため plush-breeze から複製
+- 「U1 は未検証」→ **事実確認だけで決着**（下記）。SigV4 直呼び・Python 薄層の検討は不要に
+
+### U1 の検証（決定24 に昇格）
+
+`@aws-sdk/client-bedrock-agentcore` 3.1121.0 を一時ディレクトリへ実インストールして
+型定義を検分。データプレーンに ProcessPayment / CreatePaymentSession /
+CreatePaymentInstrument / GetResourcePaymentToken 等 **Payments 系 11 コマンド**、
+`-control` に PaymentManager / PaymentConnector / PaymentCredentialProvider の CRUD を確認。
+`PaymentType.CRYPTO_X402` + `CryptoX402PaymentInput/Output` で x402 ペイロードを
+そのまま搬送できる。JS SDK だけで完結する。
+
+あわせて実測した周辺事実:
+
+- ap-southeast-1 の PaymentManager は**ゼロ件**。セットアップは完全にゼロから
+- Coinbase コネクタの provision は `MANUAL`（CDP の API キー持参）か
+  `QUICK_CREATE`（サービスが OAuth 同意を仲介）の二択
+- `@x402/mcp` は 2.24.0 のまま。U6（structuredContent 欠落）の上流修正は出ていない
+
+### ユーザー決定（grill-me の問答）
+
+1. ③の完了条件は**売り手ローカルで縦串**（billing-mcp は pnpm dev、agent-app もローカル、
+   Payments のみクラウド実物で実オンチェーン決済まで）→ 決定27
+2. Coinbase コネクタは **QUICK_CREATE**（OAuth 同意はユーザーが実施）→ 決定27
+3. U6 は**低レベル API で回避** → 決定25
+4. U6 の上流 issue 報告は**③完了後に改めて判断**（保留）→ 決定25 理由欄
+5. 使用ブロックは想定4つに **Realtime を加えた5つ**で確定（配線は④）→ 決定26
+
+### 段取り
+
+ブランチ作成・.env 複製・本記録 → AWS Blocks スキャフォールド → TDD で
+支払いクライアント〜有料ツール呼び出し → Payments セットアップ（QUICK_CREATE）→
+旧買い手ウォレットから新ウォレットへテスト USDC 送金 → 実オンチェーン決済で縦串検証 →
+CI の agent-app ジョブ有効化。push はユーザー指示があるまでしない。
+
+### 同日の実装（縦串の買い手側まで完了、決済検証はブロック中）
+
+- **スキャフォールド生成**: `npx @aws-blocks/create-blocks-app agent-app --template auth-cognito`。
+  生成物そのままを基線コミットし、以後の差分を追えるようにした（決定13・15。npm 管理）
+- **Payments セットアップスクリプト**（`agent-app/scripts/payments-setup.ts`、冪等）を実装し、
+  ap-southeast-1 に IAM サービスロールと PaymentManager（`agenticpaymentssample-btbtr1e6q9`、READY）
+  を作成した。実測で公式ドキュメントと食い違った点が2つ:
+  - 信頼ポリシーはグローバルの `bedrock-agentcore.amazonaws.com` だけでは
+    `Role validation failed` になり、**リージョン付き `bedrock-agentcore.ap-southeast-1.amazonaws.com`
+    の併記が必要**だった
+  - PaymentManager / Connector の name は**英数字のみ**（`[a-zA-Z][a-zA-Z0-9]{0,47}`）。
+    ARN では小文字化される（信頼ポリシーの ArnLike に影響）
+- **Coinbase コネクタ作成は `SubscriptionRequiredException` でブロック中**。AWS Marketplace の
+  「Coinbase Wallets for AgentCore Payments」への加入（ユーザー操作）が前提と判明。
+  加入後に同スクリプトを再実行 → OAuth 同意（QUICK_CREATE、URL 有効期限約10分）→
+  ウォレット作成・委任 → 送金 → 縦串検証、の順で再開する
+- **x402 支払いモジュールを TDD で実装**（`agent-app/aws-blocks/payments/`。unit 12件グリーン）:
+  - `x402-payer`: ProcessPayment(CRYPTO_X402) に「受諾した支払い条件」を渡して
+    支払い証明を得る。PaymentStatus は `PROOF_GENERATED` のみで、**清算は売り手側
+    facilitator の仕事**（署名だけウォレットが行う）という分担も型から確認
+  - `paid-tool-caller`: 素の callTool を「要求受領 → 支払い → `_meta["x402/payment"]` 付き
+    再呼び出し」の2段で叩く。structuredContent が欠けないことをテストで固定（U6 回避）
+- **買い手エージェント配線**（`aws-blocks/buyer-agent.ts`）: generateHtml ツールで購入し、
+  HTML 本体は KVStore へ、会話には resultId だけ返す（決定10 の最終形を見据えた設計）。
+  ローカルの LLM は canned プロバイダで、支払い・売り手側生成・決済は本物が動く
+- スキャフォールド由来の todos デモ（DistributedTable）はフロントが強く依存しているため
+  ③では残置し、④の UI 置き換えと同時に撤去する
+- CI に agent-app ジョブを追加（npm ci + typecheck + unit テスト）
+- つまずき: `aws login` の資格情報が途中でローテーション失敗の一時エラーを出した
+  （数分後に自走回復）。IAM の Description は Latin-1 のみで日本語不可
+
 ## 2026-08-31: フェーズ②完了 — クラウドへデプロイし実オンチェーン決済を検証
 
 ### やったこと

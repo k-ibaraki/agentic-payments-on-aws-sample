@@ -67,15 +67,16 @@ jobs:
           pnpm synth
           pnpm verify:bundle
 
-  # ---- 以下は実装が入り次第有効化する骨格（agent-app）----
-  #
-  # agent-app（スキャフォールドのパッケージマネージャに従う。npm 想定 = DESIGN.md 決定15）:
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: agent-app
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: jdx/mise-action@v2
-  #     - run: npm ci
-  #     - run: npm run typecheck && npm run test
+  # agent-app（スキャフォールドのパッケージマネージャに従う。npm = DESIGN.md 決定15）。
+  # e2e（test:e2e）はローカルサーバー前提のため CI では unit テストと型検査のみ
+  agent-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
