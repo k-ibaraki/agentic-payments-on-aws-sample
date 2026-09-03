@@ -5,10 +5,15 @@
 //   2. PaymentManager（決済操作の親リソース）
 //   3. PaymentCredentialProvider（CDP の API キー・ウォレットシークレットを AgentCore Identity へ）
 //      と PaymentConnector（Coinbase / MANUAL。決定27 変更）
-//   4. PaymentInstrument（EVM の埋め込みウォレット。委任と入金は redirectUrl で人間が行う）
+//   4. PaymentInstrument（EVM の埋め込みウォレット）。署名権限の委任は出力される
+//      WalletHub の URL で人間が行う。入金は scripts/faucet.ts（CDP faucet）
+//   5. PaymentSession（60分・上限 1.00 USD の検証用セッション。期限切れのたびに再実行して作り直す）
 //
 // 実行: npx tsx scripts/payments-setup.ts
-// 環境変数: PAYMENTS_USER_ID（既定 sample-user-1）、PAYMENTS_LINK_EMAIL（ウォレットに紐づけるメール。必須）
+// 環境変数（.env でも可。.env.example 参照）:
+//   PAYMENTS_LINK_EMAIL … ウォレットに紐づけるメール（初回作成時に必須）
+//   CDP_API_KEY_ID / CDP_API_KEY_SECRET / CDP_WALLET_SECRET … Coinbase CDP の資格情報（初回作成時に必須）
+//   PAYMENTS_USER_ID … 既定 sample-user-1
 
 import {
   BedrockAgentCoreControlClient,
@@ -32,17 +37,20 @@ import {
   CreateRoleCommand,
   GetRoleCommand,
   IAMClient,
+  NoSuchEntityException,
   PutRolePolicyCommand,
   UpdateAssumeRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-// .env（gitignore 済み）から CDP 資格情報等を読む。無ければ黙って続行
+// .env（gitignore 済み）から CDP 資格情報等を読む。無い場合だけ環境変数のみで続行し、
+// それ以外の失敗（パーミッション等）は握り潰さない
 try {
-  process.loadEnvFile(new URL('../.env', import.meta.url).pathname);
-} catch {
-  // .env が無い場合は環境変数だけで動く
+  process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url)));
+} catch (e) {
+  if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
 }
 
 const REGION = 'ap-southeast-1';
@@ -134,17 +142,27 @@ async function ensureServiceRole(account: string): Promise<string> {
         ],
       },
       {
-        // コネクタ追加後に必要になる Secrets Manager 読み出し（CDP 資格情報の保管先）
+        // コネクタ追加後に必要になる Secrets Manager 読み出し（CDP 資格情報の保管先）。
+        // AgentCore Identity が作るシークレットは `bedrock-agentcore-identity!` 接頭辞で
+        // 命名される（実測）ため、同一アカウント内の他のシークレットには届かないよう絞る
         Sid: 'SecretsManagerAccess',
         Effect: 'Allow',
         Action: ['secretsmanager:GetSecretValue'],
-        Resource: ['*'],
+        Resource: [`arn:aws:secretsmanager:${REGION}:${account}:secret:bedrock-agentcore-identity!*`],
         Condition: { StringEquals: { 'aws:ResourceAccount': account } },
       },
     ],
   };
+  // 存在確認だけを try に入れ、「無い」以外の失敗は隠さない（ポリシー同期の失敗が
+  // CreateRole の EntityAlreadyExists にすり替わって真因が見えなくなるのを防ぐ）
+  let existingArn: string | undefined;
   try {
     const existing = await iam.send(new GetRoleCommand({ RoleName: ROLE_NAME }));
+    existingArn = existing.Role?.Arn;
+  } catch (e) {
+    if (!(e instanceof NoSuchEntityException)) throw e;
+  }
+  if (existingArn) {
     // 冪等実行時も信頼ポリシー・許可ポリシーを最新の定義に同期させる
     await iam.send(
       new UpdateAssumeRolePolicyCommand({
@@ -159,10 +177,8 @@ async function ensureServiceRole(account: string): Promise<string> {
         PolicyDocument: JSON.stringify(basePermissions),
       }),
     );
-    console.log(`サービスロールは既存: ${existing.Role?.Arn}（ポリシー同期済み）`);
-    return existing.Role!.Arn!;
-  } catch {
-    // 無ければ作る
+    console.log(`サービスロールは既存: ${existingArn}（ポリシー同期済み）`);
+    return existingArn;
   }
   const created = await iam.send(
     new CreateRoleCommand({
@@ -289,7 +305,7 @@ async function ensureInstrument(managerArn: string, connectorId: string): Promis
   const list = await data.send(
     new ListPaymentInstrumentsCommand({ paymentManagerArn: managerArn, userId: USER_ID }),
   );
-  const found = list.paymentInstruments?.find((i) => i.status !== 'INACTIVE');
+  const found = list.paymentInstruments?.find((i) => i.status !== 'DELETED');
   let instrumentId: string;
   if (found?.paymentInstrumentId) {
     instrumentId = found.paymentInstrumentId;
@@ -334,9 +350,12 @@ async function ensureInstrument(managerArn: string, connectorId: string): Promis
   console.log(`PaymentInstrument ID: ${instrumentId}`);
   console.log(`ウォレットアドレス: ${wallet?.walletAddress ?? '(未発行)'}`);
   console.log(`ステータス: ${got.status}`);
-  if (got.status !== 'ACTIVE' && wallet?.redirectUrl) {
+  // status が ACTIVE でも WalletHub での委任（Delegated signing の許可）が済むまで
+  // ProcessPayment は通らず、ステータスからは判別できない（決定27 実測）。
+  // そのため URL は常に表示する。許可には有効期限があり、切れたら同じ URL で再許可する
+  if (wallet?.redirectUrl) {
     console.log('');
-    console.log('★ ウォレットの委任（署名権限の付与）が必要です。次の URL をブラウザで開いて許可してください:');
+    console.log('★ WalletHub でウォレットの委任（署名権限の付与）を許可してください。既に許可済みなら不要:');
     console.log(`  ${wallet.redirectUrl}`);
     console.log('（入金は scripts/faucet.ts＝CDP faucet で行える）');
   }
@@ -373,7 +392,11 @@ async function main() {
   const manager = await ensurePaymentManager(roleArn);
   console.log(`PaymentManager ARN: ${manager.arn}`);
   const connector = await ensureConnector(manager.id);
-  if (!connector.ready) return;
+  if (!connector.ready) {
+    // 未完了を成功扱いにしない（自動化から呼ばれたときに後続が環境変数未設定で落ちるため）
+    console.error('セットアップは未完了です（コネクタが READY になっていません）');
+    process.exit(1);
+  }
   const instrumentId = await ensureInstrument(manager.arn, connector.id);
   await createSession(manager.arn);
   console.log(`export PAYMENT_INSTRUMENT_ID=${instrumentId}`);

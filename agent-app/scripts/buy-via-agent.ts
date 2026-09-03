@@ -12,7 +12,7 @@
 // 注意: 1回の実行で実オンチェーン決済（0.1 テスト USDC）が発生する。
 // ローカルの LLM は既定で canned プロバイダ（モック）だが、
 // 支払い・billing-mcp 側の Bedrock 生成・オンチェーン決済はすべて本物が動く
-import { Scope } from '@aws-blocks/blocks';
+import { type AgentStreamChunk, Scope } from '@aws-blocks/blocks';
 import { createBuyerAgent, purchasedHtmlKey } from '../aws-blocks/buyer-agent.js';
 
 const prompt =
@@ -39,7 +39,7 @@ const result = await agent.stream(`generateHtml ツールを使ってくださ�
 });
 
 const channel = await result.channel;
-const sub = channel.subscribe((chunk: { type: string; [key: string]: unknown }) => {
+const sub = channel.subscribe((chunk: AgentStreamChunk) => {
   if (chunk.type === 'tool-call') console.log(`ツール呼び出し: ${chunk.toolName}`);
   if (chunk.type === 'tool-result') console.log(`ツール結果: ${chunk.text}`);
   if (chunk.type === 'error') console.error(`エラー: ${chunk.error}`);
@@ -57,12 +57,13 @@ const toolResult = messages.find((m: { role: string }) => m.role === 'tool-resul
   | { content?: unknown }
   | undefined;
 let body: { resultId?: string; transaction?: string } = {};
-let raw = toolResult?.content;
+let raw: unknown = toolResult?.content;
 if (typeof raw === 'string' && raw.length > 0) {
+  const text = raw;
   try {
-    raw = JSON.parse(raw);
+    raw = JSON.parse(text);
   } catch {
-    console.warn(`ツール結果を JSON として読めませんでした: ${raw.slice(0, 200)}`);
+    console.warn(`ツール結果を JSON として読めませんでした: ${text.slice(0, 200)}`);
   }
 }
 if (raw && typeof raw === 'object') {
