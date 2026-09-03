@@ -44,8 +44,56 @@
 リポジトリ外のグローバル設定に記録した（個人情報に類する値は、明示的な事前承認なく
 外部サービス・コマンド・リポジトリ内ファイルに一切使わない）。
 
+### セルフレビュー（2026-09-03、PR 作成前）
+
+4件を指摘して修正した。
+
+1. buyer API の所有検証が `getMessages` にしか無く、他人の会話へ発注（実費が発生）・
+   ストリーム購読・購入物の取得ができた → `sendMessage` / `getChannel` にも検証を追加し、
+   購入物のキーを `${userSub}/${resultId}` で名前空間分離
+2. 決定9 が Quick Create のまま → MANUAL への変更経緯を追記
+3. QUICK_CREATE 前提のコメント3箇所と README → MANUAL の実態に是正
+4. `@smithy/types` が未宣言 → dependencies へ
+
+修正後に縦串を再実行し、決済〜受領が通ることを確認（tx `0x539952ca…ce8b9`、0.1 テスト USDC）。
+ただしこの再検証は `buy-via-agent.ts` が Agent を直接叩くため、修正した buyer API 自体は
+通っていなかった（下記 PR レビューで指摘）。
+
+### PR #2 レビュー（2026-09-03、9観点の並列レビュー）
+
+26件の指摘のうち上位21件を修正した。自分のセルフレビューを素通りした指摘が複数あり、
+「**検証が変更面を迂回している**」という失敗形（フェーズ②の GET/SSE と同型）が再発していた。
+
+修正した主なもの:
+
+- **`sendMessage` の channelId が未検証**（セルフレビューの修正漏れ）→ channelId 引数を廃し
+  会話 ID に固定。`getChannel` も会話 ID で受ける
+- **支払い条件の未検証** → 支払いポリシー（ネットワーク・資産・1回上限・任意で宛先）を
+  `x402-payer` に入れ、合致しない提示には署名を求めない。上限は `PAYMENT_MAX_AMOUNT`
+- **決定25 の記述が着工前の見込みのまま**（`PaymentClient` / `@x402/*` 依存）→ 実装に合わせて更新
+- **委任 URL が ACTIVE 時に表示されない**（決定27 が記録した失敗モードそのもの）→ 常に表示
+- **支払い済みで成果物を得られない経路で tx を捨てていた** → レシートを KVStore に残し signal を出す
+- **`tsconfig` の include に `scripts/` が無く CI 未検査** → 追加したところ型エラー3件が即座に露出
+- パース失敗と「支払い要求でない」の混同 → `accepts` があるのに解釈できなければ例外。
+  上流に合わせ extra は任意、未知フィールドは通す（passthrough）
+- 所有ガードを純関数に切り出してテスト、SDK クライアントの作り捨て解消、
+  `loadEnvFile` の `fileURLToPath` 化、Secrets Manager の絞り込み、fund-wallet の revert 判定、
+  価格のハードコード除去、CLAUDE.md のコマンド節、決定9/26 の補足、など
+
+修正後に縦串を再実行し、支払いポリシーが本物の売り手提示（Base Sepolia / テスト USDC /
+100000 = 0.1 USDC）を受け入れて決済〜受領が通ることを確認した
+（tx `0x05bdf33e…b986d`、HTML 3,079 バイト）。`tsconfig` に `scripts/` を含めた
+ことで露出した型エラー3件（`PaymentInstrumentStatus` に無い `INACTIVE` との比較など）も
+同時に修正した。
+
 ### 残していること（フェーズ④へ）
 
+- **支払い主体の二重化**: ProcessPayment の userId はウォレットの持ち主（`PAYMENTS_USER_ID`、
+  全利用者で共有）で、購入物の所有者は Cognito の userSub。利用者ごとの支出上限や
+  Payments 側の監査で「誰が支払わせたか」を追うには、利用者ごとの instrument 発行と
+  WalletHub 委任が要る。自己サインアップ + 実費 API の組み合わせにレート制限も無い
+- **buyer API を通る自動テストが無い**: 所有ガードの規則は純関数でテストしたが、API 経路
+  （認証込み）は e2e で押さえていない。④の UI 実装と合わせて e2e を足す
 - 検証用 PaymentSession は60分で失効する。④の結合検証時は `payments-setup.ts` を再実行して作り直す
 - WalletHub の Delegated signing 許可は7日で失効する（切れたら redirectUrl から再許可）
 - ローカル LLM は canned プロバイダのまま。④はデプロイ（Bedrock）で実施

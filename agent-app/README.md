@@ -6,7 +6,8 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 ## 構成
 
 - 雛形は `npx @aws-blocks/create-blocks-app --template auth-cognito` の生成物（決定13・15。npm 管理）
-- 使用ブロック: Agent / AuthCognito / KVStore / ApiNamespace / Realtime（決定26）
+- 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime（決定26）。
+  ③時点で明示的に配線済みなのは Agent / AuthCognito / KVStore / ApiNamespace で、Realtime の配線は④
 - ウォレット（AgentCore Payments）は ap-southeast-1（クロスリージョン。決定12・24）
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く。決定25）
@@ -30,3 +31,6 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 
 - `PAYMENT_MANAGER_ARN` / `PAYMENT_SESSION_ID` / `PAYMENT_INSTRUMENT_ID`
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
+- `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `100000` = 0.1 USDC）・
+  `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +
+  テスト USDC に固定しており、売り手の提示がこれに合わなければ支払わない
