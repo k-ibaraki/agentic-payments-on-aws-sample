@@ -47,7 +47,10 @@ if (!privateKey) {
   process.exit(1);
 }
 const account = privateKeyToAccount(privateKey);
-const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+const publicClient = createPublicClient({
+  chain: baseSepolia,
+  transport: http(),
+});
 
 async function show(label: string, address: `0x${string}`) {
   const usdc = await publicClient.readContract({
@@ -67,14 +70,20 @@ const to = process.argv[2] as `0x${string}` | undefined;
 const amount = process.argv[3];
 if (!to || !amount) {
   console.log("");
-  console.log("宛先と金額が未指定のため残高表示のみで終了（送金するには: fund-wallet.ts <宛先> <USDC額>）");
+  console.log(
+    "宛先と金額が未指定のため残高表示のみで終了（送金するには: fund-wallet.ts <宛先> <USDC額>）",
+  );
   process.exit(0);
 }
 
 await show("宛先", to);
 console.log("");
 console.log(`${amount} USDC を送金します...`);
-const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http() });
+const walletClient = createWalletClient({
+  account,
+  chain: baseSepolia,
+  transport: http(),
+});
 const hash = await walletClient.writeContract({
   address: USDC,
   abi: ERC20,
