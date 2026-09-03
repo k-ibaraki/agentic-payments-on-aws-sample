@@ -3,7 +3,8 @@
 // 作るもの（ap-southeast-1。決定12: Payments のみ越境）:
 //   1. サービスロール（IAM。bedrock-agentcore が引き受けて資格情報を取りに行く）
 //   2. PaymentManager（決済操作の親リソース）
-//   3. PaymentConnector（Coinbase / QUICK_CREATE。OAuth 同意 URL が出たら人間が開く）
+//   3. PaymentCredentialProvider（CDP の API キー・ウォレットシークレットを AgentCore Identity へ）
+//      と PaymentConnector（Coinbase / MANUAL。決定27 変更）
 //   4. PaymentInstrument（EVM の埋め込みウォレット。委任と入金は redirectUrl で人間が行う）
 //
 // 実行: npx tsx scripts/payments-setup.ts
@@ -118,7 +119,7 @@ async function ensureServiceRole(account: string): Promise<string> {
         ],
       },
       {
-        // QUICK_CREATE ではサービス側が資格情報プロバイダを作るため、その権限も要る
+        // 資格情報プロバイダ（token-vault）へのアクセス。MANUAL でも取得系は要る
         Sid: 'PaymentCredentialProviderProvisioning',
         Effect: 'Allow',
         Action: [
@@ -133,7 +134,7 @@ async function ensureServiceRole(account: string): Promise<string> {
         ],
       },
       {
-        // コネクタ追加後に必要になる Secrets Manager 読み出し（QUICK_CREATE が保存した秘密）
+        // コネクタ追加後に必要になる Secrets Manager 読み出し（CDP 資格情報の保管先）
         Sid: 'SecretsManagerAccess',
         Effect: 'Allow',
         Action: ['secretsmanager:GetSecretValue'],

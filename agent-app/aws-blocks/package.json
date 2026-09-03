@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1121.0",
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@smithy/types": "^4.0.0"
   }
 }

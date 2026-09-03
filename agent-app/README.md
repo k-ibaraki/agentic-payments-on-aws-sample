@@ -18,7 +18,10 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - `npm run test` / `npm run typecheck` — コミット前に必ず通すこと
 - `npm run test:e2e` — ローカルサーバーに対する e2e（node:test）
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。
-  `PAYMENTS_LINK_EMAIL` 必須。Coinbase の Marketplace サブスクと OAuth 同意が途中で要る）
+  `PAYMENTS_LINK_EMAIL` と CDP の資格情報3点を `.env` に置く。`.env.example` 参照。
+  前提として AWS Marketplace の Coinbase サブスクリプション加入が要る）
+- ウォレット作成後、出力される WalletHub の URL でエンドユーザーが署名権限を許可するまで
+  支払いは通らない（許可には有効期限がある。決定27）
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（0.1 テスト USDC）が発生する**
 
 ## 縦串検証に必要な環境変数
