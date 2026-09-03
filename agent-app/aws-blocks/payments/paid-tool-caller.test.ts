@@ -2,7 +2,7 @@
 // x402MCPClient のラッパを使わず素の callTool を2回叩く方式で、
 // structuredContent（HTML 本体）が欠けずに届くことをここで固定する
 import { describe, expect, it, vi } from 'vitest';
-import { callPaidTool } from './paid-tool-caller.js';
+import { callPaidTool, PaidToolError } from './paid-tool-caller.js';
 
 const REQUIREMENT = {
   scheme: 'exact',
@@ -162,5 +162,36 @@ describe('callPaidTool', () => {
 
     const passed = payer.pay.mock.calls[0][0];
     expect(passed.accepts[0]).toEqual(extended);
+  });
+});
+
+describe('タイムアウトと決済後の失敗（二重支払いの防止）', () => {
+  it('options.timeout を両方の callTool に渡す（売り手の生成時間より短い既定 60 秒を使わない）', async () => {
+    const callTool = vi.fn().mockResolvedValueOnce(paymentRequiredResult()).mockResolvedValueOnce(structuredClone(PAID_RESULT));
+    await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer(), { timeout: 600_000 });
+    expect(callTool.mock.calls[0]?.[1]).toEqual({ timeout: 600_000 });
+    expect(callTool.mock.calls[1]?.[1]).toEqual({ timeout: 600_000 });
+  });
+
+  it('支払い後の再呼び出しが例外になったら、支払い済みであることと支払い証明を持つ PaidToolError にする', async () => {
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequiredResult())
+      .mockRejectedValueOnce(new Error('MCP error -32001: Request timed out'));
+    const payer = { pay: vi.fn().mockResolvedValue({ ...structuredClone(PAYMENT_PAYLOAD), payload: { signature: '0xsig', authorization: { nonce: '0xnonce1' } } }) };
+
+    const error = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, payer).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PaidToolError);
+    const paid = error as PaidToolError;
+    expect(paid.paymentMade).toBe(true);
+    expect(paid.authorizationNonce).toBe('0xnonce1');
+    expect(paid.message).toContain('Request timed out');
+  });
+
+  it('支払い前（最初の呼び出し）の例外はそのまま投げる（支払いは無い）', async () => {
+    const callTool = vi.fn().mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const error = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer()).catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(PaidToolError);
+    expect((error as Error).message).toBe('ECONNREFUSED');
   });
 });

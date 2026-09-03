@@ -1,414 +1,279 @@
-// Direct import from backend - types available in IDE, Proxy injected at runtime
-import { api, authApi } from 'aws-blocks';
+// 買い手のブラウザ UI（決定28・29）。
+// サインイン → 依頼の送信（useChat）→ Realtime のチャンク表示 → 購入物の一覧 →
+// 売り手の MCP Apps UI（ui://）をホストとして描画し、購入済み HTML を注入する
+import { api, authApi, buyer } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { mountPreviewHost, type PreviewHost, type SellerInfo } from './mcp-apps-host.js';
 
-// For coding agents: Leave this comment in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
-
-let currentUser: { username: string } | null = null;
-let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;
-
-// ── Safe DOM helpers ────────────────────────────────────────────────────
-// Every rendering path in this file goes through these; never use .innerHTML
-// on user-supplied or server-supplied strings directly.
-
-function clear(el: HTMLElement) {
-  el.replaceChildren();
+// ── DOM ヘルパー（文字列は必ず textContent で入れ、innerHTML は使わない） ──
+function el<T extends HTMLElement>(id: string): T {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`要素が見つかりません: #${id}`);
+  return node as T;
 }
 
-function showMessage(el: HTMLElement, text: string, cls?: 'success' | 'error') {
+function showMessage(target: HTMLElement, text: string, cls?: 'success' | 'error') {
   const span = document.createElement('span');
   if (cls) span.className = cls;
   span.textContent = text;
-  el.replaceChildren(span);
+  target.replaceChildren(span);
 }
 
-function showError(el: HTMLElement, text: string) {
-  showMessage(el, text, 'error');
+function appendEvent(text: string) {
+  const events = el('events');
+  const line = document.createElement('div');
+  line.textContent = `${new Date().toLocaleTimeString()} ${text}`;
+  events.appendChild(line);
+  events.scrollTop = events.scrollHeight;
 }
 
-// ── Todos ───────────────────────────────────────────────────────────────
+// ── チャット（useChat が購読の確立 → 履歴 → 送信の順序を担う。決定26） ──
+type Purchase = Awaited<ReturnType<typeof buyer.listPurchases>>['purchases'][number];
 
-type Todo = { todoId: string; title: string; completed: boolean; priority: number };
+let previewHost: PreviewHost | null = null;
+let sellerInfo: SellerInfo | null = null;
 
-function renderTodo(todo: Todo): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'todo-item';
+function renderMessages(messages: ChatMessage[]) {
+  const log = el('chat-log');
+  log.replaceChildren(
+    ...messages.map((m) => {
+      const div = document.createElement('div');
+      div.className = `msg ${m.role}`;
+      div.textContent = m.content;
+      return div;
+    }),
+  );
+  log.scrollTop = log.scrollHeight;
+}
 
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
-  checkbox.checked = todo.completed;
-  checkbox.addEventListener('change', () => toggleTodo(todo.todoId, checkbox.checked));
-  row.appendChild(checkbox);
-
-  const titleInput = document.createElement('input');
-  titleInput.type = 'text';
-  titleInput.className = 'todo-title';
-  titleInput.value = todo.title;
-  titleInput.addEventListener('blur', () => updateTitle(todo.todoId, titleInput.value));
-  titleInput.addEventListener('keypress', (ev) => {
-    if (ev.key === 'Enter') titleInput.blur();
-  });
-  row.appendChild(titleInput);
-
-  const prioritySelect = document.createElement('select');
-  prioritySelect.style.marginLeft = 'auto';
-  for (const [value, label] of [[1, '🔴 High'], [2, '🟡 Medium'], [3, '🟢 Low']] as const) {
-    const opt = document.createElement('option');
-    opt.value = String(value);
-    opt.textContent = label;
-    if (todo.priority === value) opt.selected = true;
-    prioritySelect.appendChild(opt);
+function describeChunk(chunk: AgentStreamChunk): string {
+  switch (chunk.type) {
+    case 'tool-call':
+      return `tool-call ${chunk.toolName ?? ''} ${chunk.input !== undefined ? JSON.stringify(chunk.input) : ''}`;
+    case 'tool-result':
+      return `tool-result ${chunk.toolName ?? ''}（支払いと生成が完了。購入一覧を更新します）`;
+    case 'done':
+      return `done${chunk.usage ? ` tokens=${chunk.usage.totalTokens}` : ''}`;
+    case 'error':
+      return `error ${chunk.error ?? ''}`;
+    case 'text-delta':
+      return `text-delta ${(chunk.text ?? '').length} 文字`;
+    default:
+      return chunk.type;
   }
-  prioritySelect.addEventListener('change', () => changePriority(todo.todoId, parseInt(prioritySelect.value, 10)));
-  row.appendChild(prioritySelect);
+}
 
-  const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = 'Delete';
-  deleteBtn.addEventListener('click', () => deleteTodo(todo.todoId));
-  row.appendChild(deleteBtn);
+const chat = useChat({
+  api: {
+    // buyer API は channelId を受け取らない（会話 ID に固定。他人の会話へのストリーム注入を防ぐ）
+    sendMessage: async (conversationId, message) => {
+      await buyer.sendMessage(conversationId, message);
+    },
+    createConversation: () => buyer.createConversation(),
+    getConversation: (id) => buyer.getMessages(id),
+    // 二重支払いの防護（決定31）: 人の承認待ちへの応答と、未応答の確認
+    resume: async (channelId, responses) => {
+      await buyer.resume(channelId, responses.map((r) => ({ interruptId: r.interruptId, approved: r.approved, ...(r.trust !== undefined ? { trust: r.trust } : {}) })));
+    },
+    getPendingInterrupts: (id) => buyer.getPendingInterrupts(id),
+  },
+  subscribe: async (channelId, handler) => {
+    const channel = await buyer.getChannel(channelId);
+    return channel.subscribe(handler);
+  },
+  onMessagesChange: renderMessages,
+  onLoadingChange: (loading) => {
+    (el<HTMLButtonElement>('chat-send-btn')).disabled = loading;
+  },
+  onChunk: (chunk) => {
+    appendEvent(describeChunk(chunk));
+    if (chunk.type === 'tool-result' || chunk.type === 'done') void refreshPurchases();
+  },
+  onError: (error) => appendEvent(`エラー: ${error}`),
+  onInterrupt: renderInterrupts,
+});
 
+// エージェントが人の承認を求めてきた（決定31: 支払い済みで成果物の無い購入がある会話での再購入）
+function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?: any }>) {
+  const box = el('interrupts');
+  box.replaceChildren(
+    ...interrupts.map((it) => {
+      const row = document.createElement('div');
+      row.className = 'interrupt';
+      const text = document.createElement('span');
+      const reason = it.reason as { message?: string; unresolved?: string[] } | undefined;
+      text.textContent = `${reason?.message ?? it.name}${reason?.unresolved?.length ? `（未解決: ${reason.unresolved.join(', ')}）` : ''}`;
+      row.appendChild(text);
+      for (const [label, approved] of [['もう一度支払う', true], ['やめる', false]] as const) {
+        const button = document.createElement('button');
+        button.textContent = label;
+        button.addEventListener('click', async () => {
+          box.replaceChildren();
+          appendEvent(`承認への応答: ${label}`);
+          await chat.respondToInterrupt([{ interruptId: it.id, approved }]);
+        });
+        row.appendChild(button);
+      }
+      return row;
+    }),
+  );
+  appendEvent(`interrupt ${interrupts.map((i) => i.name).join(', ')}（人の承認待ち）`);
+}
+
+// 直近の会話 ID をブラウザに覚えさせ、再読込後も購入一覧とプレビューへ戻れるようにする
+const LAST_CONVERSATION_KEY = 'agent-app:last-conversation';
+
+async function sendCurrentInput() {
+  const input = el<HTMLInputElement>('chat-text');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  try {
+    await chat.sendMessage(text);
+    const conversationId = chat.getConversationId();
+    el('conversation-id').textContent = conversationId ?? '（未作成）';
+    if (conversationId) localStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
+  } catch (error) {
+    appendEvent(`送信に失敗: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// ── 購入物 ────────────────────────────────────────────────────────────
+async function refreshPurchases() {
+  const conversationId = chat.getConversationId();
+  if (!conversationId) return;
+  const { purchases } = await buyer.listPurchases(conversationId);
+  const container = el('purchases');
+  if (purchases.length === 0) {
+    showMessage(container, 'まだありません');
+    return;
+  }
+  container.replaceChildren(...purchases.map(renderPurchase));
+}
+
+function renderPurchase(purchase: Purchase): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'purchase';
+
+  const button = document.createElement('button');
+  button.textContent = purchase.ok ? '表示' : '失敗';
+  button.disabled = !purchase.ok;
+  button.addEventListener('click', () => void showPurchase(purchase.resultId));
+  row.appendChild(button);
+
+  const id = document.createElement('code');
+  id.textContent = purchase.resultId;
+  row.appendChild(id);
+
+  const detail = document.createElement('span');
+  detail.className = purchase.ok ? 'success' : 'error';
+  detail.textContent = purchase.ok
+    ? `${purchase.paymentMade ? '支払い済み' : '無課金'} ${purchase.htmlBytes ?? '?'} バイト`
+    : `${purchase.paymentMade ? '支払い済み・' : ''}${purchase.error ?? '失敗'}`;
+  row.appendChild(detail);
+
+  if (purchase.transaction) {
+    const tx = document.createElement('a');
+    tx.href = `https://sepolia.basescan.org/tx/${purchase.transaction}`;
+    tx.target = '_blank';
+    tx.rel = 'noopener';
+    tx.textContent = 'tx';
+    row.appendChild(tx);
+  }
   return row;
 }
 
-async function refreshTodos() {
-  const todoList = document.getElementById('todo-list');
-  const errorDiv = document.getElementById('todo-error');
-  if (!todoList) return;
-  if (errorDiv) clear(errorDiv);
-
-  // Rely on the server to decide "are you signed in?" — `listTodos` goes through
-  // `auth.requireAuth` and throws 401 otherwise. The frontend `currentUser`
-  // cache races with the state-machine transition, so checking it here can
-  // swallow valid sign-in states.
+// 購入済み HTML を、売り手の MCP Apps UI（ホスト実装）に注入して描画する（決定29）
+async function showPurchase(resultId: string) {
+  const status = el('purchase-status');
   try {
-    const todos: Todo[] = await api.listTodos(currentSort);
-    if (todos.length === 0) {
-      const p = document.createElement('p');
-      p.textContent = 'No todos yet. Add one above!';
-      todoList.replaceChildren(p);
+    const artifact = await buyer.getPurchasedHtml(resultId);
+    if (!artifact?.html) {
+      showMessage(status, 'この購入には HTML がありません（支払い後の失敗）', 'error');
       return;
     }
-    todoList.replaceChildren(...todos.map(renderTodo));
-  } catch (error: any) {
-    if (error?.name === 'NotAuthenticatedException') {
-      const p = document.createElement('p');
-      p.textContent = 'Please sign in to view todos';
-      todoList.replaceChildren(p);
-      return;
-    }
-    if (errorDiv) showError(errorDiv, error.message);
+    const host = await ensurePreviewHost();
+    await host.showHtml(artifact.html, artifact.filename);
+    showMessage(status, `resultId ${resultId} を表示中${artifact.transaction ? `（tx ${artifact.transaction}）` : ''}`, 'success');
+  } catch (error) {
+    showMessage(status, `表示に失敗: ${error instanceof Error ? error.message : String(error)}`, 'error');
   }
 }
 
-async function addTodo() {
-  const input = document.getElementById('todo-input') as HTMLInputElement;
-  const prioritySelect = document.getElementById('todo-priority') as HTMLSelectElement;
-  const errorDiv = document.getElementById('todo-error');
-  const title = input.value.trim();
-  if (!title) return;
-  if (errorDiv) clear(errorDiv);
+async function ensurePreviewHost(): Promise<PreviewHost> {
+  if (previewHost) return previewHost;
+  sellerInfo ??= await buyer.getSellerInfo();
+  appendEvent(`ui:// を取得: ${sellerInfo.resourceUri}（${sellerInfo.mcpUrl}）`);
+  previewHost = await mountPreviewHost(el<HTMLIFrameElement>('preview-frame'), sellerInfo, {
+    onDownload: (filename, html) => {
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+  appendEvent('MCP Apps の View を初期化しました');
+  return previewHost;
+}
 
+async function resumeLastConversation() {
+  const conversationId = localStorage.getItem(LAST_CONVERSATION_KEY);
+  if (!conversationId) return;
   try {
-    await api.createTodo(title, parseInt(prioritySelect.value, 10));
-    input.value = '';
-    await refreshTodos();
-  } catch (error: any) {
-    if (errorDiv) showError(errorDiv, error.message);
+    await chat.loadConversation(conversationId);
+    el('conversation-id').textContent = conversationId;
+    appendEvent(`前回の会話 ${conversationId} を再開しました`);
+    await refreshPurchases();
+  } catch (error) {
+    // 他の利用者の会話やサーバー再起動後の ID は所有検証で弾かれる。忘れて新規に始める
+    localStorage.removeItem(LAST_CONVERSATION_KEY);
+    appendEvent(`前回の会話を再開できませんでした: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-async function changeSort(sortBy: string) {
-  currentSort = sortBy === 'none' ? undefined : sortBy as 'priority' | 'title' | 'createdAt';
-  await refreshTodos();
+function resetConversationUi() {
+  chat.destroy();
+  localStorage.removeItem(LAST_CONVERSATION_KEY);
+  el('chat-log').replaceChildren();
+  el('events').replaceChildren();
+  el('interrupts').replaceChildren();
+  el('conversation-id').textContent = '（未作成）';
+  showMessage(el('purchases'), 'まだありません');
 }
 
-async function toggleTodo(todoId: string, completed: boolean) {
-  await api.updateTodo(todoId, { completed });
-  await refreshTodos();
-}
+// ── 起動 ──────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  el('auth-container').appendChild(Authenticator(authApi));
 
-async function changePriority(todoId: string, priority: number) {
-  await api.updateTodo(todoId, { priority });
-  await refreshTodos();
-}
-
-async function updateTitle(todoId: string, title: string) {
-  const trimmedTitle = title.trim();
-  if (!trimmedTitle) {
-    await refreshTodos();
-    return;
-  }
-  await api.updateTodo(todoId, { title: trimmedTitle });
-  await refreshTodos();
-}
-
-async function deleteTodo(todoId: string) {
-  await api.deleteTodo(todoId);
-  await refreshTodos();
-}
-
-// ── Auth UI ─────────────────────────────────────────────────────────────
-
-document.addEventListener('DOMContentLoaded', async () => {
-  const authContainer = document.getElementById('auth-container');
-  if (authContainer) {
-    authContainer.appendChild(Authenticator(authApi));
-  }
-
-  onAuthChange(authApi, async (user) => {
-    currentUser = user;
-    const authStatus = document.getElementById('auth-status');
-    if (authStatus) {
-      authStatus.textContent = user ? `Logged in as: ${user.username}` : 'Not logged in';
-    }
+  onAuthChange(authApi, (user) => {
+    el('auth-status').textContent = user ? `サインイン中: ${user.username}` : '未サインイン';
     document.body.classList.toggle('signed-in', !!user);
-    await refreshTodos();
     if (user) {
-      await refreshProfile();
-    }
-  });
-
-  bindUi();
-});
-
-// ── Panels ──────────────────────────────────────────────────────────────
-
-function bindUi() {
-  document.getElementById('todo-add-btn')?.addEventListener('click', addTodo);
-  document.getElementById('todo-input')?.addEventListener('keypress', (ev) => {
-    if ((ev as KeyboardEvent).key === 'Enter') addTodo();
-  });
-  document.getElementById('todo-sort')?.addEventListener('change', (e) =>
-    changeSort((e.target as HTMLSelectElement).value),
-  );
-  document.getElementById('last-code-btn')?.addEventListener('click', refreshLastCode);
-  document.getElementById('editors-only-btn')?.addEventListener('click', testEditorsOnly);
-  document.getElementById('readers-only-btn')?.addEventListener('click', testReadersOnly);
-  document.getElementById('kv-set-btn')?.addEventListener('click', testSetValue);
-  document.getElementById('kv-get-btn')?.addEventListener('click', testGetValue);
-
-  // Profile
-  document.getElementById('profile-refresh-btn')?.addEventListener('click', refreshProfile);
-  document.getElementById('profile-update-department-btn')?.addEventListener('click', updateDepartment);
-  document.getElementById('profile-update-email-btn')?.addEventListener('click', updateEmail);
-  document.getElementById('profile-confirm-email-btn')?.addEventListener('click', confirmEmailAttr);
-  document.getElementById('profile-change-password-btn')?.addEventListener('click', changePassword);
-  document.getElementById('profile-global-signout-btn')?.addEventListener('click', globalSignOut);
-
-  // Devices
-  document.getElementById('devices-refresh-btn')?.addEventListener('click', listDevices);
-  document.getElementById('devices-forget-btn')?.addEventListener('click', forgetCurrentDevice);
-}
-
-async function refreshLastCode() {
-  const out = document.getElementById('last-code-result')!;
-  const last = await api.getLastCode();
-  if (!last) {
-    out.textContent = '(none)';
-    return;
-  }
-  // Assemble safely: attacker-controlled `username`/`code` must not be
-  // interpreted as markup.
-  clear(out);
-  const span = document.createElement('span');
-  span.appendChild(document.createTextNode(`${last.purpose} `));
-  const user = document.createElement('b');
-  user.textContent = last.username;
-  span.appendChild(user);
-  span.appendChild(document.createTextNode(': '));
-  const code = document.createElement('code');
-  code.textContent = last.code;
-  span.appendChild(code);
-  out.replaceChildren(span);
-}
-
-async function testEditorsOnly() {
-  const out = document.getElementById('role-result')!;
-  try {
-    const r = await api.editorsOnly();
-    showMessage(out, r.message, 'success');
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function testReadersOnly() {
-  const out = document.getElementById('role-result')!;
-  try {
-    const r = await api.readersOnly();
-    showMessage(out, r.message, 'success');
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function testSetValue() {
-  const key = (document.getElementById('key') as HTMLInputElement).value;
-  const value = (document.getElementById('value') as HTMLInputElement).value;
-  await api.setValue(key, value);
-  showMessage(document.getElementById('kv-result')!, `✓ Set ${key} = ${value}`, 'success');
-}
-
-async function testGetValue() {
-  const key = (document.getElementById('key') as HTMLInputElement).value;
-  const value = await api.getValue(key);
-  const out = document.getElementById('kv-result')!;
-  if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
-  else showError(out, '✗ Key not found');
-}
-
-// ── Profile ────────────────────────────────────────────────────────────
-
-function renderAttrs(target: HTMLElement, attrs: Record<string, string>) {
-  clear(target);
-  const entries = Object.entries(attrs).sort(([a], [b]) => a.localeCompare(b));
-  if (entries.length === 0) {
-    target.textContent = '(no attributes)';
-    return;
-  }
-  const list = document.createElement('ul');
-  list.style.margin = '0';
-  list.style.paddingLeft = '20px';
-  for (const [k, v] of entries) {
-    const li = document.createElement('li');
-    const code = document.createElement('code');
-    code.textContent = `${k}: ${v}`;
-    li.appendChild(code);
-    list.appendChild(li);
-  }
-  target.appendChild(list);
-}
-
-async function refreshProfile() {
-  const out = document.getElementById('profile-attrs');
-  if (!out) return;
-  try {
-    const attrs = await api.fetchUserAttributes();
-    renderAttrs(out, attrs);
-    // Prefill the inputs with current values so the user sees what they're editing.
-    // Cognito always reads custom attrs back with the `custom:` prefix, so
-    // that's the only key `fetchUserAttributes` returns — the typed API
-    // reflects this and we stick to the prefixed form.
-    const deptInput = document.getElementById('profile-department') as HTMLInputElement | null;
-    if (deptInput) deptInput.value = attrs['custom:department'] ?? '';
-    const emailInput = document.getElementById('profile-email') as HTMLInputElement | null;
-    if (emailInput) emailInput.value = attrs.email ?? '';
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function updateDepartment() {
-  const out = document.getElementById('profile-result')!;
-  const dept = (document.getElementById('profile-department') as HTMLInputElement).value;
-  try {
-    const r = await api.updateDepartment(dept);
-    showMessage(out, `department update: ${JSON.stringify(r)}`, 'success');
-    await refreshProfile();
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function updateEmail() {
-  const out = document.getElementById('profile-result')!;
-  const email = (document.getElementById('profile-email') as HTMLInputElement).value;
-  try {
-    const r = await api.updateEmail(email);
-    const emailOutcome = r?.email;
-    if (emailOutcome && !emailOutcome.isUpdated && emailOutcome.nextStep?.name === 'CONFIRM_ATTRIBUTE_WITH_CODE') {
-      const row = document.getElementById('profile-confirm-email-row');
-      if (row) row.style.display = 'flex';
-      showMessage(out, 'Verification code sent to the new email. Check the one-liner at the top, then confirm below.', 'success');
+      void resumeLastConversation();
     } else {
-      showMessage(out, `email update: ${JSON.stringify(r)}`, 'success');
+      chat.destroy();
+      previewHost?.destroy();
+      previewHost = null;
     }
-    await refreshProfile();
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
+  });
 
-async function confirmEmailAttr() {
-  const out = document.getElementById('profile-result')!;
-  const code = (document.getElementById('profile-email-code') as HTMLInputElement).value;
-  try {
-    await api.confirmAttribute('email', code);
-    showMessage(out, 'Email confirmed.', 'success');
-    const row = document.getElementById('profile-confirm-email-row');
-    if (row) row.style.display = 'none';
-    await refreshProfile();
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
+  el('last-code-btn').addEventListener('click', async () => {
+    const result = el('last-code-result');
+    const last = await api.getLastCode();
+    if (last) showMessage(result, `${last.purpose}: ${last.code}`, 'success');
+    else showMessage(result, 'コードはまだありません（デプロイ環境では常に空）');
+  });
 
-async function changePassword() {
-  const out = document.getElementById('profile-result')!;
-  const oldP = (document.getElementById('profile-old-password') as HTMLInputElement).value;
-  const newP = (document.getElementById('profile-new-password') as HTMLInputElement).value;
-  try {
-    await api.changePassword(oldP, newP);
-    (document.getElementById('profile-old-password') as HTMLInputElement).value = '';
-    (document.getElementById('profile-new-password') as HTMLInputElement).value = '';
-    showMessage(out, 'Password changed.', 'success');
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function globalSignOut() {
-  const out = document.getElementById('profile-result')!;
-  try {
-    await api.signOutEverywhere();
-    showMessage(out, 'Global sign-out: refresh tokens invalidated. Reloading…', 'success');
-    // `signOutEverywhere` invalidates the session cookie out-of-band —
-    // it doesn't flow through the Authenticator's state machine, so
-    // the component's cached render stays on the signed-in view. A
-    // full reload is the simplest correct UX for a destructive action
-    // and also wipes any in-memory session state the app may have.
-    window.location.reload();
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-// ── Devices ────────────────────────────────────────────────────────────
-
-async function listDevices() {
-  const out = document.getElementById('devices-result')!;
-  try {
-    const devices = await api.listDevices();
-    clear(out);
-    if (devices.length === 0) {
-      out.textContent = '(no devices tracked)';
-      return;
-    }
-    const ul = document.createElement('ul');
-    ul.style.margin = '0';
-    ul.style.paddingLeft = '20px';
-    for (const d of devices) {
-      const li = document.createElement('li');
-      const code = document.createElement('code');
-      code.textContent = JSON.stringify(d);
-      li.appendChild(code);
-      ul.appendChild(li);
-    }
-    out.appendChild(ul);
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-async function forgetCurrentDevice() {
-  const out = document.getElementById('devices-result')!;
-  try {
-    await api.forgetCurrentDevice();
-    showMessage(out, 'Device forgotten.', 'success');
-  } catch (e: any) {
-    showError(out, e.message);
-  }
-}
-
-console.log('AWS Blocks Auth-Cognito loaded');
+  el('chat-send-btn').addEventListener('click', () => void sendCurrentInput());
+  el<HTMLInputElement>('chat-text').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.isComposing) void sendCurrentInput();
+  });
+  el('chat-new-btn').addEventListener('click', () => {
+    // 会話を捨てて新しい ID を採番させる（次の送信時に createConversation が走る）
+    resetConversationUi();
+    appendEvent('新しい会話を始めます');
+  });
+});
