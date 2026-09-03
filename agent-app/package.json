@@ -36,6 +36,7 @@
     "@aws-sdk/client-bedrock-agentcore-control": "^3.1121.0",
     "@aws-sdk/client-iam": "^3.1121.0",
     "@aws-sdk/client-sts": "^3.1121.0",
+    "@coinbase/cdp-sdk": "^1.55.0",
     "@types/node": "^20.0.0",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",

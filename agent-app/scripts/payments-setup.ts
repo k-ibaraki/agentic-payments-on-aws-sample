@@ -12,15 +12,18 @@
 import {
   BedrockAgentCoreControlClient,
   CreatePaymentConnectorCommand,
+  CreatePaymentCredentialProviderCommand,
   CreatePaymentManagerCommand,
   GetPaymentConnectorCommand,
   GetPaymentManagerCommand,
   ListPaymentConnectorsCommand,
+  ListPaymentCredentialProvidersCommand,
   ListPaymentManagersCommand,
 } from '@aws-sdk/client-bedrock-agentcore-control';
 import {
   BedrockAgentCoreClient,
   CreatePaymentInstrumentCommand,
+  CreatePaymentSessionCommand,
   GetPaymentInstrumentCommand,
   ListPaymentInstrumentsCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
@@ -33,6 +36,13 @@ import {
 } from '@aws-sdk/client-iam';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { randomUUID } from 'node:crypto';
+
+// .env（gitignore 済み）から CDP 資格情報等を読む。無ければ黙って続行
+try {
+  process.loadEnvFile(new URL('../.env', import.meta.url).pathname);
+} catch {
+  // .env が無い場合は環境変数だけで動く
+}
 
 const REGION = 'ap-southeast-1';
 const ROLE_NAME = 'agentic-payments-sample-service-role';
@@ -72,28 +82,10 @@ async function ensureServiceRole(account: string): Promise<string> {
       },
     ],
   };
-  try {
-    const existing = await iam.send(new GetRoleCommand({ RoleName: ROLE_NAME }));
-    // 冪等実行時も信頼ポリシーを最新の定義に同期させる
-    await iam.send(
-      new UpdateAssumeRolePolicyCommand({
-        RoleName: ROLE_NAME,
-        PolicyDocument: JSON.stringify(trustPolicy),
-      }),
-    );
-    console.log(`サービスロールは既存: ${existing.Role?.Arn}`);
-    return existing.Role!.Arn!;
-  } catch {
-    // 無ければ作る
-  }
-  const created = await iam.send(
-    new CreateRoleCommand({
-      RoleName: ROLE_NAME,
-      AssumeRolePolicyDocument: JSON.stringify(trustPolicy),
-      // IAM の Description は Latin-1 のみ許容のため英語（日本語だと ValidationError）
-      Description: 'Service role assumed by AgentCore Payments (agentic-payments-on-aws-sample)',
-    }),
-  );
+  // workload identity の ARN も PaymentManager 同様 name が小文字化される（実測）。
+  // 初回はここが camelCase のままで GetWorkloadAccessToken が拒否され、
+  // CreatePaymentInstrument が「Failed to obtain workload access token」で落ちた（2026-09-02）
+  const workloadPattern = `${MANAGER_NAME.toLowerCase()}-*`;
   const basePermissions = {
     Version: '2012-10-17',
     Statement: [
@@ -112,7 +104,7 @@ async function ensureServiceRole(account: string): Promise<string> {
         Action: ['bedrock-agentcore:GetWorkloadAccessToken'],
         Resource: [
           `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default`,
-          `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default/workload-identity/${MANAGER_NAME}-*`,
+          `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default/workload-identity/${workloadPattern}`,
         ],
       },
       {
@@ -122,7 +114,7 @@ async function ensureServiceRole(account: string): Promise<string> {
         Resource: [
           `arn:aws:bedrock-agentcore:${REGION}:${account}:token-vault/default`,
           `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default`,
-          `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default/workload-identity/${MANAGER_NAME}-*`,
+          `arn:aws:bedrock-agentcore:${REGION}:${account}:workload-identity-directory/default/workload-identity/${workloadPattern}`,
         ],
       },
       {
@@ -150,6 +142,35 @@ async function ensureServiceRole(account: string): Promise<string> {
       },
     ],
   };
+  try {
+    const existing = await iam.send(new GetRoleCommand({ RoleName: ROLE_NAME }));
+    // 冪等実行時も信頼ポリシー・許可ポリシーを最新の定義に同期させる
+    await iam.send(
+      new UpdateAssumeRolePolicyCommand({
+        RoleName: ROLE_NAME,
+        PolicyDocument: JSON.stringify(trustPolicy),
+      }),
+    );
+    await iam.send(
+      new PutRolePolicyCommand({
+        RoleName: ROLE_NAME,
+        PolicyName: 'agentcore-payments-base',
+        PolicyDocument: JSON.stringify(basePermissions),
+      }),
+    );
+    console.log(`サービスロールは既存: ${existing.Role?.Arn}（ポリシー同期済み）`);
+    return existing.Role!.Arn!;
+  } catch {
+    // 無ければ作る
+  }
+  const created = await iam.send(
+    new CreateRoleCommand({
+      RoleName: ROLE_NAME,
+      AssumeRolePolicyDocument: JSON.stringify(trustPolicy),
+      // IAM の Description は Latin-1 のみ許容のため英語（日本語だと ValidationError）
+      Description: 'Service role assumed by AgentCore Payments (agentic-payments-on-aws-sample)',
+    }),
+  );
   await iam.send(
     new PutRolePolicyCommand({
       RoleName: ROLE_NAME,
@@ -194,41 +215,76 @@ async function ensurePaymentManager(roleArn: string): Promise<{ id: string; arn:
   throw new Error('PaymentManager が READY にならない');
 }
 
+// CDP の資格情報（MANUAL 経路）を AgentCore Identity に保存する。
+// QUICK_CREATE はコンソールの白画面問題で三度失敗したため MANUAL へ切替（2026-09-02、決定27 変更）
+async function ensureCredentialProvider(): Promise<string> {
+  const PROVIDER_NAME = 'coinbaseManual';
+  const list = await control.send(new ListPaymentCredentialProvidersCommand({}));
+  const found = list.credentialProviders?.find((p) => p.name === PROVIDER_NAME);
+  if (found?.credentialProviderArn) {
+    console.log(`PaymentCredentialProvider は既存: ${found.credentialProviderArn}`);
+    return found.credentialProviderArn;
+  }
+  const apiKeyId = process.env.CDP_API_KEY_ID;
+  const apiKeySecret = process.env.CDP_API_KEY_SECRET;
+  const walletSecret = process.env.CDP_WALLET_SECRET;
+  if (!apiKeyId || !apiKeySecret || !walletSecret) {
+    throw new Error(
+      'CDP_API_KEY_ID / CDP_API_KEY_SECRET / CDP_WALLET_SECRET が未設定です。' +
+        'CDP ポータルで発行し .env に保存してください（.env.example 参照）',
+    );
+  }
+  const created = await control.send(
+    new CreatePaymentCredentialProviderCommand({
+      name: PROVIDER_NAME,
+      credentialProviderVendor: 'CoinbaseCDP',
+      providerConfigurationInput: {
+        coinbaseCdpConfiguration: { apiKeyId, apiKeySecret, walletSecret },
+      },
+    }),
+  );
+  console.log(`PaymentCredentialProvider を作成: ${created.credentialProviderArn}`);
+  return created.credentialProviderArn!;
+}
+
 async function ensureConnector(managerId: string): Promise<{ id: string; ready: boolean }> {
   const list = await control.send(new ListPaymentConnectorsCommand({ paymentManagerId: managerId }));
-  const found = list.paymentConnectors?.find((c) => c.name === CONNECTOR_NAME);
+  const found = list.paymentConnectors?.find(
+    (c) => c.name === CONNECTOR_NAME && c.status !== 'DELETING',
+  );
   let id: string;
-  let authorizationUrl: string | undefined;
   if (found?.paymentConnectorId) {
     id = found.paymentConnectorId;
     console.log(`PaymentConnector は既存: ${id}`);
   } else {
+    const credentialProviderArn = await ensureCredentialProvider();
     const created = await control.send(
       new CreatePaymentConnectorCommand({
         paymentManagerId: managerId,
         name: CONNECTOR_NAME,
         type: 'CoinbaseCDP',
-        credentialProviderConfigurations: [],
-        provisionMode: 'QUICK_CREATE',
+        credentialProviderConfigurations: [{ coinbaseCDP: { credentialProviderArn } }],
       }),
     );
     id = created.paymentConnectorId!;
-    authorizationUrl = created.authorizationUrl;
     console.log(`PaymentConnector を作成: ${id}（status: ${created.status}）`);
   }
-  const got = await control.send(
-    new GetPaymentConnectorCommand({ paymentManagerId: managerId, paymentConnectorId: id }),
-  );
-  if (got.status === 'READY') return { id, ready: true };
-  authorizationUrl = got.authorizationUrl ?? authorizationUrl;
-  console.log('');
-  console.log('★ Coinbase の OAuth 同意が必要です。次の URL をブラウザで開いて認可してください:');
-  console.log(`  ${authorizationUrl}`);
-  console.log('認可が済んだらこのスクリプトをもう一度実行してください（コネクタが READY になってから先へ進みます）。');
+  // READY まで待つ
+  for (let i = 0; i < 24; i++) {
+    const got = await control.send(
+      new GetPaymentConnectorCommand({ paymentManagerId: managerId, paymentConnectorId: id }),
+    );
+    if (got.status === 'READY') return { id, ready: true };
+    if (got.status?.endsWith('FAILED') || got.status === 'AWS_MARKETPLACE_SUBSCRIPTION_REQUIRED') {
+      throw new Error(`PaymentConnector が ${got.status} になりました`);
+    }
+    await sleep(5_000);
+  }
+  console.log('PaymentConnector がまだ READY になりません。しばらくして再実行してください');
   return { id, ready: false };
 }
 
-async function ensureInstrument(managerArn: string, connectorId: string): Promise<void> {
+async function ensureInstrument(managerArn: string, connectorId: string): Promise<string> {
   const list = await data.send(
     new ListPaymentInstrumentsCommand({ paymentManagerArn: managerArn, userId: USER_ID }),
   );
@@ -256,25 +312,55 @@ async function ensureInstrument(managerArn: string, connectorId: string): Promis
         clientToken: randomUUID(),
       }),
     );
-    instrumentId = created.paymentInstrumentId!;
+    // 応答は { paymentInstrument: {...} } に包まれている
+    instrumentId = created.paymentInstrument!.paymentInstrumentId!;
     console.log(`PaymentInstrument を作成: ${instrumentId}`);
   }
-  const got = await data.send(
-    new GetPaymentInstrumentCommand({ paymentManagerArn: managerArn, paymentInstrumentId: instrumentId }),
-  );
+  const got = (
+    await data.send(
+      new GetPaymentInstrumentCommand({
+        userId: USER_ID,
+        paymentManagerArn: managerArn,
+        paymentInstrumentId: instrumentId,
+      }),
+    )
+  ).paymentInstrument!;
   const wallet =
     got.paymentInstrumentDetails && 'embeddedCryptoWallet' in got.paymentInstrumentDetails
       ? got.paymentInstrumentDetails.embeddedCryptoWallet
       : undefined;
   console.log('');
+  console.log(`PaymentInstrument ID: ${instrumentId}`);
   console.log(`ウォレットアドレス: ${wallet?.walletAddress ?? '(未発行)'}`);
   console.log(`ステータス: ${got.status}`);
   if (got.status !== 'ACTIVE' && wallet?.redirectUrl) {
     console.log('');
     console.log('★ ウォレットの委任（署名権限の付与）が必要です。次の URL をブラウザで開いて許可してください:');
     console.log(`  ${wallet.redirectUrl}`);
-    console.log('（入金は Circle Faucet か旧ウォレットからの送金で行う。scripts/fund-wallet.ts 参照）');
+    console.log('（入金は scripts/faucet.ts＝CDP faucet で行える）');
   }
+  return instrumentId;
+}
+
+// 検証用の PaymentSession を切る（時限・支出上限つき。期限切れのたびに再実行して作り直す）
+async function createSession(managerArn: string): Promise<void> {
+  const created = await data.send(
+    new CreatePaymentSessionCommand({
+      userId: USER_ID,
+      paymentManagerArn: managerArn,
+      expiryTimeInMinutes: 60,
+      // 上限 1 USD ≒ 10 回分（1回 0.1 テスト USDC。決定18）
+      limits: { maxSpendAmount: { value: '1.00', currency: 'USD' } },
+      clientToken: randomUUID(),
+    }),
+  );
+  const session = created.paymentSession!;
+  console.log('');
+  console.log(`PaymentSession を作成: ${session.paymentSessionId}（60分・上限 1.00 USD）`);
+  console.log('');
+  console.log('縦串検証はこの環境変数で:');
+  console.log(`export PAYMENT_MANAGER_ARN=${managerArn}`);
+  console.log(`export PAYMENT_SESSION_ID=${session.paymentSessionId}`);
 }
 
 async function main() {
@@ -287,7 +373,9 @@ async function main() {
   console.log(`PaymentManager ARN: ${manager.arn}`);
   const connector = await ensureConnector(manager.id);
   if (!connector.ready) return;
-  await ensureInstrument(manager.arn, connector.id);
+  const instrumentId = await ensureInstrument(manager.arn, connector.id);
+  await createSession(manager.arn);
+  console.log(`export PAYMENT_INSTRUMENT_ID=${instrumentId}`);
 }
 
 main().catch((e) => {

@@ -48,10 +48,34 @@ const done = await result.complete();
 console.log('');
 console.log(`エージェントの応答: ${done.text}`);
 
-// ツール結果から resultId を拾い、KVStore に HTML が本当に置かれたか確かめる
+// ツール結果から resultId を拾い、KVStore に HTML が本当に置かれたか確かめる。
+// content は実装によって文字列（JSON）にもオブジェクトにもなり得るため防御的に読む
 const messages = await agent.getConversation(conversationId);
-const toolResult = messages.find((m: { role: string }) => m.role === 'tool-result');
-const body = toolResult ? JSON.parse((toolResult as { content: string }).content ?? '{}') : {};
+const toolResult = messages.find((m: { role: string }) => m.role === 'tool-result') as
+  | { content?: unknown }
+  | undefined;
+let body: { resultId?: string; transaction?: string } = {};
+let raw = toolResult?.content;
+if (typeof raw === 'string' && raw.length > 0) {
+  try {
+    raw = JSON.parse(raw);
+  } catch {
+    console.warn(`ツール結果を JSON として読めませんでした: ${raw.slice(0, 200)}`);
+  }
+}
+if (raw && typeof raw === 'object') {
+  // Strands はツール結果を { json: {...} } に包むことがある（実測）ため一段ほどく
+  const unwrapped = 'json' in raw ? (raw as { json: unknown }).json : raw;
+  if (unwrapped && typeof unwrapped === 'object') body = unwrapped as typeof body;
+}
+// 会話履歴から拾えない場合の保険: 最終応答テキストに埋まった JSON からも試みる
+if (!body.resultId) {
+  const match = done.text?.match(/"resultId"\s*:\s*"([0-9a-f-]{36})"/);
+  if (match) {
+    body.resultId = match[1];
+    body.transaction = done.text?.match(/"transaction"\s*:\s*"(0x[0-9a-fA-F]+)"/)?.[1];
+  }
+}
 if (body.resultId) {
   const stored = await artifacts.get(body.resultId);
   console.log('');
