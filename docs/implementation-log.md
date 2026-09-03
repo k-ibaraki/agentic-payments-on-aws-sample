@@ -2,6 +2,55 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-02〜03: フェーズ③ 縦串検証成功 — Agent が AgentCore Payments で実決済
+
+### 結果
+
+**Agent が AgentCore Payments のウォレットで 0.1 テスト USDC を支払い、billing-mcp の
+有料ツールを実行して HTML を受領・保存する縦串が通った**（決定27 の検証完了）。
+
+- 決済: tx `0xa0e35a61…29ca5`（Base Sepolia、成功）。買い手 1.0 → 0.9 / 売り手 0.22 → 0.32 USDC
+- 成果物: HTML 3,149 バイトが structuredContent のまま欠損なく届き、KVStore に保存
+  （U6 回避＝決定25 の実地確認）。会話には resultId のみが返る（決定10 の形）
+- 経路: Agent（ローカル、LLM は canned）→ ProcessPayment(CRYPTO_X402) で支払い証明
+  → `_meta["x402/payment"]` 付き再呼び出し → 売り手が x402.org facilitator で清算（upfront）
+  → Bedrock 生成 → 成果物返却。支払い・清算・生成はすべて本物
+
+### セットアップで実測した事実（ドキュメントに無い・薄いもの）
+
+- Coinbase コネクタは AWS Marketplace サブスクリプション加入後も、QUICK_CREATE（OAuth）が
+  AWS コンソールの支払い画面の白画面（描画不能）で3回失敗。**MANUAL（CDP キー持参）へ切替**して解決。
+  CDP の API キー発行時、IP allowlist は空にする（キーを使うのは AWS 側サービスのため）
+- サービスロールの許可ポリシーの workload-identity パターンも **PaymentManager 名の小文字化**の
+  影響を受ける（camelCase のままだと GetWorkloadAccessToken が拒否され
+  「Failed to obtain workload access token」で CreatePaymentInstrument が落ちる）
+- ウォレットは作成直後から status ACTIVE だが、**WalletHub での Delegated signing 許可
+  （エンドユーザー操作・有効期限つき）が済むまで ProcessPayment は
+  「Delegated signing grant is not active」で拒否される**。ステータスでは判別できない
+- WalletHub のログインには CDP プロジェクトの Domains 許可リストへの
+  `https://hub.cdp.coinbase.com` 追加が必要（無いと OAuth が CORS エラー）。
+  ④のブラウザ UI 用に `http://localhost:3000` も追加済み
+- 旧使い捨て買い手はガス用 ETH ゼロで ERC-20 送金不可（フェーズ②は EIP-3009 の
+  gasless 署名のみだったため）。資金供給は **CDP faucet**（`agent-app/scripts/faucet.ts`）へ切替
+- ProcessPayment の応答 status は `PROOF_GENERATED` のみ。清算（settle）は売り手側
+  facilitator の仕事で、AgentCore は署名だけを担う分担が API 面からも確認できた
+- `aws login` の資格情報は12時間で切れる。切れた際の再認証はユーザー操作
+
+### 不手際と対処（詳細はリポジトリ外に記録）
+
+ウォレットの紐づけメールアドレスを、ユーザーの明示的な事前許可なく設定して作成する
+不手際があった。当該ウォレットは削除し（リポジトリ・git 履歴への個人情報の混入が
+無いことも全域検査で確認）、ユーザー指定のアドレスで再作成した。再発防止策は
+リポジトリ外のグローバル設定に記録した（個人情報に類する値は、明示的な事前承認なく
+外部サービス・コマンド・リポジトリ内ファイルに一切使わない）。
+
+### 残していること（フェーズ④へ）
+
+- 検証用 PaymentSession は60分で失効する。④の結合検証時は `payments-setup.ts` を再実行して作り直す
+- WalletHub の Delegated signing 許可は7日で失効する（切れたら redirectUrl から再許可）
+- ローカル LLM は canned プロバイダのまま。④はデプロイ（Bedrock）で実施
+- スキャフォールド由来の todos デモの撤去と UI 置き換え、Realtime 配線、売り手の再デプロイ
+
 ## 2026-08-31: フェーズ③着工 — 前提検証（grill-me）と方針決定
 
 ### 着工前の詰め（grill-me）で崩れた前提
