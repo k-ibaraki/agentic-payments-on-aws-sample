@@ -126,6 +126,23 @@
   意図せず最新に上がる。lock を直すときは `--package-lock-only` で不足分の追加に留め、
   AWS Blocks の版を上げるのは意図した作業として別に行う
 
+### PR #5 のコードレビュー（同日）
+
+pr-code-review スキルで観点別レビューを行い、ユーザー判断で次の2件を修正した（GitHub への投稿はせず、
+この場で修正）:
+
+1. `amplify:sandbox:delete` に `AMPLIFY_SANDBOX=true` が無く、削除が合成の段階で落ちる。
+   `ampx sandbox delete` は削除前に `amplify/backend.ts` を読み直す（`@aws-amplify/backend-deployer` の
+   `destroy()` → `getCdkCloudAssembly()` → `tsImport`）ため、セルフレビューで足した
+   `requireCorsAllowedOrigins` のガードに引っかかっていた。削除の成功確認はガード追加前だったので
+   見逃した。スクリプトに `AMPLIFY_SANDBOX=true` を足し、sandbox が無い状態で実行して合成が通ることを確認
+2. `buyer-agent.ts` のコメントの S3 バケット名が CDK 直経路の形だけだったので、Amplify 経路の
+   `-b-` 付きの形も併記
+
+見送り: 「`AMPLIFY_SANDBOX=true` がブランチビルドの環境変数に紛れ込むと sandbox の姿勢で deploy される」
+（人為ミス前提）、「PR に性質の違う変更が同居」（id 短縮も vitest の修正も Amplify 対応の帰結で同質）、
+「ブランチ名 7 文字の上限」（決定33 で意図して選んだ取引。レビューで蒸し返すべきではなかった）
+
 ## 2026-09-03: AWS 構成図の作成（docs/architecture.drawio.png）
 
 ### やったこと

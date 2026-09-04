@@ -24,7 +24,7 @@
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "amplify:sandbox": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox",
-    "amplify:sandbox:delete": "cross-env NODE_OPTIONS=\"--conditions=cdk\" npx ampx sandbox delete --yes",
+    "amplify:sandbox:delete": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox delete --yes",
     "blocks:client": "cross-env NODE_OPTIONS=\"--conditions=aws-runtime\" tsx scripts/generate-blocks-client.ts",
     "build:amplify": "npm run blocks:client && npm run build && tsx scripts/amplify-blocks-config.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",

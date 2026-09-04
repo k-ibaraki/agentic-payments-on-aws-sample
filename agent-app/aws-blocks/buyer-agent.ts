@@ -107,8 +107,9 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  // id は物理名の一部（内蔵 S3 バケットは <スタック名>-app-buyer-sn）。Amplify Gen2 のスタック名の
-  // 長さに合わせて短くしている（決定33）。一度 deploy したら変えないこと
+  // id は物理名の一部。内蔵 S3 バケットは CDK 直経路では <スタック名>-app-buyer-sn、Amplify 経路では
+  // <Amplify のルートスタック名>-b-app-buyer-sn になる。Amplify のスタック名の長さに合わせて
+  // 短くしている（決定33）。一度 deploy したら変えないこと
   const agent = new Agent(scope, 'buyer', {
     // ローカルでも Bedrock を使う（決定28。BUYER_LOCAL_MODEL=canned で偽 LLM に切替）。
     // 支払い〜有料ツール実行の縦串はどちらでも本物が動く
