@@ -7,7 +7,7 @@
 //      と PaymentConnector（Coinbase / MANUAL。決定27 変更）
 //   4. PaymentInstrument（EVM の埋め込みウォレット）。署名権限の委任は出力される
 //      WalletHub の URL で人間が行う。入金は scripts/faucet.ts（CDP faucet）
-//   5. PaymentSession（60分・上限 1.00 USD の検証用セッション。期限切れのたびに再実行して作り直す）
+//   PaymentSession は作らない。購入時に agent-app が切って KVStore に保存する（決定35）
 //
 // 実行: npx tsx scripts/payments-setup.ts
 // 環境変数（.env でも可。.env.example 参照）:
@@ -29,7 +29,6 @@ import {
 import {
   BedrockAgentCoreClient,
   CreatePaymentInstrumentCommand,
-  CreatePaymentSessionCommand,
   GetPaymentInstrumentCommand,
   ListPaymentInstrumentsCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
@@ -362,27 +361,6 @@ async function ensureInstrument(managerArn: string, connectorId: string): Promis
   return instrumentId;
 }
 
-// 検証用の PaymentSession を切る（時限・支出上限つき。期限切れのたびに再実行して作り直す）
-async function createSession(managerArn: string): Promise<void> {
-  const created = await data.send(
-    new CreatePaymentSessionCommand({
-      userId: USER_ID,
-      paymentManagerArn: managerArn,
-      expiryTimeInMinutes: 60,
-      // 上限 1 USD ≒ 10 回分（1回 0.1 テスト USDC。決定18）
-      limits: { maxSpendAmount: { value: '1.00', currency: 'USD' } },
-      clientToken: randomUUID(),
-    }),
-  );
-  const session = created.paymentSession!;
-  console.log('');
-  console.log(`PaymentSession を作成: ${session.paymentSessionId}（60分・上限 1.00 USD）`);
-  console.log('');
-  console.log('縦串検証はこの環境変数で:');
-  console.log(`export PAYMENT_MANAGER_ARN=${managerArn}`);
-  console.log(`export PAYMENT_SESSION_ID=${session.paymentSessionId}`);
-}
-
 async function main() {
   const who = await sts.send(new GetCallerIdentityCommand({}));
   const account = who.Account!;
@@ -398,7 +376,10 @@ async function main() {
     process.exit(1);
   }
   const instrumentId = await ensureInstrument(manager.arn, connector.id);
-  await createSession(manager.arn);
+  // PaymentSession はアプリが購入時に切る（決定35）。ここでは手渡ししない
+  console.log('');
+  console.log('agent-app（ローカルはシェル、クラウドは Amplify のブランチ環境変数）に設定する値:');
+  console.log(`export PAYMENT_MANAGER_ARN=${manager.arn}`);
   console.log(`export PAYMENT_INSTRUMENT_ID=${instrumentId}`);
 }
 

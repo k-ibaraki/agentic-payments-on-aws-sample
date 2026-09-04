@@ -6,10 +6,15 @@
  * - Amplify の Cognito は使わないので、その環境変数の受け渡しは無い（認証は AuthCognito Block）
  * - フロント（Amplify Hosting）と API（API Gateway）が別オリジンになるため、
  *   CORS とクロスドメイン Cookie の設定を Lambda に渡す
+ * - 実決済に要る実行時設定（PAYMENT_* など）をビルド環境変数から Lambda に写し、
+ *   AgentCore Payments の IAM を共有 Lambda のロールに付ける（決定34）
  */
 import type { BackendBase } from '@aws-amplify/backend';
+import { Stack } from 'aws-cdk-lib';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { createBlocksBackend } from '../aws-blocks/amplify.cdk.js';
 import { requireCorsAllowedOrigins } from './cors-origins.js';
+import { runtimeEnvironment } from './runtime-env.js';
 
 // 使うのは createStack と addOutput だけなので、リソース型に依存しない BackendBase で受ける
 export async function initBlocks(backend: BackendBase) {
@@ -28,6 +33,35 @@ export async function initBlocks(backend: BackendBase) {
   if (!sandboxMode) {
     blocks.handler.addEnvironment('CORS_ALLOWED_ORIGINS', requireCorsAllowedOrigins(process.env));
   }
+
+  // 実決済の実行時設定（決定34）。Amplify コンソールの環境変数はビルドにしか届かないので、
+  // 合成時の process.env から許可リストで拾って共有 Lambda に写す。ブランチ deploy では必須値の欠落と
+  // BUYER_TOOL_TIMEOUT_MS の超過（決定31 の注記）を合成で落とす
+  for (const [key, value] of Object.entries(runtimeEnvironment(process.env, { sandboxMode }))) {
+    blocks.handler.addEnvironment(key, value);
+  }
+
+  // AgentCore Payments（ap-southeast-1。決定12）。Agent ブロックが付けるのは Bedrock のモデル呼び出しだけ
+  // なので、セッション作成と支払い（決定35）の権限をここで足す。リソースは AWS のリファレンスポリシーに
+  // 合わせて payment-manager 配下に絞る（リージョンは決定12 のクロスリージョン呼び出しのため * のまま）。
+  //
+  // 注意（決定37）: AWS の AgentCore Payments IAM ガイドは CreatePaymentSession と ProcessPayment を
+  // 同一ロールに置かないよう求めている（新しいセッションを切って上限を迂回できるため）。本アプリは
+  // 共有 Lambda 1 つがセッション作成と支払いの両方を実行するため、ロールを分けても同じ identity が
+  // 双方を握ることに変わりはなく、ロール分離では要件を満たせない。上限の担保はアプリ側で行う
+  // （x402-payer.ts が上限超過での作り直しを拒む）。構造での分離は U8 として残す
+  blocks.handler.addToRolePolicy(
+    new PolicyStatement({
+      actions: [
+        'bedrock-agentcore:CreatePaymentSession',
+        'bedrock-agentcore:GetPaymentSession',
+        'bedrock-agentcore:ProcessPayment',
+      ],
+      resources: [
+        `arn:aws:bedrock-agentcore:*:${Stack.of(blocksStack).account}:payment-manager/*`,
+      ],
+    }),
+  );
 
   // amplify_outputs.json に Blocks の API URL を出す。フロントのビルドはこれを
   // /.blocks-sandbox/config.json に写す（scripts/amplify-blocks-config.ts）

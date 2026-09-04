@@ -4,7 +4,7 @@
 // 前提:
 //   - billing-mcp をローカル起動しておく（billing-mcp/server で pnpm dev。ポート 8000）
 //   - scripts/payments-setup.ts が完了し、ウォレットに残高があること
-//   - 環境変数: PAYMENT_MANAGER_ARN / PAYMENT_SESSION_ID / PAYMENT_INSTRUMENT_ID
+//   - 環境変数: PAYMENT_MANAGER_ARN / PAYMENT_INSTRUMENT_ID（PaymentSession はアプリが切る。決定35）
 //     （BILLING_MCP_URL・PAYMENTS_USER_ID は任意）
 //
 // 実行: npx tsx scripts/buy-via-agent.ts "作りたいページの指示"

@@ -99,6 +99,29 @@ describe('callPaidTool', () => {
     expect(callTool).toHaveBeenCalledTimes(2);
   });
 
+  // 決定31 ③: 署名を売り手に渡した後の失敗は、資金の移動が確認できなくても「支払い済み」として
+  // 扱う。売り手は署名の有効期限内なら後から決済を確定できるため、記録を残さないと追えない
+  it('再度の支払い要求も PaidToolError にし、売り手の理由（error）を文面に含める', async () => {
+    const rejected = paymentRequiredResult();
+    (rejected.structuredContent as Record<string, unknown>).error = 'settle failed: invalid_signature';
+    const callTool = vi.fn().mockResolvedValueOnce(paymentRequiredResult()).mockResolvedValueOnce(rejected);
+    const payer = {
+      pay: vi.fn().mockResolvedValue({
+        ...structuredClone(PAYMENT_PAYLOAD),
+        payload: { signature: '0xsig', authorization: { nonce: '0xnonce2' } },
+      }),
+    };
+
+    const error = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, payer).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(PaidToolError);
+    const paid = error as PaidToolError;
+    expect(paid.paymentMade).toBe(true);
+    expect(paid.authorizationNonce).toBe('0xnonce2');
+    expect(paid.message).toContain('settle failed: invalid_signature');
+  });
+
   it('支払い要求でない isError はそのまま返す（支払いはしない）', async () => {
     const failure = { isError: true, content: [{ type: 'text', text: 'boom' }] };
     const callTool = vi.fn().mockResolvedValue(failure);

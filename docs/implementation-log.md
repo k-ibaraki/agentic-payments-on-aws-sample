@@ -2,6 +2,193 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-05: PR #6 のコードレビュー指摘の修正（決定37・U8）
+
+PR #6 に `pr-code-review` スキルで観点別レビューを行い、ユーザー判断で 11 件を修正した（GitHub には投稿せず、この場で修正）。
+
+### 中核: 支出上限が上限として機能していなかった
+
+レビューで AWS の [AgentCore Payments IAM ガイド](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments-iam-roles.html) に次の記述があることが分かった。
+
+> Do not include PaymentSession *write* permissions (for example, `CreatePaymentSession`) and `ProcessPayment` in the same role, or the caller can bypass payment limits by creating new sessions with elevated budgets.
+
+決定35 の実装はこの迂回を IAM で許すだけでなく、**アプリが自動で実行**していた。`isSessionRejection` が
+`ConflictException: Session limit exceeded` を「セッション起因」と判定し（`payment-session.test.ts` が
+その挙動をテストで固定していた）、`x402-payer.ts` がそれを無条件に `renew()` へ流すため、**上限に当たった
+支払いがその場で新しい枠を切って成立していた**。決定35 の理由欄が開示していたのは「枠は時間ごとに戻る」
+ことまでで、「上限が一度も支払いを止めない」ことまでは意図していなかった。決定37 として、上限超過は
+作り直さず失敗させる側に倒した。
+
+ロール分離は行っていない。共有 Lambda 1 つがセッション作成と支払いの両方を実行するため、ロールを分けても
+同じ identity が双方を握ることに変わりがなく、分離にならないため。IAM のリソースは `payment-manager/*` に
+絞り、構造での分離は U8 として残した。
+
+### 挙動が変わるもの
+
+- **決済後の再 402 を `PaidToolError` にした**（`paid-tool-caller.ts`）。従来は素の `Error` で、
+  `buy-html.ts` の `instanceof PaidToolError` を素通りしてツールハンドラまで伝播し、レシート記録
+  （`artifacts.put`）に到達していなかった。9/4 の sandbox 実測（2 回目の購入）でまさにこの経路を踏んでおり、
+  ログに「決定31 の防護どおり再試行なし」と書いたが、実際に効いていたのは④（システムプロンプト。補助）だけで
+  ③（`interrupt` による承認要求。保証と明記した硬い防護）は発火していなかった。オンチェーンの送金は
+  起きていないが署名は売り手に渡っており、売り手は有効期限内なら後から決済を確定できる。「資金が動いていないから
+  無害」とは扱わず、レシート（nonce）を残して③を働かせる。**この会話で次に購入するときは人の承認を要求するようになる**
+- **`renew` に拒否されたセッション ID を渡すようにした**（インターフェースの変更）。別の購入が既に作り直して
+  いればその有効なセッションに乗る。記録の書き込みは条件付き（`ifNotExists` / `ifValueEquals`）にし、
+  読んでから書くまでに別の購入が書いていたら相手を残す
+- **`PAYMENT_SESSION_MAX_USD` / `PAYMENT_SESSION_MINUTES` の書式を合成時に検証する**ようにした。
+  従来は実行時に黙って既定へ戻していたため、`10.000` や `1,000.00` のような書式ミスで「上限を上げたつもり」に
+  気づけなかった。ローカル実行で既定に戻す場合も `console.warn` を出す
+
+### その他
+
+- `buy-via-cloud.ts`: cookie jar を `BLOCKS_API_URL` のオリジン限定にした（差し替えた `fetch` が
+  プロセスの全通信に及ぶため、他所へセッションを渡さない／他所から同名の Cookie を注入されない）。
+  `BUYER_TOOL_TIMEOUT_MS` を実決済の前に検証（`NaN` だと一度もポーリングせず失敗と誤報告していた）。
+  サインイン失敗時の `JSON.stringify(state)` をやめた（Cognito のチャレンジ継続用 session や
+  TOTP の共有シークレットが hidden フィールドの `defaultValue` に載るため）
+- コメントの是正 3 件: `paid-tool-caller.ts`（「資金は動いていない」が実測の半面だけだった。残枠は署名時点で
+  1.00 → 0.8 USD と減っている）、`index.ts`（所有検証の根拠を「自己サインアップを許しているため」に
+  置いていたが、決定36 でその前提が消えた）、`runtime-env.ts`（`payments/` は `process.env` を読まない。
+  読むのは `buyer-agent.ts` で、`payments/` へは引数で渡す）
+
+### 見送ったもの
+
+- リンクされた Issue が無い件: このリポジトリは Issue を使わず DESIGN.md と本ログで経緯を残す運用のため対象外
+- `isSessionRejection` の docstring が「sandbox の実測で確定させる」のままだった件: 決定37 の書き換えで
+  実測済みの分岐（`ValidationException` + `Payment session not found`）と推定のままの分岐を区別する形に直った
+- 構成図の差し替えが同じ PR に混入している件: 独立コミットでコード変更を含まず、記録を残す規約上むしろ自然と判断
+
+### セルフレビューで見つけた退行（同日中に修正）
+
+記録の書き込みを条件付きにした際、記録を読めなかった場合に `ifNotExists` を付けていたが、これは
+**本番でだけ**セッションの使い回しを壊す。KVStore は `get` で期限切れを `null` にするが実体は消さず
+（DynamoDB の TTL 掃除は最大 48 時間）、`ifNotExists` は `attribute_not_exists(pk)` で実体の有無を見るため、
+期限切れの実体が残る間はどう書いても条件不一致になる。結果、購入のたびに新しい PaymentSession を切り続け、
+決定35 の使い回しが死ぬうえ、枠が毎回戻るので決定37 で締めた上限も弱まる。
+
+mock 実装は `get` で期限切れを即座に削除するため、`npm run test` も `npm run dev` も e2e もすべて通る。
+ライブラリのオプションは docstring ではなく実装（`node_modules/@aws-blocks/bb-kv-store/dist/index.aws.js`）で
+意味論を確かめるべきだった。読めた記録があるときだけ `ifValueEquals` を付ける形に直し、
+本番の意味論を模した回帰テストを足した。
+
+### 確認したこと
+
+- `npm run test`（12 ファイル 85 件）/ `npm run typecheck` / `npm run test:e2e`（3 件）が通ること
+- 未実施: sandbox への再 deploy による IAM の実地確認（資源を作るため、別途確認を取ってから行う）
+
+## 2026-09-04（続き）: フェーズ⑤ — 実行時設定と IAM の配線、PaymentSession のアプリ内作成、selfSignUp の閉鎖（決定34〜36）
+
+### 前提の確認（grill-me）
+
+- 次セッションの作業指示（A: 本番 deploy の実地確認、B: `PAYMENT_*` の配線と IAM、C: その後の 4 項目）を
+  grill-me で問い直した。下調べで依頼の前提と食い違う事実が 3 つ出た:
+  1. `payments-setup.ts` が切る PaymentSession は `expiryTimeInMinutes: 60`。B の方式でどう渡しても
+     deploy から 1 時間で決済が止まるため、C-1（アプリ側でのセッション作成）は「その後」ではなく B の前提
+  2. 売り手（`BillingMcpStack-dev`）は ap-northeast-1 に無い（決定32 の「削除済み」のまま）。クラウドの
+     Lambda から `localhost` の売り手には届かないので、実決済の検証には売り手の再 deploy が要る
+  3. Amplify のアプリ（`dei96o54khd9a`、`main`）は今回のセッション中にユーザーが作成し、job 1 が
+     BUILD / DEPLOY / VERIFY とも成功した。サービスロールには `AmplifyBackendDeployFullAccess` が付いている
+- 裏取りで分かった好材料: Agent のジョブは `bb-async-job` が共有 Lambda に SQS イベントで流す形
+  （`index.cdk.js` の `this.handler.addEventSource`）で、共有 Lambda のタイムアウトは `@aws-blocks/core` で
+  900 秒固定。`blocks.handler` の `addEnvironment` / `addToRolePolicy` がそのまま決済処理に届き、
+  `BUYER_TOOL_TIMEOUT_MS` 既定 600 秒（決定31 の注記）を包含する
+- ユーザー決定: C-1 を B に繰り上げる／売り手は私が再 deploy し検証後も置く／検証は sandbox → main の順／
+  設定は①`addEnvironment` で透過（AppSetting 化しない）／ブラウザ検証は Playwright + OTP 転記／PR は
+  A（記録と構成図）と B + C-1 の 2 本／main へ `PAYMENT_*` を入れる前に C-2（selfSignUp を閉じる）を入れる／
+  セッション既定は 60 分・1.00 USD
+- 途中でホスト済みアプリへ私が接続しようとして（Basic 認証で 401）ユーザーから「開発でホスト済みアプリに
+  アクセスする必要は無い。deploy が失敗していなければ進めるべき」と指摘を受けた。A の実地確認は行わず、
+  deploy 成功の事実のみを記録して開発に進めた
+
+### やったこと
+
+- DESIGN.md に決定34（実行時設定と IAM の配線）・35（PaymentSession のアプリ内作成）・36（selfSignUp を閉じる）を追記
+- TDD（赤 → 緑）で 2 モジュールを追加:
+  - `amplify/runtime-env.ts`: 合成時の `process.env` から許可リスト（`PAYMENT_MANAGER_ARN` /
+    `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` / `PAYMENTS_USER_ID` / `PAYMENT_MAX_AMOUNT` / `PAYMENT_PAY_TO` /
+    `BUYER_TOOL_TIMEOUT_MS` / `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`）を拾う。ブランチ deploy では
+    必須 3 変数の欠落で落とし、`BUYER_TOOL_TIMEOUT_MS` が 900 秒を超えても落とす
+  - `aws-blocks/payments/payment-session.ts`: KVStore に保存した記録が期限（60 秒の余裕を引く）内ならそれを
+    使い、無ければ `CreatePaymentSession` で切って `expiresAt` 付きで保存する `paymentSessionSource`。
+    `isSessionRejection` は `ResourceNotFoundException`、または message に session を含む
+    `ValidationException` / `ConflictException` をセッション起因とみなす（SDK の型からの推定。要実測）
+- `x402-payer.ts`: コンテキストの `paymentSessionId` を `paymentSession`（供給元）に替え、`ProcessPayment` が
+  セッション起因で拒否されたら `renew` して一度だけ再試行する。`clientToken` は再試行でも同じ値
+- `buyer-agent.ts`: KVStore `payment-session`（`ttl: true`）を追加し、ツールハンドラで供給元を組み立てる。
+  `PAYMENT_SESSION_ID` の読み取りを廃止
+- `amplify/blocks.ts`: `runtimeEnvironment` の結果を `addEnvironment` で写し、`bedrock-agentcore:CreatePaymentSession` /
+  `GetPaymentSession` / `ProcessPayment` を `addToRolePolicy`（リソースは `*`。合成結果では Blocks の
+  `OverflowPolicy`（ManagedPolicy）に載る）
+- `aws-blocks/index.ts`: `selfSignUp: process.env.BUYER_SELF_SIGNUP === 'true'`。`package.json` の `dev` /
+  `dev:server` / `test:e2e` に `cross-env BUYER_SELF_SIGNUP=true`
+- `scripts/payments-setup.ts` からセッション作成を外し、出力を `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` に
+- README（agent-app）・CLAUDE.md を更新
+- 確認: `npm run test`（74 件）/ `typecheck` / `npm run test:e2e`（ローカル。`BUYER_SELF_SIGNUP=true` で
+  サインアップを含む 3 件が通る）/ AWS 資格情報なしの合成（sandbox 姿勢で通る。ブランチ姿勢では
+  `PAYMENT_*` 無しで狙いどおり落ち、有りでは Lambda の環境変数と IAM が nested template に出る）
+
+### 判断・つまずき
+
+- IAM のリソースを `*` にしたのは、AgentCore Payments の各アクションが受け付けるリソース形式
+  （payment-manager / session / instrument の ARN）を確認していないため。sandbox の実測後に絞る
+- セッション起因の拒否をどの例外で受けるかは実測していない。判定に漏れても支払いが失敗するだけで
+  二重に払うことはない（`ProcessPayment` は署名前）
+- ローカルの mock 認証は `selfSignUp` を強制しない（`BUYER_SELF_SIGNUP` 無しでも e2e のサインアップが通る）。
+  強制するのは CDK（`selfSignUpEnabled`）と AWS ランタイムなので、決定36 の効き目はクラウドで確かめる
+- `selfSignUp` を「クラウドかどうか」で切り替えられないのは、合成時にはまだ `BLOCKS_STACK_NAME` が無いため。
+  明示の環境変数で開ける形にした
+
+### sandbox での実測（同日）
+
+- 売り手 `BillingMcpStack-dev` を再 deploy（メインのチェックアウトの `parameter.ts` / `server/.env` を写して
+  `pnpm cdk deploy`。78 秒）。Function URL の `initialize` が応答することを確認。検証後も置いてある
+- `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` を付けて `npm run amplify:sandbox -- --once`
+  （188 秒）。共有 Lambda に 3 変数と `CORS_ALLOWED_ORIGINS`（localhost）・`BLOCKS_CROSS_DOMAIN` が入り、ロールの
+  ポリシーに `bedrock-agentcore:CreatePaymentSession` / `GetPaymentSession` / `ProcessPayment`（Resource `*`）が
+  付き、ユーザープールは `AllowAdminCreateUserOnly: true`（決定36 が効いている）
+- クラウドの buyer API を認証込みで通す `scripts/buy-via-cloud.ts` を追加（`tsx -C browser` で Blocks の
+  クライアントを使い、`AuthState` を手で進める。OTP は `BUYER_OTP_FILE`、セッション Cookie は
+  `BUYER_COOKIE_FILE` で持ち回る）。利用者は `admin-create-user` で作成
+- つまずき: Node の `fetch` は `Set-Cookie` を保持しないため、サインインは通っても次の呼び出しが 401 になった。
+  スクリプト内で `globalThis.fetch` を包む最小の cookie jar を入れて解決（OTP の再送が 1 回増えた）
+- 1 回目の購入: Lambda のログに `[payment-session] PaymentSession を作成`（期限 60 分・上限 1.00 USD）が出て、
+  実オンチェーン決済（tx `0xbcc3071b…d414c85`）→ 生成 → KVStore 保存 → `getPurchasedHtml` で 5,296 バイトの HTML
+  まで通った。KVStore `payment-session` の表には `pk=sample-user-1` の記録が `ttl`（epoch 秒）付きで入り、
+  TTL は ENABLED
+
+- 2 回目の購入（使い回しの確認）: Lambda は新しいセッションを作らず（ログに作成行なし）`ProcessPayment` まで
+  進んだが、売り手が支払い証明を受け取った後に再び 402 を返し、ツールは
+  「支払い後の再呼び出しでも支払い要求が返りました」で失敗した。オンチェーン（Base Sepolia の USDC
+  `Transfer` ログ）ではウォレットからの送金は 1 回目の 1 件だけで、残高は 0.9 USDC。upfront（決定21）の
+  決済確定（settle）が facilitator 側で通らず、資金は動いていない。決定31 の防護どおり LLM は再試行せず報告した。
+  ただし AgentCore Payments 側のセッション残枠は 1.00 → 0.8 USD と、決済確定に失敗した分も署名時点で
+  差し引かれていた（`GetPaymentSession` の `availableLimits`）。売り手側の 402 の理由（`PaymentRequired.error`）が
+  買い手の記録に残らなかったので、`paid-tool-caller.ts` の失敗文面に含めるよう直した（テスト付き）
+- 3 回目の購入（作り直しの確認）: `DeletePaymentSession` で保存中のセッションを消してから発注。Lambda のログに
+  `[x402-payer] PaymentSession が拒否されたため作り直します: ValidationException: Payment session not found: …`
+  → `[payment-session] PaymentSession を作成` と出て、実オンチェーン決済（tx `0x5830a9b7…7111cd9`）→ 生成 →
+  896 バイトの HTML まで通った。セッション起因の拒否は **`ValidationException`（message に
+  `Payment session not found`）** で来ることが確定（決定35 の推定どおり `isSessionRejection` が拾った）
+- 検証後に `npm run amplify:sandbox:delete`。売り手 `BillingMcpStack-dev` は置いたまま（main での検証に使う）
+
+### 構成図の差し替え（同日）
+
+- `docs/architecture.drawio.png` の埋め込み XML を取り出して編集し（描き直さない。決定32）、draw.io CLI で
+  `--embed-diagram` 付きで再出力した。変更: Hosting の囲みを Amplify Hosting ＋ Amplify ビルドに、
+  ① をブラウザ → API Gateway の直接呼び出し（別オリジン・CORS・SameSite=None）に、Block id を
+  `app` / `buyer` / `b` に、KVStore `payment-session` の追加、Cognito の「自己サインアップ無効」、
+  現況と処理の流れ（①④）の文面。CloudFront から API Gateway へのプロキシ矢印は削除
+- つまずき: ラベルの `&lt;appId&gt;` が HTML として解釈されて消えた（`（appId）` に変更）。矢印ラベルは
+  経路の中央に置かれるため、縦の区間に沿わせるには offset で幅の半分ほどずらす必要があった
+
+### 残していること（次の手順）
+
+1. ~~売り手 `BillingMcpStack-dev` の再 deploy~~（済）（メインのチェックアウトの `parameter.ts` / `server/.env` を写す。
+   無認証の公開エンドポイントなので実行前に確認）
+2. ~~sandbox で決定35 の作成・使い回し・作り直しを実測~~（済。上記）
+3. main のブランチ環境変数に同じ値を設定して再ビルドし、main で実決済
+4. ~~`docs/architecture.drawio.png` の Amplify 構成への差し替え~~（済）
+
 ## 2026-09-04: フェーズ⑤の土台 — Amplify Gen2 への deploy 経路（決定33）
 
 ### やったこと

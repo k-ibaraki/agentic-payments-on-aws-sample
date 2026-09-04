@@ -13,8 +13,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:server": "cross-env BUYER_SELF_SIGNUP=true tsx watch aws-blocks/scripts/server.ts",
+    "dev": "cross-env BUYER_SELF_SIGNUP=true tsx watch aws-blocks/scripts/server.ts",
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
@@ -27,7 +27,7 @@
     "amplify:sandbox:delete": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox delete --yes",
     "blocks:client": "cross-env NODE_OPTIONS=\"--conditions=aws-runtime\" tsx scripts/generate-blocks-client.ts",
     "build:amplify": "npm run blocks:client && npm run build && tsx scripts/amplify-blocks-config.ts",
-    "test:e2e": "tsx -C browser test/e2e.test.ts",
+    "test:e2e": "cross-env BUYER_SELF_SIGNUP=true tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
     "test": "vitest run aws-blocks src amplify scripts"
   },

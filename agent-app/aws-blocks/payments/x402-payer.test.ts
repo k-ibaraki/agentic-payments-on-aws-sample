@@ -3,6 +3,7 @@
 // _meta["x402/payment"] に積む PaymentPayload を組み立てる責務と、
 // 「提示された条件を無条件に払わない」ための支払いポリシーの検証を固定する
 import { describe, expect, it, vi } from 'vitest';
+import { fixedPaymentSession } from './payment-session.js';
 import { createAgentCorePayer } from './x402-payer.js';
 
 const REQUIREMENT = {
@@ -25,7 +26,7 @@ const CONTEXT = {
   userId: 'sample-user-1',
   paymentManagerArn:
     'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/agenticpaymentssample-xxxx',
-  paymentSessionId: 'session-1',
+  paymentSession: fixedPaymentSession('session-1'),
   paymentInstrumentId: 'instrument-1',
 };
 
@@ -54,7 +55,7 @@ describe('createAgentCorePayer', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const input = send.mock.calls[0][0].input;
     expect(input.paymentManagerArn).toBe(CONTEXT.paymentManagerArn);
-    expect(input.paymentSessionId).toBe(CONTEXT.paymentSessionId);
+    expect(input.paymentSessionId).toBe('session-1');
     expect(input.paymentInstrumentId).toBe(CONTEXT.paymentInstrumentId);
     expect(input.userId).toBe(CONTEXT.userId);
     expect(input.paymentType).toBe('CRYPTO_X402');
@@ -108,6 +109,67 @@ describe('createAgentCorePayer', () => {
   });
 
   // ── 支払いポリシー（売り手の提示を無条件に払わない）──────────────────
+  describe('セッションの作り直し（決定35）', () => {
+    const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+    const sessionSource = () => ({
+      acquire: vi.fn().mockResolvedValue('session-old'),
+      renew: vi.fn().mockResolvedValue('session-new'),
+    });
+
+    it('ProcessPayment がセッション起因で拒否したら、一度だけ作り直して再試行する', async () => {
+      const send = vi
+        .fn()
+        .mockRejectedValueOnce(named('ResourceNotFoundException', 'session not found'))
+        .mockResolvedValueOnce({ paymentOutput: { cryptoX402: { version: '2', payload: SIGNED } } });
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      const payload = await payer.pay(PAYMENT_REQUIRED);
+
+      expect(payload.payload).toEqual(SIGNED);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send.mock.calls[0][0].input.paymentSessionId).toBe('session-old');
+      expect(send.mock.calls[1][0].input.paymentSessionId).toBe('session-new');
+      expect(session.renew).toHaveBeenCalledTimes(1);
+      // 拒否された ID を渡す。別の購入が既に作り直していればそれに乗るため（決定35 追記）
+      expect(session.renew).toHaveBeenCalledWith('session-old');
+    });
+
+    // 決定37: 上限超過で作り直すと、上限に当たった支払いがその場で通り、上限が上限でなくなる
+    it('支出上限の超過では作り直さず、上限に当たったことを伝えて失敗する', async () => {
+      const send = vi.fn().mockRejectedValue(named('ConflictException', 'Session limit exceeded'));
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/支出上限/);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(session.renew).not.toHaveBeenCalled();
+    });
+
+    it('作り直した後も拒否されたら、それ以上は再試行せず失敗にする', async () => {
+      const send = vi
+        .fn()
+        .mockRejectedValueOnce(named('ResourceNotFoundException', 'session not found'))
+        .mockRejectedValueOnce(named('ValidationException', 'Payment session not found: session-new'));
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/Payment session not found/);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(session.renew).toHaveBeenCalledTimes(1);
+    });
+
+    it('セッション以外の失敗（権限など）は作り直さない', async () => {
+      const send = vi.fn().mockRejectedValue(named('AccessDeniedException', 'not authorized'));
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/not authorized/);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(session.renew).not.toHaveBeenCalled();
+    });
+  });
+
   describe('支払いポリシー', () => {
     it('ネットワークが違えば支払わない（メインネットへの誘導を防ぐ）', async () => {
       const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });

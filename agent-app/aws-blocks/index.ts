@@ -25,9 +25,10 @@ const auth = new AuthCognito(scope, 'auth', {
   authFlowType: 'USER_AUTH' as const,
   preferredChallenge: 'EMAIL_OTP' as const,
   mfa: 'off' as const,
-  // 自己サインアップは④（ローカル限定）では許す。実費 API と組み合わせてクラウドへ出す前に
-  // 塞ぐこと（決定28 で⑤へ繰り越し）
-  selfSignUp: true,
+  // 自己サインアップは既定で閉じる（決定36）。実費 API を公開 URL で配るため、クラウドでは利用者を
+  // 管理者が作る（Cognito コンソール / auth.admin.createUser）。ローカルの dev と e2e は
+  // npm スクリプトが BUYER_SELF_SIGNUP=true を付けて開ける
+  selfSignUp: process.env.BUYER_SELF_SIGNUP === 'true',
   codeDelivery: async (username, code, purpose) => {
     if (!process.env.BLOCKS_STACK_NAME) {
       lastCode = { username, code, purpose };
@@ -44,8 +45,9 @@ const { agent: buyerAgent, artifacts: purchasedHtml } = createBuyerAgent(scope);
 // エージェントの会話 API。
 // Agent BB は conversationId / channelId の認可を呼び出し側に委ねる仕様なので、
 // 会話に触れる経路（読み書き・購読）はすべて listConversations で所有を検証する。
-// 特に sendMessage は実費（0.1 テスト USDC）を発生させる書き込み経路であり、
-// 本アプリは自己サインアップを許しているため検証を省けない
+// 特に sendMessage は実費（0.1 テスト USDC）を発生させる書き込み経路なので検証を省けない。
+// 自己サインアップは決定36 で既定は閉じたが、利用者どうしの分離はそれとは別に要る
+// （管理者が作った利用者でも、他人の会話に支払わせられてはならない）
 export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   async createConversation() {
     const user = await auth.requireAuth(context);
