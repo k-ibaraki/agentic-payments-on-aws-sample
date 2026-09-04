@@ -6,7 +6,10 @@ import { extractPurchases } from './purchases.js';
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
-const scope = new Scope('agent-app');
+// id は AWS 上の物理名（DynamoDB 表・S3 バケット等）の一部になる。Amplify Gen2 のスタック名が
+// 長く、Agent ブロック内蔵の S3 バケット名を 63 文字に収めるため短くしている（決定33）。
+// 一度 deploy したら変えないこと（変えると資源が作り直され、データが失われる）
+const scope = new Scope('app');
 
 // ── 認証（AuthCognito、パスワードレスのメール OTP） ──────────────────────
 // ローカル（mock）では OTP を codeDelivery フックで捕まえ、getLastCode で画面に出す。
@@ -14,7 +17,9 @@ const scope = new Scope('agent-app');
 let lastCode: { username: string; code: string; purpose: string } | null = null;
 
 const auth = new AuthCognito(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
+  // フロントと API が別オリジンのとき（CDK の sandbox、Amplify Hosting からの呼び出し。決定33）は
+  // Cookie を SameSite=None; Secure; Partitioned にする
+  crossDomain: process.env.BLOCKS_SANDBOX === 'true' || process.env.BLOCKS_CROSS_DOMAIN === 'true',
   passwordPolicy: { minLength: 8, requireDigits: true },
   signInWith: 'email' as const,
   authFlowType: 'USER_AUTH' as const,

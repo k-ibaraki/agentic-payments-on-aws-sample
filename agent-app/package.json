@@ -23,9 +23,13 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "amplify:sandbox": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox",
+    "amplify:sandbox:delete": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox delete --yes",
+    "blocks:client": "cross-env NODE_OPTIONS=\"--conditions=aws-runtime\" tsx scripts/generate-blocks-client.ts",
+    "build:amplify": "npm run blocks:client && npm run build && tsx scripts/amplify-blocks-config.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
-    "test": "vitest run aws-blocks src"
+    "test": "vitest run aws-blocks src amplify scripts"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
@@ -34,6 +38,8 @@
     "zod": "^4.3.0"
   },
   "devDependencies": {
+    "@aws-amplify/backend": "^1.24.0",
+    "@aws-amplify/backend-cli": "^1.9.0",
     "@aws-sdk/client-bedrock-agentcore": "^3.1121.0",
     "@aws-sdk/client-bedrock-agentcore-control": "^3.1121.0",
     "@aws-sdk/client-iam": "^3.1121.0",
@@ -42,6 +48,7 @@
     "@types/node": "^20.0.0",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
+    "cross-env": "^7.0.3",
     "esbuild": "^0.27.1",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",

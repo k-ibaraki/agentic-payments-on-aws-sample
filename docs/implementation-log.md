@@ -2,6 +2,147 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-04: フェーズ⑤の土台 — Amplify Gen2 への deploy 経路（決定33）
+
+### やったこと
+
+- ユーザー要望「開発は AWS Blocks のまま、deploy は Amplify へ（agent-app のみ）」を grill-me で確認。
+  動機は「Amplify コンソールでバックエンドとフロントを一元管理し、git push で deploy」。既存の CDK 直経路
+  （`npm run deploy`）は退路として残す、完了条件は sandbox への実デプロイまで、で合意（決定33）
+- 追加したもの: `amplify/backend.ts`（`defineBackend({})` + `initBlocks`）、`amplify/blocks.ts`
+  （`createStack('blocks')` の上に `BlocksBackend.create()`。CORS とクロスドメイン Cookie の環境変数、
+  `custom.blocks_api_url` の出力）、`amplify/cors-origins.ts`（`AWS_APP_ID` から amplifyapp.com の
+  正規表現を導く。テスト付き）、`amplify/package.json` / `amplify/tsconfig.json`（`npm create amplify`
+  が書く内容の写し）、`aws-blocks/amplify.cdk.ts`（Amplify 用の CDK 入口。`index.cdk.ts` は単独 CDK アプリで
+  読み込むだけでスタックと `Hosting` のビルドが走るため分けた）、`scripts/generate-blocks-client.ts`
+  （`client.js` 生成。CDK 直経路と dev サーバーが内部でやっている処理を Amplify のビルド用に露出）、
+  `scripts/blocks-config.ts` + `scripts/amplify-blocks-config.ts`（`amplify_outputs.json` →
+  `dist/.blocks-sandbox/config.json`。テスト付き）、リポジトリ直下の `amplify.yml`（モノレポなので
+  `applications[].appRoot: agent-app`）
+- `package.json` に `amplify:sandbox` / `amplify:sandbox:delete` / `blocks:client` / `build:amplify` を追加し、
+  vitest の対象に `amplify` と `scripts` を加えた。`tsconfig.json` の include に `amplify/**/*`、
+  `.gitignore` に `.amplify` と `amplify_outputs*`
+- 依存: `@aws-amplify/backend` 1.24.0 / `@aws-amplify/backend-cli` 1.9.0 / `cross-env` 7.0.3（手動で追加。
+  `npm create amplify` は `aws-cdk-lib@2.244.0` を固定で入れ、Blocks 側の 2.267 と衝突するため使わなかった）
+- `aws-blocks/index.ts` の `AuthCognito` に `BLOCKS_CROSS_DOMAIN` を足し、Block の id を短縮
+  （`Scope 'app'` / `Agent 'buyer'` / `BlocksBackend 'b'`。後述）
+- TDD: `corsAllowedOrigins` と `blocksConfigFromOutputs` の2モジュールを赤（モジュール未作成で import 失敗）→
+  緑。`npm run test` / `typecheck` / `build` を通し、AWS 資格情報なしで `CDK_CONTEXT_JSON` を与えて
+  `amplify/backend.ts` を `--conditions=cdk` で直接実行し、Lambda のバンドルまで到達することを確認した
+- README（ルート・agent-app）と CLAUDE.md を更新
+
+### 調査で分かった重要事実
+
+- AWS Blocks は AWS 公式（2026-06-16 に public preview 公開、`docs.aws.amazon.com/blocks` に devguide）。
+  devguide は Amplify を「補完関係（Amplify = hosting / CI/CD / マネージド体験、Blocks = IfC）」と位置づける
+- `BlocksBackend.create()` は devguide「Integrating with existing infrastructure」Pattern 1 の公式 API。
+  `@aws-blocks/core` 0.3.1 の `blocks-backend.ts` は `fullId` の説明で「Amplify Gen2 の
+  `backend.createStack('blocks')` のネストスタック」を想定ケースとして明記している
+- 公式 CLI `@aws-blocks/create-blocks-app` 0.1.21 には `templates/amplify/` があり、`amplify/backend.ts` を
+  検出すると `amplify/blocks.ts`・`createBlocksBackend`・`NODE_OPTIONS="--conditions=cdk"` 付きの
+  `amplify.yml`・`cross-env` のスクリプトを生成する。ただし `aws-blocks/` を雛形で上書きするため、
+  既に Blocks で作ったプロジェクトには当てられない。今回の実装はこの生成物を写した
+- CLI は「Blocks 主体で Amplify Hosting は CI/CD と配信だけ」の構成（`amplify.yml` から
+  `cdk deploy --app="npx tsx -C cdk aws-blocks/index.cdk.ts"`）も案内している。今回は一元管理の要望で
+  Amplify 主体（ネストスタック）を採った
+- ブラウザの Blocks クライアント（`@aws-blocks/core` `client/index.js`）は API の URL を
+  「`{ url }` 指定 → SSR の環境変数 → Node の `.blocks-sandbox/config.json` → ブラウザは同一オリジンの
+  `/.blocks-sandbox/config.json` を fetch」の順で解決する。CDK 直経路では `Hosting` construct が
+  相対 URL（`/aws-blocks/api`）を書いた config.json を配り CloudFront で API をプロキシするが、
+  Amplify Hosting にはその層が無いので、絶対 URL を書いた config.json をビルドで置き、越境で呼ぶ
+- dev サーバーは `BLOCKS_API_URL` があるとその API へプロキシする（sandbox 用）。Amplify の sandbox に
+  ローカルのフロントを繋ぐのもこの経路で足りる
+- `--conditions=cdk` が無いと Block がモック実装に解決され空のインフラが合成される。
+  `BlocksBackend.create()` の冒頭で `assertCdkConditionActive()` が検査して落とす（黙って通りはしない）
+- `ampx` は `amplify/backend.ts` を `tsx` の `tsImport` で直接読み込む。`cdk.json` の `app` は使われないので、
+  CDK 直経路用の `cdk.json` と共存できる
+- Amplify のルートスタック名は `amplify-<namespace>-<name>-<type>-<hash10>`。sandbox は
+  namespace = `package.json` の name（英数字のみ、`agentapp`）、name = `--identifier`（既定は OS ユーザー名）。
+  ブランチは namespace = appId（14 文字）、name = ブランチ名
+
+### 判断・つまずき
+
+- 参照記事（Zenn）を最初「公式ドキュメント未掲載の非公式ハック」と扱い、その懸念を前提に問いを組んだ。
+  ユーザーの指摘で公式 devguide・CLI・ソースまで当たり直し、記事は公式機能のみで組まれていると確認して撤回した。
+  下調べは一次資料まで当たってから問いを立てる、が教訓
+- フロントと API を別オリジンにした理由: Amplify Hosting の rewrite（200 プロキシ）はアプリ単位の設定で
+  ブランチごとの API URL に追随できず、Cookie 転送の挙動も未確認。別オリジン構成は `AuthCognito` の
+  `crossDomain` と core の `CORS_ALLOWED_ORIGINS` に公式手順があり、現行 sandbox（localhost + API Gateway）と同じ形
+- **S3 バケット名の 63 文字制限**: ローカル合成で `…-blocks-agent-app-buyer-agent-sn`（78 文字）が
+  `ValidationFailed` で落ちた。Blocks は S3 名をスコープ id の連結で決め、短縮もハッシュ化も意図的にしない。
+  Agent が内蔵する `FileBucket 'sn'` は既存バケットの指定もできない。Amplify のスタック名（36 + 識別子 /
+  41 + ブランチ名）の下では id を縮める以外に手が無く、`b` / `app` / `buyer` に短縮（ユーザー決定。
+  ブランチ名 7 文字以内・sandbox 識別子 12 文字以内が制約として残る）。予算の計算は決定33 の追記
+- `npm run build` が `build-temp/` に `tsc` の出力を吐き、その中の `*.test.js` を vitest が拾って
+  テスト件数が倍（10 ファイル 55 件 → 20 ファイル 110 件）になる。今回の変更で生じたものではなく
+  以前からの挙動（`build-temp` は gitignore 済みで CI はビルド前にテストするため影響なし）。未修正、要判断
+- この worktree は `mise.toml` が未信頼で `node` が起動できず、`mise trust` が要った
+- `client.js` 生成時の `[Realtime] BLOCKS_RT_WS_URL not set` 警告は生成には無害（実行時の環境変数）
+
+### sandbox 検証（同日）
+
+- `npm run amplify:sandbox -- --once`（ap-northeast-1、識別子は既定の OS ユーザー名 12 文字）が 193 秒で完了。
+  ルートスタック `amplify-agentapp-<識別子>-sandbox-<hash>` の下にネストスタック `blocks` ができ、
+  Agent 内蔵の S3 バケット（`…-b-app-buyer-sn`、ちょうど 63 文字）も作成された。`amplify_outputs.json` に
+  `custom.blocks_api_url`（API Gateway の `/prod/aws-blocks/api`）が出た
+- API Gateway を直接叩いた結果: `api.whoAmI` / `buyer.getSellerInfo` は `401 NotAuthenticatedException`
+  （認証が効いている）、`api.getLastCode` は `null`（`BLOCKS_STACK_NAME` によるクラウド判定でローカル専用の
+  OTP 漏洩口が閉じている）。localhost オリジンからの preflight は `access-control-allow-origin` と
+  `allow-credentials: true` を返した（sandbox モードの CORS）
+- `npm run build:amplify` が `client.js` 生成 → `tsc` + `vite build` → `dist/.blocks-sandbox/config.json`
+  （絶対 URL）まで通った
+- `BLOCKS_API_URL=<blocks_api_url> npm run dev` でローカルの dev サーバーが `/.blocks-sandbox/config.json` を
+  `{ apiUrl: "http://localhost:3000/aws-blocks/api", environment: "sandbox" }` で配り、RPC を sandbox の
+  Lambda へプロキシした（同じ 401 が返る）。CDK 直の sandbox と同じ手順で Amplify の sandbox にも繋がる
+- 検証後に `npm run amplify:sandbox:delete` で削除（187 秒）。ルートとネストの両スタックが
+  `DELETE_COMPLETE` になり、`amplify-agentapp-*` は残っていない。ブラウザでのサインアップ（OTP）は
+  ユーザー判断で省略し、疎通確認までで締めた
+- 未検証: Amplify Hosting 上での配信（`.blocks-sandbox/` の成果物指定・ブランチ deploy の CORS・
+  クロスドメイン Cookie）。コンソールでの GitHub 接続を伴うため次回、ユーザー操作で行う
+
+### セルフレビュー（同日）
+
+ブランチ `feat/amplify-deploy` の2コミット後にセルフレビューを実施し、指摘4件を全件修正した:
+
+1. `build-temp/` の `*.test.js` が vitest に拾われ二重に走る（上記「判断・つまずき」の件。今回
+   `amplify` / `scripts` を対象に加えて範囲が広がった）→ `vite.config.ts` に `test.exclude: build-temp/**`
+2. `AGENTS.md` の deploy 節が CDK 直経路のみで決定33 と食い違う → Amplify のコマンドを正として追記
+3. 決定32 の追記に Block id の変更が無く、構成図のラベルが旧 id のまま → 追記を補い、図の差し替え時に直すと明記
+4. Amplify Hosting の外から `ampx pipeline-deploy` すると `AWS_APP_ID` が無く CORS 未設定のまま deploy
+   される → `requireCorsAllowedOrigins`（テスト付き）で合成時に落とすようにし、README に明記
+
+### PR #5 の CI 失敗と修正（同日）
+
+- agent-app ジョブの `npm ci` が「lock と package.json が不整合」で失敗。`npm install --save-dev` で Amplify の
+  依存を足したときに書かれた `package-lock.json` に、`@aws-amplify/backend-cli` 配下が要求する
+  `zod@3.25.17` や `@aws-cdk/toolkit-lib` などが記録されていなかった（`node_modules` には入っていたため
+  手元のテストは通っていた。`npm ci --dry-run` で再現）
+- `npm install` の再実行では直らず、いったん `node_modules` と lock を消して作り直したところ、
+  `@aws-blocks/blocks` の指定が `"*"` のため AWS Blocks が 0.3.1 → 0.4.0 に、`aws-cdk-lib` が
+  2.267 → 2.268 に上がった。sandbox で検証した版から動かしたくないので採らず、HEAD の lock を戻して
+  `npm install --package-lock-only` で不足分だけ補った（+1,556 行。`@aws-blocks/*` と `aws-cdk-lib` は据え置き）。
+  `npm ci` で入れ直して test / typecheck を確認
+- 教訓: `@aws-blocks/blocks` の指定が `"*"` である限り、lock を全体再生成すると AWS Blocks 本体の版が
+  意図せず最新に上がる。lock を直すときは `--package-lock-only` で不足分の追加に留め、
+  AWS Blocks の版を上げるのは意図した作業として別に行う
+
+### PR #5 のコードレビュー（同日）
+
+pr-code-review スキルで観点別レビューを行い、ユーザー判断で次の2件を修正した（GitHub への投稿はせず、
+この場で修正）:
+
+1. `amplify:sandbox:delete` に `AMPLIFY_SANDBOX=true` が無く、削除が合成の段階で落ちる。
+   `ampx sandbox delete` は削除前に `amplify/backend.ts` を読み直す（`@aws-amplify/backend-deployer` の
+   `destroy()` → `getCdkCloudAssembly()` → `tsImport`）ため、セルフレビューで足した
+   `requireCorsAllowedOrigins` のガードに引っかかっていた。削除の成功確認はガード追加前だったので
+   見逃した。スクリプトに `AMPLIFY_SANDBOX=true` を足し、sandbox が無い状態で実行して合成が通ることを確認
+2. `buyer-agent.ts` のコメントの S3 バケット名が CDK 直経路の形だけだったので、Amplify 経路の
+   `-b-` 付きの形も併記
+
+見送り: 「`AMPLIFY_SANDBOX=true` がブランチビルドの環境変数に紛れ込むと sandbox の姿勢で deploy される」
+（人為ミス前提）、「PR に性質の違う変更が同居」（id 短縮も vitest の修正も Amplify 対応の帰結で同質）、
+「ブランチ名 7 文字の上限」（決定33 で意図して選んだ取引。レビューで蒸し返すべきではなかった）
+
 ## 2026-09-03: AWS 構成図の作成（docs/architecture.drawio.png）
 
 ### やったこと

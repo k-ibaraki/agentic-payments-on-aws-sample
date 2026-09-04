@@ -7,3 +7,6 @@ aws-blocks/client.js
 aws-blocks/blocks.spec.json
 .bb-data/
 .env
+# Amplify Gen2（npm create amplify が足す項目と同じ）
+.amplify
+amplify_outputs*

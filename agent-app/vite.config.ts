@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   resolve: {
@@ -6,5 +6,10 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist'
+  },
+  test: {
+    // npm run build の tsc が build-temp/ に吐く *.test.js を拾わない（同じテストが二重に走り、
+    // 古いコピーで結果が食い違う）
+    exclude: [...configDefaults.exclude, 'build-temp/**']
   }
 });
