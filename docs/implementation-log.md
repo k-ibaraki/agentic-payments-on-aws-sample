@@ -97,13 +97,23 @@
   `Payment session not found`）** で来ることが確定（決定35 の推定どおり `isSessionRejection` が拾った）
 - 検証後に `npm run amplify:sandbox:delete`。売り手 `BillingMcpStack-dev` は置いたまま（main での検証に使う）
 
+### 構成図の差し替え（同日）
+
+- `docs/architecture.drawio.png` の埋め込み XML を取り出して編集し（描き直さない。決定32）、draw.io CLI で
+  `--embed-diagram` 付きで再出力した。変更: Hosting の囲みを Amplify Hosting ＋ Amplify ビルドに、
+  ① をブラウザ → API Gateway の直接呼び出し（別オリジン・CORS・SameSite=None）に、Block id を
+  `app` / `buyer` / `b` に、KVStore `payment-session` の追加、Cognito の「自己サインアップ無効」、
+  現況と処理の流れ（①④）の文面。CloudFront から API Gateway へのプロキシ矢印は削除
+- つまずき: ラベルの `&lt;appId&gt;` が HTML として解釈されて消えた（`（appId）` に変更）。矢印ラベルは
+  経路の中央に置かれるため、縦の区間に沿わせるには offset で幅の半分ほどずらす必要があった
+
 ### 残していること（次の手順）
 
 1. ~~売り手 `BillingMcpStack-dev` の再 deploy~~（済）（メインのチェックアウトの `parameter.ts` / `server/.env` を写す。
    無認証の公開エンドポイントなので実行前に確認）
 2. ~~sandbox で決定35 の作成・使い回し・作り直しを実測~~（済。上記）
 3. main のブランチ環境変数に同じ値を設定して再ビルドし、main で実決済
-4. `docs/architecture.drawio.png` の Amplify 構成への差し替え（PR-1）
+4. ~~`docs/architecture.drawio.png` の Amplify 構成への差し替え~~（済）
 
 ## 2026-09-04: フェーズ⑤の土台 — Amplify Gen2 への deploy 経路（決定33）
 
