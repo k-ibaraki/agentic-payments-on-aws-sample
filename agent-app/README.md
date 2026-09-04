@@ -77,7 +77,7 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID`
 - `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`（アプリが購入時に切る PaymentSession の期限と
   支出上限。既定 `60` / `1.00`。決定35。有効なセッションは KVStore `payment-session` に記録して使い回し、
-  失効や上限超過で拒否されたら一度だけ作り直す）
+  失効・削除で拒否されたら一度だけ作り直す。支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため。決定37）
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
 - `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `100000` = 0.1 USDC）・
   `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +

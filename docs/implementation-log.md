@@ -2,6 +2,67 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-05: PR #6 のコードレビュー指摘の修正（決定37・U8）
+
+PR #6 に `pr-code-review` スキルで観点別レビューを行い、ユーザー判断で 11 件を修正した（GitHub には投稿せず、この場で修正）。
+
+### 中核: 支出上限が上限として機能していなかった
+
+レビューで AWS の [AgentCore Payments IAM ガイド](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments-iam-roles.html) に次の記述があることが分かった。
+
+> Do not include PaymentSession *write* permissions (for example, `CreatePaymentSession`) and `ProcessPayment` in the same role, or the caller can bypass payment limits by creating new sessions with elevated budgets.
+
+決定35 の実装はこの迂回を IAM で許すだけでなく、**アプリが自動で実行**していた。`isSessionRejection` が
+`ConflictException: Session limit exceeded` を「セッション起因」と判定し（`payment-session.test.ts` が
+その挙動をテストで固定していた）、`x402-payer.ts` がそれを無条件に `renew()` へ流すため、**上限に当たった
+支払いがその場で新しい枠を切って成立していた**。決定35 の理由欄が開示していたのは「枠は時間ごとに戻る」
+ことまでで、「上限が一度も支払いを止めない」ことまでは意図していなかった。決定37 として、上限超過は
+作り直さず失敗させる側に倒した。
+
+ロール分離は行っていない。共有 Lambda 1 つがセッション作成と支払いの両方を実行するため、ロールを分けても
+同じ identity が双方を握ることに変わりがなく、分離にならないため。IAM のリソースは `payment-manager/*` に
+絞り、構造での分離は U8 として残した。
+
+### 挙動が変わるもの
+
+- **決済後の再 402 を `PaidToolError` にした**（`paid-tool-caller.ts`）。従来は素の `Error` で、
+  `buy-html.ts` の `instanceof PaidToolError` を素通りしてツールハンドラまで伝播し、レシート記録
+  （`artifacts.put`）に到達していなかった。9/4 の sandbox 実測（2 回目の購入）でまさにこの経路を踏んでおり、
+  ログに「決定31 の防護どおり再試行なし」と書いたが、実際に効いていたのは④（システムプロンプト。補助）だけで
+  ③（`interrupt` による承認要求。保証と明記した硬い防護）は発火していなかった。オンチェーンの送金は
+  起きていないが署名は売り手に渡っており、売り手は有効期限内なら後から決済を確定できる。「資金が動いていないから
+  無害」とは扱わず、レシート（nonce）を残して③を働かせる。**この会話で次に購入するときは人の承認を要求するようになる**
+- **`renew` に拒否されたセッション ID を渡すようにした**（インターフェースの変更）。別の購入が既に作り直して
+  いればその有効なセッションに乗る。記録の書き込みは条件付き（`ifNotExists` / `ifValueEquals`）にし、
+  読んでから書くまでに別の購入が書いていたら相手を残す
+- **`PAYMENT_SESSION_MAX_USD` / `PAYMENT_SESSION_MINUTES` の書式を合成時に検証する**ようにした。
+  従来は実行時に黙って既定へ戻していたため、`10.000` や `1,000.00` のような書式ミスで「上限を上げたつもり」に
+  気づけなかった。ローカル実行で既定に戻す場合も `console.warn` を出す
+
+### その他
+
+- `buy-via-cloud.ts`: cookie jar を `BLOCKS_API_URL` のオリジン限定にした（差し替えた `fetch` が
+  プロセスの全通信に及ぶため、他所へセッションを渡さない／他所から同名の Cookie を注入されない）。
+  `BUYER_TOOL_TIMEOUT_MS` を実決済の前に検証（`NaN` だと一度もポーリングせず失敗と誤報告していた）。
+  サインイン失敗時の `JSON.stringify(state)` をやめた（Cognito のチャレンジ継続用 session や
+  TOTP の共有シークレットが hidden フィールドの `defaultValue` に載るため）
+- コメントの是正 3 件: `paid-tool-caller.ts`（「資金は動いていない」が実測の半面だけだった。残枠は署名時点で
+  1.00 → 0.8 USD と減っている）、`index.ts`（所有検証の根拠を「自己サインアップを許しているため」に
+  置いていたが、決定36 でその前提が消えた）、`runtime-env.ts`（`payments/` は `process.env` を読まない。
+  読むのは `buyer-agent.ts` で、`payments/` へは引数で渡す）
+
+### 見送ったもの
+
+- リンクされた Issue が無い件: このリポジトリは Issue を使わず DESIGN.md と本ログで経緯を残す運用のため対象外
+- `isSessionRejection` の docstring が「sandbox の実測で確定させる」のままだった件: 決定37 の書き換えで
+  実測済みの分岐（`ValidationException` + `Payment session not found`）と推定のままの分岐を区別する形に直った
+- 構成図の差し替えが同じ PR に混入している件: 独立コミットでコード変更を含まず、記録を残す規約上むしろ自然と判断
+
+### 確認したこと
+
+- `npm run test`（12 ファイル 83 件）/ `npm run typecheck` / `npm run test:e2e`（3 件）が通ること
+- 未実施: sandbox への再 deploy による IAM の実地確認（資源を作るため、別途確認を取ってから行う）
+
 ## 2026-09-04（続き）: フェーズ⑤ — 実行時設定と IAM の配線、PaymentSession のアプリ内作成、selfSignUp の閉鎖（決定34〜36）
 
 ### 前提の確認（grill-me）
