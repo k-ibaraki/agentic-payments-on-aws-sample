@@ -77,8 +77,8 @@ MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
 いつでも次のコマンドで取り出せる（読み取りのみ。AWS CLI と有効な資格情報が要る）。
 
 ```bash
-pnpm outputs            # parameter.ts の envName からスタック名を決める
-pnpm outputs -- <名前>  # スタック名を直接指定する
+pnpm outputs         # parameter.ts の envName からスタック名を決める
+pnpm outputs <名前>  # スタック名を直接指定する
 ```
 
 | 出力 | 中身 | 買い手側の対応 |

@@ -4,15 +4,17 @@
 // スタック名は parameter.ts の envName から決める（billing-mcp.ts と同じ組み立て）。
 // parameter.ts は gitignore なので、名前を決め打ちにすると envName を変えた人が別のスタックを見てしまう。
 //
-// 実行: pnpm outputs           … parameter.ts の envName から決める
-//       pnpm outputs -- <名前> … スタック名を直接指定する
+// 実行: pnpm outputs        … parameter.ts の envName から決める
+//       pnpm outputs <名前> … スタック名を直接指定する（pnpm は `--` を素通しするので付けないこと）
 //
 // AWS CLI を使う（この一手のために SDK の依存を増やさないため）。
 import { execFileSync } from "node:child_process";
 import { devParameter } from "../parameter";
 
 const stackName = process.argv[2] ?? `BillingMcpStack-${devParameter.envName}`;
-const region = devParameter.env?.region ?? "ap-northeast-1";
+// env.region を省いたときは CDK が資格情報側のリージョンを使う。ここで東京に決め打ちすると
+// その場合だけ別のリージョンを見てしまうので、指定が無ければ AWS CLI の解決に任せる
+const region = devParameter.env?.region;
 
 let stack: { StackStatus?: string; Outputs?: { OutputKey?: string; OutputValue?: string }[] };
 try {
@@ -23,8 +25,7 @@ try {
       "describe-stacks",
       "--stack-name",
       stackName,
-      "--region",
-      region,
+      ...(region ? ["--region", region] : []),
       "--output",
       "json",
     ],
@@ -32,13 +33,19 @@ try {
   );
   stack = JSON.parse(json).Stacks?.[0] ?? {};
 } catch (error) {
-  const detail =
-    error instanceof Error && "stderr" in error
-      ? String((error as { stderr?: unknown }).stderr).trim()
-      : error instanceof Error
-        ? error.message
-        : String(error);
-  console.error(`${stackName}（${region}）の出力を取得できませんでした。`);
+  const where = region ? `${stackName}（${region}）` : stackName;
+  // AWS CLI が無いのが、このスクリプトで一番分かりにくい失敗。stderr も出ないので分けて案内する
+  if ((error as { code?: string }).code === "ENOENT") {
+    console.error("aws コマンドが見つかりません。AWS CLI を入れて PATH を通すこと");
+    process.exit(1);
+  }
+  const stderr = (error as { stderr?: unknown }).stderr;
+  const detail = stderr
+    ? String(stderr).trim()
+    : error instanceof Error
+      ? error.message
+      : String(error);
+  console.error(`${where}の出力を取得できませんでした。`);
   console.error(detail);
   console.error("");
   console.error("deploy 済みか、AWS の資格情報が有効か（aws sts get-caller-identity）を確認すること");
@@ -49,7 +56,7 @@ const outputs = new Map(
   (stack.Outputs ?? []).map((o) => [o.OutputKey ?? "", o.OutputValue ?? ""] as const),
 );
 
-console.log(`${stackName}（${region}）: ${stack.StackStatus}`);
+console.log(`${region ? `${stackName}（${region}）` : stackName}: ${stack.StackStatus}`);
 console.log("");
 for (const [key, value] of outputs) {
   console.log(`  ${key} = ${value}`);

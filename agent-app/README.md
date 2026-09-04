@@ -85,7 +85,8 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 クラウド（Amplify のブランチ環境変数）では `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` /
 `BILLING_MCP_URL` の 3 つが必須で、無いと合成で落ちる（決定34）。
 
-- `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID`
+残りは既定値があり、必要なときだけ渡す:
+
 - `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`（アプリが購入時に切る PaymentSession の期限と
   支出上限。既定 `60` / `1.00`。決定35。有効なセッションは KVStore `payment-session` に記録して使い回し、
   失効・削除で拒否されたら一度だけ作り直す。支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため。決定37）
