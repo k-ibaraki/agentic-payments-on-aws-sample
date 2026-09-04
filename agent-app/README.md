@@ -12,7 +12,7 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く。決定25）
 - ブラウザ UI は `index.html` + `src/index.ts`（認証・チャット・購入一覧）。生成 HTML は
-  `src/mcp-apps-host.ts` が売り手の `ui://` リソースを無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
+  `src/mcp-apps-host.ts` が売り手の `ui://` リソース（空の表示器。生成物は含まない）を無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
   として sandbox iframe に描画する（決定29）
 - 二重支払いの防護（決定31）: 有料ツールの待ち時間は売り手上限に合わせ（`BUYER_TOOL_TIMEOUT_MS`）、
   決済後の失敗はレシートを残し、同じ会話に未解決の支払いがあれば次の購入は人の承認（interrupt）を要求する
