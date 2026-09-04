@@ -23,9 +23,21 @@ import { stdin, stdout } from 'node:process';
 
 const prompt = process.argv[2] ?? '「クラウドのエージェントが x402 で購入したページ」と大きく表示するシンプルな HTML ページ';
 const email = requireEnv('BUYER_EMAIL');
-requireEnv('BLOCKS_API_URL');
+const apiOrigin = new URL(requireEnv('BLOCKS_API_URL')).origin;
 const pollMs = 3000;
-const timeoutMs = Number(process.env.BUYER_TOOL_TIMEOUT_MS ?? '600000') + 60_000;
+// 実決済を起こす sendMessage の前に検証する。NaN のまま進むと待ち時間の比較が常に偽になり、
+// 一度もポーリングせず「時間内に完了しませんでした」で終わってしまう
+const timeoutMs = toolTimeoutMs() + 60_000;
+
+function toolTimeoutMs(): number {
+  const raw = process.env.BUYER_TOOL_TIMEOUT_MS;
+  if (raw === undefined) return 600_000;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`BUYER_TOOL_TIMEOUT_MS=${raw} が正の数値ではありません`);
+  }
+  return value;
+}
 
 // Node の fetch は Cookie を保持しないため、AuthCognito のセッション Cookie を最小の cookie jar で持ち回る。
 // BUYER_COOKIE_FILE を指定すると保存して次回の実行で使い回す（OTP を毎回求めないため。ブラウザの Cookie と同じ扱いで秘密）
@@ -37,12 +49,25 @@ if (cookieFile && existsSync(cookieFile)) {
   }
 }
 const baseFetch = globalThis.fetch;
+// Cookie は BLOCKS_API_URL のオリジンとだけやり取りする。ブラウザの同一オリジン規則の代わりで、
+// 差し替えた fetch がこのプロセスの全通信に及ぶため、他所へセッションを渡さない／他所から
+// 同名の Cookie を注入されないようにする
+const originOf = (input: RequestInfo | URL): string | undefined => {
+  const url = input instanceof Request ? input.url : input.toString();
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+};
 globalThis.fetch = async (input, init) => {
+  const sameOrigin = originOf(input) === apiOrigin;
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  if (jar.size > 0) {
+  if (sameOrigin && jar.size > 0) {
     headers.set('cookie', [...jar].map(([k, v]) => `${k}=${v}`).join('; '));
   }
   const response = await baseFetch(input, { ...init, headers });
+  if (!sameOrigin) return response;
   for (const line of response.headers.getSetCookie()) {
     const [pair, ...attrs] = line.split(';');
     const eq = pair!.indexOf('=');
@@ -82,6 +107,19 @@ async function readCode(): Promise<string> {
   throw new Error('確認コードが時間内に書かれませんでした');
 }
 
+// AuthState には Cognito のチャレンジ継続用 session や TOTP の共有シークレットが
+// hidden フィールドの defaultValue として載る。失敗時の診断に必要な骨格だけを出す
+function describeAuthState(state: {
+  state: string;
+  error?: string;
+  actions?: Array<{ name: string; fields: Array<{ name: string }> }>;
+}): string {
+  const actions = (state.actions ?? []).map(
+    (a) => `${a.name}(${a.fields.map((f) => f.name).join(',')})`,
+  );
+  return `state=${state.state}${state.error ? ` error=${state.error}` : ''} actions=[${actions.join(' ')}]`;
+}
+
 // 認証の状態機械（AuthState）を手で進める。Authenticator UI がやることと同じ:
 // アクションの hidden フィールドは defaultValue を返し、code はプロンプトで受け取る
 async function signIn(): Promise<void> {
@@ -100,7 +138,7 @@ async function signIn(): Promise<void> {
     console.log(`[auth] state=${state.state}${state.error ? ` error=${state.error}` : ''}`);
     const action =
       state.actions.find((a) => a.fields.some((f) => f.name === 'code')) ?? state.actions[0];
-    if (!action) throw new Error(`進められる認証アクションがありません: ${JSON.stringify(state)}`);
+    if (!action) throw new Error(`進められる認証アクションがありません: ${describeAuthState(state)}`);
     const input: Record<string, string> = { action: action.name };
     for (const field of action.fields) {
       if (field.type === 'hidden' && field.defaultValue !== undefined) {
@@ -116,7 +154,7 @@ async function signIn(): Promise<void> {
     state = await authApi.setAuthState(input as never);
   }
   if (state.state !== 'signedIn') {
-    throw new Error(`サインインできませんでした: ${JSON.stringify(state)}`);
+    throw new Error(`サインインできませんでした: ${describeAuthState(state)}`);
   }
   console.log(`サインイン: ${state.user?.username}`);
 }
