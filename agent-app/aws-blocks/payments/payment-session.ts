@@ -66,13 +66,15 @@ export function paymentSessionSource(
   const usable = (record: PaymentSessionRecord | null): record is PaymentSessionRecord =>
     record !== null && record.expiresAt - SAFETY_MARGIN_MS > now();
 
-  // previous は「読んだ時点の記録」。これを条件に書くことで、読んでから書くまでの間に
-  // 別の購入が作り直していたら相手の記録を残す（キーはアプリ全体で共有のため）。
+  // previous は「読んだ時点の記録」。これを書き込みの条件にすると、読んでから書くまでの間に
+  // 別の購入が作り直していた場合に、相手の記録を残せる（キーはアプリ全体で共有のため）。
   //
-  // 読めなかったときは条件を付けない。`ifNotExists` は使えないため:
-  // KVStore は get で期限切れを null にするが実体は消さず（DynamoDB の TTL 掃除は最大 48 時間）、
-  // `ifNotExists` は実体の有無を見るので必ず条件不一致になる。付けると期限切れの実体が残る間ずっと
-  // 保存できず、購入のたびに新しいセッションを切り続けてしまう
+  // 記録を読めなかったときは条件を付けない。`ifNotExists` を使うと本番だけで壊れるためである。
+  // KVStore の get は、期限切れの記録を null で返す。ただし実体は消さない
+  // （DynamoDB が実際に掃除するまで最大 48 時間かかる）。
+  // 一方 `ifNotExists` が見るのは、その実体の有無である。
+  // つまり期限切れの実体が残っている間は、何を書こうとしても必ず条件不一致になる。
+  // そうなると記録を保存できないまま、購入のたびに新しいセッションを切り続けることになる
   async function create(previous: PaymentSessionRecord | null): Promise<string> {
     const createdAt = now();
     const response = (await client.send(
