@@ -16,6 +16,10 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   として sandbox iframe に描画する（決定29）
 - 二重支払いの防護（決定31）: 有料ツールの待ち時間は売り手上限に合わせ（`BUYER_TOOL_TIMEOUT_MS`）、
   決済後の失敗はレシートを残し、同じ会話に未解決の支払いがあれば次の購入は人の承認（interrupt）を要求する
+- クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33。下記「クラウド deploy」）。
+  CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している
+- Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名になる。
+  Amplify のスタック名が長く、Agent 内蔵の S3 バケット名を 63 文字に収めるために短い。deploy 後は変えないこと
 
 ## コマンド
 
@@ -30,6 +34,31 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - ウォレット作成後、出力される WalletHub の URL でエンドユーザーが署名権限を許可するまで
   支払いは通らない（許可には有効期限がある。決定27）
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（0.1 テスト USDC）が発生する**
+- `npm run amplify:sandbox -- --once` — Amplify の sandbox へ deploy（AWS 資格情報が要る。課金あり）。
+  `--once` を外すとファイル監視で再 deploy し続ける。`npm run amplify:sandbox:delete` で削除
+- `npm run build:amplify` — Amplify Hosting 用のフロントのビルド（`client.js` 生成 → `tsc` + `vite build` →
+  `amplify_outputs.json` から `dist/.blocks-sandbox/config.json`）。`amplify.yml` が呼ぶ
+- sandbox の API にローカルのフロントを繋ぐ:
+  `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`
+
+## クラウド deploy（Amplify Gen2。決定33）
+
+- `amplify/backend.ts` の `defineBackend({})` に `backend.createStack('blocks')` でネストスタックを切り、
+  `amplify/blocks.ts` → `aws-blocks/amplify.cdk.ts` の `BlocksBackend.create()` で `aws-blocks/` を丸ごと載せる。
+  Amplify 側の auth / data は使わない（認証は `AuthCognito` Block のまま）
+- Block を CDK 実装に解決させるため、`ampx` は必ず `NODE_OPTIONS="--conditions=cdk"` で動かす
+  （無いと黙ってモック実装に解決され、空のインフラが合成される）。npm スクリプトと `amplify.yml` が付ける
+- フロント（Amplify Hosting）と API（API Gateway）は別オリジン。ブラウザは `/.blocks-sandbox/config.json` の
+  `apiUrl` で API の絶対 URL を知る。Lambda には `CORS_ALLOWED_ORIGINS`（`amplify/cors-origins.ts` が
+  `AWS_APP_ID` から導く。独自ドメインは Amplify の環境変数 `CORS_ALLOWED_ORIGINS` で上書き）と
+  `BLOCKS_CROSS_DOMAIN=true`（Cookie を `SameSite=None; Secure; Partitioned` に）を渡す
+- Amplify Hosting のビルド設定はリポジトリ直下の `amplify.yml`（モノレポなので `appRoot: agent-app`）。
+  Amplify コンソールでアプリを作るときは GitHub 連携でモノレポの `agent-app` を選び、
+  バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
+- 名前の制約: S3 バケット名が `<Amplify のスタック名>-b-app-buyer-sn` になるため、ブランチ名は 7 文字以内
+  （`main` / `develop` / `staging` は可）、sandbox の識別子（既定は OS ユーザー名。`--identifier` で指定）は 12 文字以内
+- `PAYMENT_*` などの実行時設定を Lambda へ渡す配線（AppSetting 化）はまだ無い（決定28 の⑤の残論点）。
+  現状の sandbox は認証と API の疎通までが検証範囲で、実決済は通らない
 
 ## 縦串検証に必要な環境変数
 

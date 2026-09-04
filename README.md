@@ -27,12 +27,12 @@ AWS Blocks 製のエージェント + Web アプリがそれを「支払いな�
               (ap-southeast-1・クロスリージョン)                │ ネットワーク: Base Sepolia（テスト USDC）
 ```
 
-なお agent-app はフェーズ⑤まではローカル実行で、上図の Lambda 一式はまだ AWS 上に無い。billing-mcp も検証後にスタックを削除しており、必要なときに `cdk deploy` で作り直す。
+なお agent-app のクラウド deploy 先は Amplify Gen2 + Amplify Hosting（決定33。`amplify.yml` と `agent-app/amplify/`）で、フェーズ⑤の土台として sandbox への deploy まで通している。上図の Lambda 一式は常設ではなく、検証後に削除している。billing-mcp も検証後にスタックを削除しており、必要なときに `cdk deploy` で作り直す。
 
 ## ステータス
 
 - billing-mcp: 実装・CDK・デプロイ・クラウド上での実オンチェーン決済検証まで完了（フェーズ②完了）。検証後にスタックは削除済みで、必要なときに `cdk deploy` で作り直す
-- agent-app: これから
+- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④進行中）。Amplify Gen2 への deploy 経路を用意し sandbox で疎通を確認（フェーズ⑤の土台。決定33）。`PAYMENT_*` の配線など⑤の残論点は決定28
 
 経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。
 

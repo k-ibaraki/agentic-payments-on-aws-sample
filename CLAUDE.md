@@ -39,7 +39,12 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 ### agent-app/
 
 - AWS Blocks を使用（aws-blocks スキルと、スキャフォールドが生成する AGENTS.md に従う）
-- 雛形はスキャフォールドで生成し、手書きで模倣しない
+- 雛形はスキャフォールドで生成し、手書きで模倣しない。例外は `amplify/` と `aws-blocks/amplify.cdk.ts` で、
+  公式 CLI（`@aws-blocks/create-blocks-app`）の Amplify 用テンプレートの写し（DESIGN.md 決定33）
+- クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33）。`ampx` は必ず
+  `NODE_OPTIONS="--conditions=cdk"` で動かす（npm スクリプトが付ける）。CDK 直の `npm run deploy` は退路として残す
+- Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
+  合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）
 
 ## リージョン
 
@@ -68,7 +73,11 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   （既定 localhost:8000）。有料ツールの待ち時間は `BUYER_TOOL_TIMEOUT_MS`（既定 600 秒。短くすると決済後に
   失敗して支払いだけが残る。DESIGN.md 決定31）
 - ブラウザからの依頼は**実オンチェーン決済（テスト USDC）が発生する**。検証で送る前に確認を取ること
-- `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` と `src/` 配下）
+- `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` `src/` `amplify/` `scripts/` 配下）
+- `npm run amplify:sandbox -- --once` / `npm run amplify:sandbox:delete` — Amplify の sandbox へ deploy・削除。
+  **AWS 上に資源を作り課金が発生する。実行前に必ず確認を取ること**。ローカルのフロントを繋ぐには
+  `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`
+- `npm run build:amplify` — Amplify Hosting 用ビルド（`amplify.yml` が呼ぶ。`amplify_outputs.json` が要る）
 - `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。CI では回さない）
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。`.env` に CDP 資格情報と
   `PAYMENTS_LINK_EMAIL`。AWS Marketplace の Coinbase サブスクリプション加入が前提。出力される WalletHub の
