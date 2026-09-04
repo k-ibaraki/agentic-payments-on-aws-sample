@@ -1,0 +1,38 @@
+# Amplify Hosting のビルド設定（決定33）。モノレポなので applications[].appRoot で agent-app を指す。
+# 骨子は @aws-blocks/create-blocks-app 0.1.21 が Amplify 検出時に生成する amplify.yml に同じ。
+# 追加したのは Node 22（package.json の engines）、client.js の生成、config.json の配置と
+# ドット始まりディレクトリの成果物指定。
+version: 1
+applications:
+  - appRoot: agent-app
+    backend:
+      phases:
+        preBuild:
+          commands:
+            - nvm install 22
+            - nvm use 22
+            - npm ci --cache .npm --prefer-offline
+        build:
+          commands:
+            # --conditions=cdk が無いと Block が黙ってモック実装に解決され、
+            # 空のインフラが合成される（@aws-blocks/core の assertCdkConditionActive）
+            - NODE_OPTIONS="--conditions=cdk" npx ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - nvm use 22
+        build:
+          commands:
+            # client.js の生成 → tsc + vite build → amplify_outputs.json から config.json
+            - npm run build:amplify
+      artifacts:
+        baseDirectory: dist
+        files:
+          - '**/*'
+          # ドット始まりは '**/*' に含まれないので明示する（ブラウザが最初に取りに来る設定）
+          - '.blocks-sandbox/**/*'
+      cache:
+        paths:
+          - .npm/**/*
+          - node_modules/**/*
