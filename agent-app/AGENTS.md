@@ -22,6 +22,14 @@
 
 ## Deploying (requires AWS credentials)
 
+The primary cloud path is **Amplify Gen2 + Amplify Hosting** (see `README.md` and `docs/DESIGN.md` decision 33). The CDK-only path below is kept as a fallback.
+
+- `npm run amplify:sandbox -- --once` — deploy the Amplify sandbox (Blocks as a nested stack); `npm run amplify:sandbox:delete` — tear it down
+- `npm run build:amplify` — frontend build for Amplify Hosting (called by `amplify.yml`; needs `amplify_outputs.json`)
+- `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev` — point the local frontend at the Amplify sandbox API
+
+CDK-only fallback:
+
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources

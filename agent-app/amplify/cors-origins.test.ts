@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { corsAllowedOrigins } from './cors-origins.js';
+import { corsAllowedOrigins, requireCorsAllowedOrigins } from './cors-origins.js';
 
 // Amplify Hosting のブランチ URL は https://<branch>.<appId>.amplifyapp.com。
 // Lambda の CORS_ALLOWED_ORIGINS は各項目を ^…$ で括った正規表現として扱う（core README）
@@ -24,5 +24,17 @@ describe('corsAllowedOrigins', () => {
 
   it('どちらも無ければ undefined（sandbox では BlocksBackend が localhost を許すので上書きしない）', () => {
     expect(corsAllowedOrigins({})).toBeUndefined();
+  });
+});
+
+describe('requireCorsAllowedOrigins', () => {
+  it('ブランチ deploy で許可オリジンを決められなければ、CORS 未設定のまま deploy させず落とす', () => {
+    expect(() => requireCorsAllowedOrigins({})).toThrow(/AWS_APP_ID/);
+  });
+
+  it('決められるときは corsAllowedOrigins と同じ値を返す', () => {
+    expect(requireCorsAllowedOrigins({ AWS_APP_ID: 'd1abc2def3ghij' })).toBe(
+      corsAllowedOrigins({ AWS_APP_ID: 'd1abc2def3ghij' }),
+    );
   });
 });

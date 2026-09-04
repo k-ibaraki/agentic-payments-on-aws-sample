@@ -23,6 +23,25 @@ export function corsAllowedOrigins(env: {
   return undefined;
 }
 
+/**
+ * ブランチ deploy 用。許可オリジンを決められなければ例外にする。
+ * Amplify Hosting の外から `ampx pipeline-deploy --app-id X` を実行すると `--app-id` は引数で
+ * 環境変数 AWS_APP_ID は無く、黙って CORS 未設定のまま deploy されてしまうため
+ */
+export function requireCorsAllowedOrigins(env: {
+  AWS_APP_ID?: string;
+  CORS_ALLOWED_ORIGINS?: string;
+}): string {
+  const origins = corsAllowedOrigins(env);
+  if (!origins) {
+    throw new Error(
+      'CORS の許可オリジンを決められません。Amplify Hosting のビルドでは AWS_APP_ID が自動で入ります。' +
+        'それ以外から pipeline-deploy する場合は AWS_APP_ID か CORS_ALLOWED_ORIGINS を環境変数で渡してください',
+    );
+  }
+  return origins;
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

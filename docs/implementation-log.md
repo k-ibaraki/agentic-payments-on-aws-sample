@@ -100,6 +100,17 @@
 - 未検証: Amplify Hosting 上での配信（`.blocks-sandbox/` の成果物指定・ブランチ deploy の CORS・
   クロスドメイン Cookie）。コンソールでの GitHub 接続を伴うため次回、ユーザー操作で行う
 
+### セルフレビュー（同日）
+
+ブランチ `feat/amplify-deploy` の2コミット後にセルフレビューを実施し、指摘4件を全件修正した:
+
+1. `build-temp/` の `*.test.js` が vitest に拾われ二重に走る（上記「判断・つまずき」の件。今回
+   `amplify` / `scripts` を対象に加えて範囲が広がった）→ `vite.config.ts` に `test.exclude: build-temp/**`
+2. `AGENTS.md` の deploy 節が CDK 直経路のみで決定33 と食い違う → Amplify のコマンドを正として追記
+3. 決定32 の追記に Block id の変更が無く、構成図のラベルが旧 id のまま → 追記を補い、図の差し替え時に直すと明記
+4. Amplify Hosting の外から `ampx pipeline-deploy` すると `AWS_APP_ID` が無く CORS 未設定のまま deploy
+   される → `requireCorsAllowedOrigins`（テスト付き）で合成時に落とすようにし、README に明記
+
 ## 2026-09-03: AWS 構成図の作成（docs/architecture.drawio.png）
 
 ### やったこと

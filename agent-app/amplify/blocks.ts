@@ -9,7 +9,7 @@
  */
 import type { BackendBase } from '@aws-amplify/backend';
 import { createBlocksBackend } from '../aws-blocks/amplify.cdk.js';
-import { corsAllowedOrigins } from './cors-origins.js';
+import { requireCorsAllowedOrigins } from './cors-origins.js';
 
 // 使うのは createStack と addOutput だけなので、リソース型に依存しない BackendBase で受ける
 export async function initBlocks(backend: BackendBase) {
@@ -22,11 +22,11 @@ export async function initBlocks(backend: BackendBase) {
   // AuthCognito のセッション Cookie を SameSite=None; Secure; Partitioned にする
   blocks.handler.addEnvironment('BLOCKS_CROSS_DOMAIN', 'true');
 
-  // ブランチ deploy では amplifyapp.com のオリジンを許可する。sandbox では BlocksBackend が
-  // localhost を許可済みなので触らない（同じキーを二重に足すと上書きになる）
-  const origins = sandboxMode ? undefined : corsAllowedOrigins(process.env);
-  if (origins) {
-    blocks.handler.addEnvironment('CORS_ALLOWED_ORIGINS', origins);
+  // ブランチ deploy では amplifyapp.com のオリジンを許可する。決められなければ CORS 未設定のまま
+  // deploy させず落とす。sandbox では BlocksBackend が localhost を許可済みなので触らない
+  // （同じキーを二重に足すと上書きになる）
+  if (!sandboxMode) {
+    blocks.handler.addEnvironment('CORS_ALLOWED_ORIGINS', requireCorsAllowedOrigins(process.env));
   }
 
   // amplify_outputs.json に Blocks の API URL を出す。フロントのビルドはこれを
