@@ -81,11 +81,8 @@ describe('paymentSessionSource', () => {
       createdAt: now,
       expiresAt: now + 60 * 60_000,
     });
-    // DynamoDB の TTL で期限切れの記録を消す。記録が無いところへの書き込みなので ifNotExists で守る
-    expect(store.puts[0]!.options).toEqual({
-      expiresAt: new Date(now + 60 * 60_000),
-      ifNotExists: true,
-    });
+    // DynamoDB の TTL で期限切れの記録を消す。読めた記録が無いので書き込みの条件は付けない
+    expect(store.puts[0]!.options).toEqual({ expiresAt: new Date(now + 60 * 60_000) });
   });
 
   it('期限内の保存があればそれを使い、セッションを作らない', async () => {
@@ -161,6 +158,35 @@ describe('paymentSessionSource', () => {
     const source = paymentSessionSource(client, store, CONFIG, () => now);
 
     await expect(source.renew('session-rejected')).resolves.toBe('session-mine');
+  });
+
+  // 本番の KVStore は get で期限切れを null にするが、実体は消さない（DynamoDB の TTL 掃除は最大 48 時間）。
+  // ifNotExists は実体の有無を見るため、これを条件にすると保存できず、購入のたびに新しいセッションを
+  // 切り続けることになる。mock は期限切れを即座に消すのでローカルでは再現しない
+  it('期限切れの記録が実体として残っていても、新しいセッションを保存できる', async () => {
+    const now = Date.parse('2026-09-05T12:00:00Z');
+    let saved: PaymentSessionRecord | null = null;
+    const options: unknown[] = [];
+    const store: PaymentSessionStore = {
+      async get() {
+        return null; // 期限切れとして濾される（実体は残っている）
+      },
+      async put(_key, value, opts) {
+        options.push(opts);
+        if (opts?.ifNotExists) {
+          throw Object.assign(new Error('条件を満たしませんでした'), {
+            name: 'ConditionalCheckFailedException',
+          });
+        }
+        saved = value;
+      },
+    };
+    const client = clientCreating(['session-fresh']);
+    const source = paymentSessionSource(client, store, CONFIG, () => now);
+
+    await expect(source.acquire()).resolves.toBe('session-fresh');
+    expect(saved).toMatchObject({ paymentSessionId: 'session-fresh' });
+    expect(options[0]).not.toHaveProperty('ifNotExists');
   });
 
   it('CreatePaymentSession が ID を返さなければ失敗にする', async () => {

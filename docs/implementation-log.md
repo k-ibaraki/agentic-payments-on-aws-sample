@@ -58,9 +58,22 @@ PR #6 に `pr-code-review` スキルで観点別レビューを行い、ユー�
   実測済みの分岐（`ValidationException` + `Payment session not found`）と推定のままの分岐を区別する形に直った
 - 構成図の差し替えが同じ PR に混入している件: 独立コミットでコード変更を含まず、記録を残す規約上むしろ自然と判断
 
+### セルフレビューで見つけた退行（同日中に修正）
+
+記録の書き込みを条件付きにした際、記録を読めなかった場合に `ifNotExists` を付けていたが、これは
+**本番でだけ**セッションの使い回しを壊す。KVStore は `get` で期限切れを `null` にするが実体は消さず
+（DynamoDB の TTL 掃除は最大 48 時間）、`ifNotExists` は `attribute_not_exists(pk)` で実体の有無を見るため、
+期限切れの実体が残る間はどう書いても条件不一致になる。結果、購入のたびに新しい PaymentSession を切り続け、
+決定35 の使い回しが死ぬうえ、枠が毎回戻るので決定37 で締めた上限も弱まる。
+
+mock 実装は `get` で期限切れを即座に削除するため、`npm run test` も `npm run dev` も e2e もすべて通る。
+ライブラリのオプションは docstring ではなく実装（`node_modules/@aws-blocks/bb-kv-store/dist/index.aws.js`）で
+意味論を確かめるべきだった。読めた記録があるときだけ `ifValueEquals` を付ける形に直し、
+本番の意味論を模した回帰テストを足した。
+
 ### 確認したこと
 
-- `npm run test`（12 ファイル 83 件）/ `npm run typecheck` / `npm run test:e2e`（3 件）が通ること
+- `npm run test`（12 ファイル 85 件）/ `npm run typecheck` / `npm run test:e2e`（3 件）が通ること
 - 未実施: sandbox への再 deploy による IAM の実地確認（資源を作るため、別途確認を取ってから行う）
 
 ## 2026-09-04（続き）: フェーズ⑤ — 実行時設定と IAM の配線、PaymentSession のアプリ内作成、selfSignUp の閉鎖（決定34〜36）
