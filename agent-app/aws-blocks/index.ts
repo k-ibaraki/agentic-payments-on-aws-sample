@@ -25,9 +25,10 @@ const auth = new AuthCognito(scope, 'auth', {
   authFlowType: 'USER_AUTH' as const,
   preferredChallenge: 'EMAIL_OTP' as const,
   mfa: 'off' as const,
-  // 自己サインアップは④（ローカル限定）では許す。実費 API と組み合わせてクラウドへ出す前に
-  // 塞ぐこと（決定28 で⑤へ繰り越し）
-  selfSignUp: true,
+  // 自己サインアップは既定で閉じる（決定36）。実費 API を公開 URL で配るため、クラウドでは利用者を
+  // 管理者が作る（Cognito コンソール / auth.admin.createUser）。ローカルの dev と e2e は
+  // npm スクリプトが BUYER_SELF_SIGNUP=true を付けて開ける
+  selfSignUp: process.env.BUYER_SELF_SIGNUP === 'true',
   codeDelivery: async (username, code, purpose) => {
     if (!process.env.BLOCKS_STACK_NAME) {
       lastCode = { username, code, purpose };

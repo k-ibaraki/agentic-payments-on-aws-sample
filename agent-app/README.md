@@ -58,14 +58,23 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
 - 名前の制約: S3 バケット名が `<Amplify のスタック名>-b-app-buyer-sn` になるため、ブランチ名は 7 文字以内
   （`main` / `develop` / `staging` は可）、sandbox の識別子（既定は OS ユーザー名。`--identifier` で指定）は 12 文字以内
-- `PAYMENT_*` などの実行時設定を Lambda へ渡す配線（AppSetting 化）はまだ無い（決定28 の⑤の残論点）。
-  現状の sandbox は認証と API の疎通までが検証範囲で、実決済は通らない
+- 実決済に要る実行時設定（下記「縦串検証に必要な環境変数」の `PAYMENT_*` など）は、合成時の環境変数
+  （Amplify コンソールのブランチ環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
+  共有 Lambda の環境変数に写す（決定34。AppSetting 化はしない）。ブランチ deploy では
+  `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
+  欠けても通る（認証と API の疎通だけを見る用途）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける
+- 自己サインアップは既定で閉じている（決定36）。クラウドの利用者は管理者が作る（Cognito コンソールで
+  ユーザーを作成。サインインはメール OTP）。ローカルの `npm run dev` / `npm run test:e2e` は
+  `BUYER_SELF_SIGNUP=true` を付けて開けている
 
 ## 縦串検証に必要な環境変数
 
 `scripts/payments-setup.ts` の出力から設定する（.env 等は使わず実行時に渡す）:
 
-- `PAYMENT_MANAGER_ARN` / `PAYMENT_SESSION_ID` / `PAYMENT_INSTRUMENT_ID`
+- `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID`
+- `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`（アプリが購入時に切る PaymentSession の期限と
+  支出上限。既定 `60` / `1.00`。決定35。有効なセッションは KVStore `payment-session` に記録して使い回し、
+  失効や上限超過で拒否されたら一度だけ作り直す）
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
 - `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `100000` = 0.1 USDC）・
   `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +

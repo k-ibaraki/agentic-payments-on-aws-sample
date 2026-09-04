@@ -2,6 +2,77 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-04（続き）: フェーズ⑤ — 実行時設定と IAM の配線、PaymentSession のアプリ内作成、selfSignUp の閉鎖（決定34〜36）
+
+### 前提の確認（grill-me）
+
+- 次セッションの作業指示（A: 本番 deploy の実地確認、B: `PAYMENT_*` の配線と IAM、C: その後の 4 項目）を
+  grill-me で問い直した。下調べで依頼の前提と食い違う事実が 3 つ出た:
+  1. `payments-setup.ts` が切る PaymentSession は `expiryTimeInMinutes: 60`。B の方式でどう渡しても
+     deploy から 1 時間で決済が止まるため、C-1（アプリ側でのセッション作成）は「その後」ではなく B の前提
+  2. 売り手（`BillingMcpStack-dev`）は ap-northeast-1 に無い（決定32 の「削除済み」のまま）。クラウドの
+     Lambda から `localhost` の売り手には届かないので、実決済の検証には売り手の再 deploy が要る
+  3. Amplify のアプリ（`dei96o54khd9a`、`main`）は今回のセッション中にユーザーが作成し、job 1 が
+     BUILD / DEPLOY / VERIFY とも成功した。サービスロールには `AmplifyBackendDeployFullAccess` が付いている
+- 裏取りで分かった好材料: Agent のジョブは `bb-async-job` が共有 Lambda に SQS イベントで流す形
+  （`index.cdk.js` の `this.handler.addEventSource`）で、共有 Lambda のタイムアウトは `@aws-blocks/core` で
+  900 秒固定。`blocks.handler` の `addEnvironment` / `addToRolePolicy` がそのまま決済処理に届き、
+  `BUYER_TOOL_TIMEOUT_MS` 既定 600 秒（決定31 の注記）を包含する
+- ユーザー決定: C-1 を B に繰り上げる／売り手は私が再 deploy し検証後も置く／検証は sandbox → main の順／
+  設定は①`addEnvironment` で透過（AppSetting 化しない）／ブラウザ検証は Playwright + OTP 転記／PR は
+  A（記録と構成図）と B + C-1 の 2 本／main へ `PAYMENT_*` を入れる前に C-2（selfSignUp を閉じる）を入れる／
+  セッション既定は 60 分・1.00 USD
+- 途中でホスト済みアプリへ私が接続しようとして（Basic 認証で 401）ユーザーから「開発でホスト済みアプリに
+  アクセスする必要は無い。deploy が失敗していなければ進めるべき」と指摘を受けた。A の実地確認は行わず、
+  deploy 成功の事実のみを記録して開発に進めた
+
+### やったこと
+
+- DESIGN.md に決定34（実行時設定と IAM の配線）・35（PaymentSession のアプリ内作成）・36（selfSignUp を閉じる）を追記
+- TDD（赤 → 緑）で 2 モジュールを追加:
+  - `amplify/runtime-env.ts`: 合成時の `process.env` から許可リスト（`PAYMENT_MANAGER_ARN` /
+    `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` / `PAYMENTS_USER_ID` / `PAYMENT_MAX_AMOUNT` / `PAYMENT_PAY_TO` /
+    `BUYER_TOOL_TIMEOUT_MS` / `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`）を拾う。ブランチ deploy では
+    必須 3 変数の欠落で落とし、`BUYER_TOOL_TIMEOUT_MS` が 900 秒を超えても落とす
+  - `aws-blocks/payments/payment-session.ts`: KVStore に保存した記録が期限（60 秒の余裕を引く）内ならそれを
+    使い、無ければ `CreatePaymentSession` で切って `expiresAt` 付きで保存する `paymentSessionSource`。
+    `isSessionRejection` は `ResourceNotFoundException`、または message に session を含む
+    `ValidationException` / `ConflictException` をセッション起因とみなす（SDK の型からの推定。要実測）
+- `x402-payer.ts`: コンテキストの `paymentSessionId` を `paymentSession`（供給元）に替え、`ProcessPayment` が
+  セッション起因で拒否されたら `renew` して一度だけ再試行する。`clientToken` は再試行でも同じ値
+- `buyer-agent.ts`: KVStore `payment-session`（`ttl: true`）を追加し、ツールハンドラで供給元を組み立てる。
+  `PAYMENT_SESSION_ID` の読み取りを廃止
+- `amplify/blocks.ts`: `runtimeEnvironment` の結果を `addEnvironment` で写し、`bedrock-agentcore:CreatePaymentSession` /
+  `GetPaymentSession` / `ProcessPayment` を `addToRolePolicy`（リソースは `*`。合成結果では Blocks の
+  `OverflowPolicy`（ManagedPolicy）に載る）
+- `aws-blocks/index.ts`: `selfSignUp: process.env.BUYER_SELF_SIGNUP === 'true'`。`package.json` の `dev` /
+  `dev:server` / `test:e2e` に `cross-env BUYER_SELF_SIGNUP=true`
+- `scripts/payments-setup.ts` からセッション作成を外し、出力を `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` に
+- README（agent-app）・CLAUDE.md を更新
+- 確認: `npm run test`（74 件）/ `typecheck` / `npm run test:e2e`（ローカル。`BUYER_SELF_SIGNUP=true` で
+  サインアップを含む 3 件が通る）/ AWS 資格情報なしの合成（sandbox 姿勢で通る。ブランチ姿勢では
+  `PAYMENT_*` 無しで狙いどおり落ち、有りでは Lambda の環境変数と IAM が nested template に出る）
+
+### 判断・つまずき
+
+- IAM のリソースを `*` にしたのは、AgentCore Payments の各アクションが受け付けるリソース形式
+  （payment-manager / session / instrument の ARN）を確認していないため。sandbox の実測後に絞る
+- セッション起因の拒否をどの例外で受けるかは実測していない。判定に漏れても支払いが失敗するだけで
+  二重に払うことはない（`ProcessPayment` は署名前）
+- ローカルの mock 認証は `selfSignUp` を強制しない（`BUYER_SELF_SIGNUP` 無しでも e2e のサインアップが通る）。
+  強制するのは CDK（`selfSignUpEnabled`）と AWS ランタイムなので、決定36 の効き目はクラウドで確かめる
+- `selfSignUp` を「クラウドかどうか」で切り替えられないのは、合成時にはまだ `BLOCKS_STACK_NAME` が無いため。
+  明示の環境変数で開ける形にした
+
+### 残していること（次の手順）
+
+1. 売り手 `BillingMcpStack-dev` の再 deploy（メインのチェックアウトの `parameter.ts` / `server/.env` を写す。
+   無認証の公開エンドポイントなので実行前に確認）
+2. `npm run amplify:sandbox -- --once` に `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` を
+   付けて deploy し、実オンチェーン決済（テスト USDC）で決定35 の作成・使い回し・作り直しを実測 → 削除
+3. main のブランチ環境変数に同じ値を設定して再ビルドし、main で実決済
+4. `docs/architecture.drawio.png` の Amplify 構成への差し替え（PR-1）
+
 ## 2026-09-04: フェーズ⑤の土台 — Amplify Gen2 への deploy 経路（決定33）
 
 ### やったこと

@@ -3,12 +3,13 @@
 // HTML 本体は LLM のコンテキストに流さず KVStore に置き、ID だけを会話に返す
 // （決定10 の最終形＝ブラウザへは Realtime/取得系 API で渡す、を見据えた形）。
 //
-// 接続設定は環境変数で受ける（③④はローカル実行。⑤のデプロイ時に AppSetting 化を検討）:
+// 接続設定は環境変数で受ける（ローカルはシェル、クラウドは amplify/runtime-env.ts が Lambda に写す。決定34）:
 //   BILLING_MCP_URL       … 既定 http://localhost:8000/mcp
 //   BUYER_LOCAL_MODEL     … ローカル実行時の LLM。既定 bedrock（決定28）。canned で決定的な偽 LLM
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力
-//   PAYMENT_SESSION_ID    … 〃（セッションは有効期限つき。切れたら作り直す）
 //   PAYMENT_INSTRUMENT_ID … 〃
+//   PAYMENT_SESSION_MINUTES / PAYMENT_SESSION_MAX_USD
+//                         … アプリが切る PaymentSession の期限と支出上限（既定 60 分・1.00 USD。決定35）
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
 //   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 100000 = 0.1 USDC）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
@@ -29,6 +30,7 @@ import { z } from 'zod';
 import { buyHtml } from './payments/buy-html.js';
 import { extractPurchases } from './purchases.js';
 import { unresolvedPayments } from './repurchase-guard.js';
+import { paymentSessionSource } from './payments/payment-session.js';
 import { createAgentCorePayer } from './payments/x402-payer.js';
 import type { PaymentPolicy } from './payments/x402-types.js';
 
@@ -73,6 +75,16 @@ export function sellerInfoFromEnv(): { mcpUrl: string; resourceUri: string } {
   };
 }
 
+// アプリが切る PaymentSession の期限と支出上限（決定35）。不正な値は既定に戻す
+export function paymentSessionConfigFromEnv(): { expiryMinutes: number; maxSpendUsd: string } {
+  const minutes = Number(process.env.PAYMENT_SESSION_MINUTES ?? '60');
+  const usd = process.env.PAYMENT_SESSION_MAX_USD ?? '1.00';
+  return {
+    expiryMinutes: Number.isInteger(minutes) && minutes > 0 ? minutes : 60,
+    maxSpendUsd: /^\d+(\.\d{1,2})?$/.test(usd) ? usd : '1.00',
+  };
+}
+
 // ローカル実行時の LLM（決定28）。canned は「依頼文にツール名を含めると発火」する偽 LLM で、
 // e2e のような決定的な検証に使う。既定は Bedrock（AWS 資格情報が要る。無ければ canned に落ちる）
 export function localModelFromEnv(): ModelConfig | undefined {
@@ -105,6 +117,17 @@ export function createBuyerAgent(scope: Scope) {
       purchasedAt: z.number(),
       error: z.string().optional(),
     }),
+  });
+
+  // アプリが切った PaymentSession の記録（決定35）。ウォレットの持ち主 ID をキーにアプリ全体で 1 つ。
+  // 期限切れの記録は DynamoDB の TTL で消える
+  const paymentSessions = new KVStore(scope, 'payment-session', {
+    schema: z.object({
+      paymentSessionId: z.string(),
+      createdAt: z.number(),
+      expiresAt: z.number(),
+    }),
+    ttl: true,
   });
 
   // id は物理名の一部。内蔵 S3 バケットは CDK 直経路では <スタック名>-app-buyer-sn、Amplify 経路では
@@ -169,16 +192,19 @@ export function createBuyerAgent(scope: Scope) {
 
           // 購入 1 件の ID を先に採番し、KVStore のキーと ProcessPayment の冪等キーに共用する（決定30）
           const resultId = randomUUID();
-          // セッションは期限切れで作り直される前提なので、環境変数は呼び出しごとに読む
+          // 環境変数は呼び出しごとに読む（未設定なら支払いに進む前にここで止まる）
+          const userId = process.env.PAYMENTS_USER_ID ?? 'sample-user-1';
+          const paymentManagerArn = requireEnv('PAYMENT_MANAGER_ARN');
+          const paymentInstrumentId = requireEnv('PAYMENT_INSTRUMENT_ID');
+          // 有効な PaymentSession は KVStore の記録から使い回し、無ければここで切る（決定35）
+          const paymentSession = paymentSessionSource(paymentsClient, paymentSessions, {
+            userId,
+            paymentManagerArn,
+            ...paymentSessionConfigFromEnv(),
+          });
           const payer = createAgentCorePayer(
             paymentsClient,
-            {
-              userId: process.env.PAYMENTS_USER_ID ?? 'sample-user-1',
-              paymentManagerArn: requireEnv('PAYMENT_MANAGER_ARN'),
-              paymentSessionId: requireEnv('PAYMENT_SESSION_ID'),
-              paymentInstrumentId: requireEnv('PAYMENT_INSTRUMENT_ID'),
-              purchaseId: resultId,
-            },
+            { userId, paymentManagerArn, paymentSession, paymentInstrumentId, purchaseId: resultId },
             paymentPolicyFromEnv(),
           );
           const outcome = await buyHtml(sellerInfoFromEnv().mcpUrl, input.prompt, payer, {

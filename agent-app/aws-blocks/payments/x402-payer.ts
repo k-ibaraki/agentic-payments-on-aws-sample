@@ -7,6 +7,7 @@
 import { ProcessPaymentCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { DocumentType } from '@smithy/types';
 import { randomUUID } from 'node:crypto';
+import { isSessionRejection, type PaymentSessionSource } from './payment-session.js';
 import type {
   PaymentPayload,
   PaymentPolicy,
@@ -21,7 +22,8 @@ export interface X402Payer {
 export interface AgentCorePayerContext {
   userId: string;
   paymentManagerArn: string;
-  paymentSessionId: string;
+  /** 有効な PaymentSession の供給元（決定35）。拒否されたら一度だけ renew して再試行する */
+  paymentSession: PaymentSessionSource;
   paymentInstrumentId: string;
   /**
    * 購入単位の冪等キー（決定30）。指定すると ProcessPayment の clientToken にそのまま使う。
@@ -87,28 +89,44 @@ export function createAgentCorePayer(
       }
       const { accepted } = selection;
 
-      const response = (await client.send(
-        new ProcessPaymentCommand({
-          userId: context.userId,
-          paymentManagerArn: context.paymentManagerArn,
-          paymentSessionId: context.paymentSessionId,
-          paymentInstrumentId: context.paymentInstrumentId,
-          paymentType: 'CRYPTO_X402',
-          paymentInput: {
-            cryptoX402: {
-              version: String(required.x402Version),
-              // ProcessPayment には「受諾した支払い条件」を渡すと、署名済みの支払い証明が返る。
-              // zod 由来の Record<string, unknown> は SDK の DocumentType と構造互換だが
-              // 型上は合わないためキャストする（JSON 化可能な値のみ）
-              payload: accepted as DocumentType,
+      // 冪等キーは再試行でも同じ値にする（同じ購入の二重処理を Payments 側でも防ぐ）
+      const clientToken = context.purchaseId ?? randomUUID();
+      const process = (paymentSessionId: string) =>
+        client.send(
+          new ProcessPaymentCommand({
+            userId: context.userId,
+            paymentManagerArn: context.paymentManagerArn,
+            paymentSessionId,
+            paymentInstrumentId: context.paymentInstrumentId,
+            paymentType: 'CRYPTO_X402',
+            paymentInput: {
+              cryptoX402: {
+                version: String(required.x402Version),
+                // ProcessPayment には「受諾した支払い条件」を渡すと、署名済みの支払い証明が返る。
+                // zod 由来の Record<string, unknown> は SDK の DocumentType と構造互換だが
+                // 型上は合わないためキャストする（JSON 化可能な値のみ）
+                payload: accepted as DocumentType,
+              },
             },
-          },
-          clientToken: context.purchaseId ?? randomUUID(),
-        }),
-      )) as {
-        status?: string;
-        paymentOutput?: { cryptoX402?: { version?: string; payload?: unknown } };
-      };
+            clientToken,
+          }),
+        ) as Promise<{
+          status?: string;
+          paymentOutput?: { cryptoX402?: { version?: string; payload?: unknown } };
+        }>;
+
+      let response: Awaited<ReturnType<typeof process>>;
+      try {
+        response = await process(await context.paymentSession.acquire());
+      } catch (error) {
+        // セッションの失効・上限超過なら作り直して一度だけ再試行する。ProcessPayment の失敗は
+        // 署名前なので、再試行しても支払いが二重になることはない（決定35）
+        if (!isSessionRejection(error)) throw error;
+        console.warn(
+          `[x402-payer] PaymentSession が拒否されたため作り直します: ${(error as Error).name}: ${(error as Error).message}`,
+        );
+        response = await process(await context.paymentSession.renew());
+      }
 
       const output = response.paymentOutput?.cryptoX402;
       if (!output?.payload || typeof output.payload !== 'object') {
