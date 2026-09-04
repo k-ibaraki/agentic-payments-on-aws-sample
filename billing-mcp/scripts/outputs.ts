@@ -12,8 +12,9 @@ import { execFileSync } from "node:child_process";
 import { devParameter } from "../parameter";
 
 const stackName = process.argv[2] ?? `BillingMcpStack-${devParameter.envName}`;
-// env.region を省いたときは CDK が資格情報側のリージョンを使う。ここで東京に決め打ちすると
-// その場合だけ別のリージョンを見てしまうので、指定が無ければ AWS CLI の解決に任せる
+// parameter.ts では env.region を省くこともできる。省いた場合、CDK は資格情報側のリージョンへ deploy する。
+// このスクリプトだけが東京と決め打ちすると、deploy 先とは違うリージョンを見てしまう。
+// そのため region が無いときは --region を渡さず、AWS CLI に解決させる
 const region = devParameter.env?.region;
 
 let stack: { StackStatus?: string; Outputs?: { OutputKey?: string; OutputValue?: string }[] };
