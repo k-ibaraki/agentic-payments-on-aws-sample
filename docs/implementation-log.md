@@ -2,6 +2,40 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-05: 売り手の出力と、買い手への値の引き継ぎの整備
+
+PR #6 のマージ後に main へ `PAYMENT_*` を設定する段になり、必要な 3 つの値をその場で
+集められないことが分かった。売り手の Function URL は deploy 時のログにしか無く、しかも
+2026-09-04 の再 deploy で変わっていて、記録の値をコピーすると疎通しない状態だった。
+
+### やったこと
+
+- `billing-mcp` のスタックに出力を 2 つ足した（テスト先行）。`PayToAddress`（買い手の
+  `PAYMENT_PAY_TO` と突き合わせる）と `Price`（買い手の `PAYMENT_MAX_AMOUNT` が賄えるか確認する）。
+  `price` は省略可なので、省いたときは出力しない——サーバー側に既定額があり、スタックに書くと
+  定数が二重になるため（環境変数の渡し方と同じ扱い）。既存の出力の description にも、
+  対応する買い手側の環境変数名を書いた
+- `pnpm outputs` を追加した。deploy 済みスタックの出力を読み、`export BILLING_MCP_URL=...` の形まで
+  出す。スタック名は `parameter.ts` の `envName` から組み立てる（`billing-mcp.ts` と同じ）。
+  `parameter.ts` は gitignore なので、名前を決め打ちにすると `envName` を変えた人が別のスタックを見てしまう
+- README を整備した。`billing-mcp/README.md` に「デプロイ後に値を取り出す（買い手への引き継ぎ）」を新設し、
+  出力と買い手側の環境変数の対応表を置いた。`agent-app/README.md` の「縦串検証に必要な環境変数」も、
+  値の出どころ（買い手の `payments-setup.ts` か、売り手の `pnpm outputs` か）が分かる表に変えた
+
+### 判断
+
+- 出力を取るのに `@aws-sdk/client-cloudformation` を足すのはやめ、AWS CLI を呼ぶ形にした。
+  この一手のために依存を増やす価値は無く、AWS CLI は既に他の手順（Cognito の利用者作成など）で前提にしている
+- `exportName` は付けなかった。値は Amplify コンソールに人が貼るのであって `Fn::ImportValue` で
+  渡すわけではないため、付けても使い道が無い
+- 実装ログの古い Function URL は書き換えず、追記で「再 deploy で変わっている。現行値は出力を見よ」と補った。
+  ログはその時点の記録なので、後から実物に合わせて書き換えると記録の意味が失われる
+
+### つまずき
+
+- 現在 deploy されているスタックは今回の変更より前のものなので、`pnpm outputs` を実行しても
+  `PayToAddress` / `Price` はまだ出ない。次の deploy 以降に出る
+
 ## 2026-09-05: PR #6 のコードレビュー指摘の修正（決定37・U8）
 
 PR #6 に `pr-code-review` スキルで観点別レビューを行い、ユーザー判断で 11 件を修正した（GitHub には投稿せず、この場で修正）。
@@ -729,6 +763,9 @@ CI の agent-app ジョブ有効化。push はユーザー指示があるまで�
   ずれないよう DEFAULT_PRICE・parameter.sample.ts・.env.example・テスト期待額を揃えた
 - `cdk deploy` を実行し、無認証の Function URL を公開
   - エンドポイント: `https://aadgxm2l6a6n77igxsqrdeelja0ivxmo.lambda-url.ap-northeast-1.on.aws/mcp`
+    - **追記（2026-09-05）**: この URL は 2026-09-04 の再 deploy で変わっている。Function URL は
+      Lambda を作り直すたびに変わるので、当時の記録としてそのまま残す。現行値は
+      `BillingMcpStack-dev` の `McpEndpointUrl` 出力（`aws cloudformation describe-stacks`）で確かめること
   - ロググループ: `BillingMcpStack-dev-McpFunctionLogsDE22E4A3-qqKrCgVjY6cX`
 - **実オンチェーン決済を 2 回成功**（Base Sepolia、各 0.1 テスト USDC）
   - 1回目: [0x1f05b837…39221](https://sepolia.basescan.org/tx/0x1f05b837dd19da8a8c10928766afeaf05146a0efc9f313b2de958a8479939221)

@@ -190,14 +190,31 @@ export function createBillingMcpStack(
     authType: FunctionUrlAuthType.NONE,
   });
 
+  // 出力は「買い手（agent-app）に引き継ぐ値」を揃えることを狙う。deploy 後に
+  // describe-stacks だけで設定に必要な値が出るようにしておく（README「デプロイ後に値を取り出す」）
   new CfnOutput(stack, "McpEndpointUrl", {
     value: `${functionUrl.url}mcp`,
-    description: "MCP エンドポイント（無認証。認可は x402 の支払いのみ）",
+    description:
+      "MCP エンドポイント（無認証。認可は x402 の支払いのみ）。agent-app の BILLING_MCP_URL に設定する。作り直すと変わる",
   });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,
     description: "Lambda のロググループ名",
   });
+  new CfnOutput(stack, "PayToAddress", {
+    value: props.payToAddress,
+    description:
+      "売上の受取先。agent-app の PAYMENT_PAY_TO（任意。売り手アドレスを固定する）と突き合わせる",
+  });
+  // price は省略可で、省いた場合はサーバー側の既定額が効く。ここで既定値を書くと
+  // 定数が二重になるため出力しない（環境変数の渡し方と同じ扱い）
+  if (props.price) {
+    new CfnOutput(stack, "Price", {
+      value: props.price,
+      description:
+        "1 回あたりの価格。agent-app の PAYMENT_MAX_AMOUNT（USDC の最小単位。0.1 USDC = 100000）がこれを賄えるか確認する",
+    });
+  }
 
   return stack;
 }

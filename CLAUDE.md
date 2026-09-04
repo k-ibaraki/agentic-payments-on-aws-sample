@@ -64,6 +64,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - `pnpm test` / `pnpm typecheck` — CDK の Template テストと型検査
 - `pnpm synth` — 合成。`server` 側で先に `pnpm build:ui` が必要
 - `pnpm verify:bundle` — 合成したバンドルが実際に読み込めるかの検証（synth の後に実行）
+- `pnpm outputs` — deploy 済みスタックの出力を取り出す（読み取りのみ。`McpEndpointUrl` は作り直すたびに変わるので、
+  記録の値を使わずここで取り直す）
 - `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**
 
 ### agent-app/
