@@ -122,8 +122,9 @@
   2.267 → 2.268 に上がった。sandbox で検証した版から動かしたくないので採らず、HEAD の lock を戻して
   `npm install --package-lock-only` で不足分だけ補った（+1,556 行。`@aws-blocks/*` と `aws-cdk-lib` は据え置き）。
   `npm ci` で入れ直して test / typecheck を確認
-- 教訓: `@aws-blocks/blocks` が `"*"` である限り、lock の全体再生成は框架の版を黙って動かす。
-  lock を直すときは `--package-lock-only` で差分に留めること（版を上げるときは意図して行う）
+- 教訓: `@aws-blocks/blocks` の指定が `"*"` である限り、lock を全体再生成すると AWS Blocks 本体の版が
+  意図せず最新に上がる。lock を直すときは `--package-lock-only` で不足分の追加に留め、
+  AWS Blocks の版を上げるのは意図した作業として別に行う
 
 ## 2026-09-03: AWS 構成図の作成（docs/architecture.drawio.png）
 
