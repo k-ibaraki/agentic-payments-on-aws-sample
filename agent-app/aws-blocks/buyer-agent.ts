@@ -75,13 +75,27 @@ export function sellerInfoFromEnv(): { mcpUrl: string; resourceUri: string } {
   };
 }
 
-// アプリが切る PaymentSession の期限と支出上限（決定35）。不正な値は既定に戻す
+// アプリが切る PaymentSession の期限と支出上限（決定35）。
+// 書式は amplify/runtime-env.ts が合成の時点で落とすので、ここへ不正な値が来るのは
+// ローカル実行だけのはず。既定に戻して動かし続けるが、金額に直結するので黙って戻さない（決定37）
 export function paymentSessionConfigFromEnv(): { expiryMinutes: number; maxSpendUsd: string } {
-  const minutes = Number(process.env.PAYMENT_SESSION_MINUTES ?? '60');
-  const usd = process.env.PAYMENT_SESSION_MAX_USD ?? '1.00';
+  const rawMinutes = process.env.PAYMENT_SESSION_MINUTES;
+  const rawUsd = process.env.PAYMENT_SESSION_MAX_USD;
+  const minutes = Number(rawMinutes ?? '60');
+  const usd = rawUsd ?? '1.00';
+
+  const validMinutes = Number.isInteger(minutes) && minutes > 0;
+  const validUsd = /^\d+(\.\d{1,2})?$/.test(usd);
+  if (rawMinutes !== undefined && !validMinutes) {
+    console.warn(`[buyer-agent] PAYMENT_SESSION_MINUTES=${rawMinutes} は正の整数ではないため既定の 60 分を使います`);
+  }
+  if (rawUsd !== undefined && !validUsd) {
+    console.warn(`[buyer-agent] PAYMENT_SESSION_MAX_USD=${rawUsd} は金額の書式でないため既定の 1.00 USD を使います`);
+  }
+
   return {
-    expiryMinutes: Number.isInteger(minutes) && minutes > 0 ? minutes : 60,
-    maxSpendUsd: /^\d+(\.\d{1,2})?$/.test(usd) ? usd : '1.00',
+    expiryMinutes: validMinutes ? minutes : 60,
+    maxSpendUsd: validUsd ? usd : '1.00',
   };
 }
 

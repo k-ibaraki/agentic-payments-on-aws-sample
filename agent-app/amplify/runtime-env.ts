@@ -6,7 +6,10 @@
  * Lambda に写す。値はいずれも識別子や URL で秘密ではない。
  */
 
-/** buyer-agent.ts と payments/ が process.env から読む変数 */
+/**
+ * buyer-agent.ts が process.env から読み、payments/ へは引数で渡す変数。
+ * payments/ 自体は process.env を見ない（メモリ実装に差し替えてテストできるようにするため）
+ */
 export const RUNTIME_ENV_KEYS = [
   'PAYMENT_MANAGER_ARN',
   'PAYMENT_INSTRUMENT_ID',
@@ -57,6 +60,23 @@ export function runtimeEnvironment(
       throw new Error(
         `BUYER_TOOL_TIMEOUT_MS=${timeout} は共有 Lambda のタイムアウト（${SHARED_LAMBDA_TIMEOUT_MS} ms）を超えています`,
       );
+    }
+  }
+
+  // 支出上限と期限は金額に直結する。実行時に黙って既定へ戻すと「上限を上げたつもり」の
+  // 書式ミスに気づけないため、合成の時点で落とす（決定37）
+  const maxUsd = result.PAYMENT_SESSION_MAX_USD;
+  if (maxUsd !== undefined && !/^\d+(\.\d{1,2})?$/.test(maxUsd)) {
+    throw new Error(
+      `PAYMENT_SESSION_MAX_USD=${maxUsd} は金額の書式ではありません（例 1.00。小数は2桁まで、桁区切りは使えません）`,
+    );
+  }
+
+  const minutes = result.PAYMENT_SESSION_MINUTES;
+  if (minutes !== undefined) {
+    const value = Number(minutes);
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`PAYMENT_SESSION_MINUTES=${minutes} は正の整数ではありません`);
     }
   }
 

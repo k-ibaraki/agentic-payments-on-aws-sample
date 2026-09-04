@@ -131,18 +131,32 @@ describe('createAgentCorePayer', () => {
       expect(send.mock.calls[0][0].input.paymentSessionId).toBe('session-old');
       expect(send.mock.calls[1][0].input.paymentSessionId).toBe('session-new');
       expect(session.renew).toHaveBeenCalledTimes(1);
+      // 拒否された ID を渡す。別の購入が既に作り直していればそれに乗るため（決定35 追記）
+      expect(session.renew).toHaveBeenCalledWith('session-old');
+    });
+
+    // 決定37: 上限超過で作り直すと、上限に当たった支払いがその場で通り、上限が上限でなくなる
+    it('支出上限の超過では作り直さず、上限に当たったことを伝えて失敗する', async () => {
+      const send = vi.fn().mockRejectedValue(named('ConflictException', 'Session limit exceeded'));
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/支出上限/);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(session.renew).not.toHaveBeenCalled();
     });
 
     it('作り直した後も拒否されたら、それ以上は再試行せず失敗にする', async () => {
       const send = vi
         .fn()
         .mockRejectedValueOnce(named('ResourceNotFoundException', 'session not found'))
-        .mockRejectedValueOnce(named('ValidationException', 'session limit exceeded'));
+        .mockRejectedValueOnce(named('ValidationException', 'Payment session not found: session-new'));
       const session = sessionSource();
       const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
 
-      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/session limit exceeded/);
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/Payment session not found/);
       expect(send).toHaveBeenCalledTimes(2);
+      expect(session.renew).toHaveBeenCalledTimes(1);
     });
 
     it('セッション以外の失敗（権限など）は作り直さない', async () => {

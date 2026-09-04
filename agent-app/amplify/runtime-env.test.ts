@@ -47,4 +47,28 @@ describe('runtimeEnvironment', () => {
       runtimeEnvironment({ ...FULL, BUYER_TOOL_TIMEOUT_MS: 'abc' }, { sandboxMode: true }),
     ).toThrow(/BUYER_TOOL_TIMEOUT_MS/);
   });
+
+  // 支出上限は金額に直結する。実行時に黙って既定へ戻ると、上限を上げたつもりの設定ミスに
+  // 気づけないため、合成の時点で落とす
+  it('PAYMENT_SESSION_MAX_USD が金額の書式でなければ落とす', () => {
+    for (const bad of ['10.000', '1,000.00', '1.0.0', 'abc', '-1.00']) {
+      expect(() =>
+        runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MAX_USD: bad }, { sandboxMode: true }),
+      ).toThrow(/PAYMENT_SESSION_MAX_USD/);
+    }
+    expect(
+      runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MAX_USD: '10.50' }, { sandboxMode: true }),
+    ).toMatchObject({ PAYMENT_SESSION_MAX_USD: '10.50' });
+  });
+
+  it('PAYMENT_SESSION_MINUTES が正の整数でなければ落とす', () => {
+    for (const bad of ['0', '-5', '90.5', 'abc']) {
+      expect(() =>
+        runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MINUTES: bad }, { sandboxMode: true }),
+      ).toThrow(/PAYMENT_SESSION_MINUTES/);
+    }
+    expect(
+      runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MINUTES: '30' }, { sandboxMode: true }),
+    ).toMatchObject({ PAYMENT_SESSION_MINUTES: '30' });
+  });
 });

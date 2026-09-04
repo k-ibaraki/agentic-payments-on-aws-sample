@@ -4,6 +4,7 @@ import { CreatePaymentSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { describe, expect, it, vi } from 'vitest';
 import {
   isSessionRejection,
+  isSpendLimitRejection,
   paymentSessionSource,
   type PaymentSessionRecord,
   type PaymentSessionStore,
@@ -17,6 +18,8 @@ const CONFIG = {
   maxSpendUsd: '1.00',
 };
 
+// KVStore の最小実装。条件付き書き込み（ifNotExists / ifValueEquals）は DynamoDB と同じく
+// 満たさなければ ConditionalCheckFailedException で落とす
 function memoryStore(initial?: PaymentSessionRecord): PaymentSessionStore & {
   puts: Array<{ key: string; value: PaymentSessionRecord; options?: unknown }>;
 } {
@@ -30,10 +33,18 @@ function memoryStore(initial?: PaymentSessionRecord): PaymentSessionStore & {
     },
     async put(key, value, options) {
       puts.push({ key, value, options });
+      const current = data.get(key) ?? null;
+      const conflict = options?.ifNotExists
+        ? current !== null
+        : options?.ifValueEquals !== undefined
+          ? JSON.stringify(current) !== JSON.stringify(options.ifValueEquals)
+          : false;
+      if (conflict) {
+        throw Object.assign(new Error('条件を満たしませんでした'), {
+          name: 'ConditionalCheckFailedException',
+        });
+      }
       data.set(key, value);
-    },
-    async delete(key) {
-      data.delete(key);
     },
   };
 }
@@ -70,8 +81,11 @@ describe('paymentSessionSource', () => {
       createdAt: now,
       expiresAt: now + 60 * 60_000,
     });
-    // DynamoDB の TTL で期限切れの記録を消す
-    expect(store.puts[0]!.options).toEqual({ expiresAt: new Date(now + 60 * 60_000) });
+    // DynamoDB の TTL で期限切れの記録を消す。記録が無いところへの書き込みなので ifNotExists で守る
+    expect(store.puts[0]!.options).toEqual({
+      expiresAt: new Date(now + 60 * 60_000),
+      ifNotExists: true,
+    });
   });
 
   it('期限内の保存があればそれを使い、セッションを作らない', async () => {
@@ -101,7 +115,7 @@ describe('paymentSessionSource', () => {
     await expect(source.acquire()).resolves.toBe('session-fresh');
   });
 
-  it('renew は保存を捨てて新しいセッションを切る', async () => {
+  it('renew は拒否された記録を新しいセッションで置き換える', async () => {
     const now = Date.parse('2026-09-04T12:00:00Z');
     const store = memoryStore({
       paymentSessionId: 'session-rejected',
@@ -111,8 +125,42 @@ describe('paymentSessionSource', () => {
     const client = clientCreating(['session-renewed']);
     const source = paymentSessionSource(client, store, CONFIG, () => now);
 
-    await expect(source.renew()).resolves.toBe('session-renewed');
+    await expect(source.renew('session-rejected')).resolves.toBe('session-renewed');
     await expect(store.get(CONFIG.userId)).resolves.toMatchObject({ paymentSessionId: 'session-renewed' });
+  });
+
+  it('renew は別の呼び出しが既に作り直していれば、その有効なセッションに乗る', async () => {
+    const now = Date.parse('2026-09-04T12:00:00Z');
+    // 記録は既に別の購入が作り直した後のもの。自分が拒否された ID とは違う
+    const store = memoryStore({
+      paymentSessionId: 'session-by-other',
+      createdAt: now,
+      expiresAt: now + 60 * 60_000,
+    });
+    const client = clientCreating([]);
+    const source = paymentSessionSource(client, store, CONFIG, () => now);
+
+    await expect(source.renew('session-rejected')).resolves.toBe('session-by-other');
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it('記録の書き込みが競合しても、作ったセッションはそのまま使う', async () => {
+    const now = Date.parse('2026-09-04T12:00:00Z');
+    // 読んだ後・書く前に別の呼び出しが書き換えた状況。条件付き書き込みが必ず落ちる店を使う
+    const store: PaymentSessionStore = {
+      async get() {
+        return { paymentSessionId: 'session-rejected', createdAt: now, expiresAt: now + 60 * 60_000 };
+      },
+      async put() {
+        throw Object.assign(new Error('条件を満たしませんでした'), {
+          name: 'ConditionalCheckFailedException',
+        });
+      },
+    };
+    const client = clientCreating(['session-mine']);
+    const source = paymentSessionSource(client, store, CONFIG, () => now);
+
+    await expect(source.renew('session-rejected')).resolves.toBe('session-mine');
   });
 
   it('CreatePaymentSession が ID を返さなければ失敗にする', async () => {
@@ -134,13 +182,43 @@ describe('isSessionRejection', () => {
 
   it('ValidationException / ConflictException はメッセージに session を含むときだけ', () => {
     expect(isSessionRejection(named('ValidationException', 'Payment session has expired'))).toBe(true);
-    expect(isSessionRejection(named('ConflictException', 'Session limit exceeded'))).toBe(true);
+    expect(isSessionRejection(named('ValidationException', 'Payment session not found: abc'))).toBe(true);
     expect(isSessionRejection(named('ValidationException', 'invalid payload'))).toBe(false);
+  });
+
+  // 決定37: 上限超過で作り直すと、上限に当たった支払いがその場で通ってしまい上限が上限でなくなる
+  it('支出上限の超過は作り直しの対象にしない', () => {
+    expect(isSessionRejection(named('ConflictException', 'Session limit exceeded'))).toBe(false);
+    expect(isSessionRejection(named('ValidationException', 'session spend limit exceeded'))).toBe(false);
+    expect(isSessionRejection(named('ConflictException', 'insufficient session budget'))).toBe(false);
   });
 
   it('それ以外（AccessDenied や一般の Error）はセッション起因ではない', () => {
     expect(isSessionRejection(named('AccessDeniedException', 'session'))).toBe(false);
     expect(isSessionRejection(new Error('session'))).toBe(false);
     expect(isSessionRejection('session')).toBe(false);
+  });
+});
+
+describe('isSpendLimitRejection', () => {
+  const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+
+  it('上限や残高の不足を示す文言を拾う', () => {
+    expect(isSpendLimitRejection(named('ConflictException', 'Session limit exceeded'))).toBe(true);
+    expect(isSpendLimitRejection(named('ValidationException', 'maxSpendAmount exceeded'))).toBe(true);
+    expect(isSpendLimitRejection(named('ConflictException', 'insufficient funds'))).toBe(true);
+  });
+
+  it('失効や未検出は上限超過ではない', () => {
+    expect(isSpendLimitRejection(named('ValidationException', 'Payment session not found: abc'))).toBe(false);
+    expect(isSpendLimitRejection(named('ValidationException', 'Payment session has expired'))).toBe(false);
+    expect(isSpendLimitRejection('limit exceeded')).toBe(false);
+  });
+
+  // 一時的な失敗を「上限に達した」と誤って伝えないよう、業務ルールの拒否を表す例外に限る
+  it('スロットリングなど別種の例外は、文言が似ていても上限超過とみなさない', () => {
+    expect(isSpendLimitRejection(named('ThrottlingException', 'Rate exceeded'))).toBe(false);
+    expect(isSpendLimitRejection(named('ServiceQuotaExceededException', 'limit exceeded'))).toBe(false);
+    expect(isSpendLimitRejection(named('AccessDeniedException', 'insufficient permissions'))).toBe(false);
   });
 });

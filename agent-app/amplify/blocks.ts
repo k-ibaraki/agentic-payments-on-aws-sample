@@ -10,6 +10,7 @@
  *   AgentCore Payments の IAM を共有 Lambda のロールに付ける（決定34）
  */
 import type { BackendBase } from '@aws-amplify/backend';
+import { Stack } from 'aws-cdk-lib';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { createBlocksBackend } from '../aws-blocks/amplify.cdk.js';
 import { requireCorsAllowedOrigins } from './cors-origins.js';
@@ -41,8 +42,14 @@ export async function initBlocks(backend: BackendBase) {
   }
 
   // AgentCore Payments（ap-southeast-1。決定12）。Agent ブロックが付けるのは Bedrock のモデル呼び出しだけ
-  // なので、セッション作成と支払い（決定35）の権限をここで足す。リソースの形式は未確認のため * で始め、
-  // sandbox で確認してから絞る（決定34）
+  // なので、セッション作成と支払い（決定35）の権限をここで足す。リソースは AWS のリファレンスポリシーに
+  // 合わせて payment-manager 配下に絞る（リージョンは決定12 のクロスリージョン呼び出しのため * のまま）。
+  //
+  // 注意（決定37）: AWS の AgentCore Payments IAM ガイドは CreatePaymentSession と ProcessPayment を
+  // 同一ロールに置かないよう求めている（新しいセッションを切って上限を迂回できるため）。本アプリは
+  // 共有 Lambda 1 つがセッション作成と支払いの両方を実行するため、ロールを分けても同じ identity が
+  // 双方を握ることに変わりはなく、ロール分離では要件を満たせない。上限の担保はアプリ側で行う
+  // （x402-payer.ts が上限超過での作り直しを拒む）。構造での分離は U8 として残す
   blocks.handler.addToRolePolicy(
     new PolicyStatement({
       actions: [
@@ -50,7 +57,9 @@ export async function initBlocks(backend: BackendBase) {
         'bedrock-agentcore:GetPaymentSession',
         'bedrock-agentcore:ProcessPayment',
       ],
-      resources: ['*'],
+      resources: [
+        `arn:aws:bedrock-agentcore:*:${Stack.of(blocksStack).account}:payment-manager/*`,
+      ],
     }),
   );
 
