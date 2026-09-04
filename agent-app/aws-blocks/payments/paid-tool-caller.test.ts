@@ -99,6 +99,16 @@ describe('callPaidTool', () => {
     expect(callTool).toHaveBeenCalledTimes(2);
   });
 
+  it('再度の支払い要求に売り手の理由（error）があれば失敗の文面に含める（決済確定の失敗を切り分けるため）', async () => {
+    const rejected = paymentRequiredResult();
+    (rejected.structuredContent as Record<string, unknown>).error = 'settle failed: invalid_signature';
+    const callTool = vi.fn().mockResolvedValueOnce(paymentRequiredResult()).mockResolvedValueOnce(rejected);
+
+    await expect(
+      callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer()),
+    ).rejects.toThrow(/settle failed: invalid_signature/);
+  });
+
   it('支払い要求でない isError はそのまま返す（支払いはしない）', async () => {
     const failure = { isError: true, content: [{ type: 'text', text: 'boom' }] };
     const callTool = vi.fn().mockResolvedValue(failure);

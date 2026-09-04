@@ -105,8 +105,13 @@ export async function callPaidTool(
     });
   }
 
-  if (parsePaymentRequired(second)) {
-    throw new Error('支払い後の再呼び出しでも支払い要求が返りました（決済が受理されていません）');
+  const again = parsePaymentRequired(second);
+  if (again) {
+    // 売り手は upfront（決定21）で決済確定に失敗すると再び 402 を返す。このとき資金は動いていない
+    // （2026-09-04 の sandbox 実測: facilitator の settle 失敗）。理由は PaymentRequired.error に載る
+    throw new Error(
+      `支払い後の再呼び出しでも支払い要求が返りました（決済が受理されていません）: ${again.error ?? '理由なし'}`,
+    );
   }
 
   const meta = second._meta as Record<string, unknown> | undefined;

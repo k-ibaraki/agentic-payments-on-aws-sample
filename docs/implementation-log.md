@@ -64,12 +64,44 @@
 - `selfSignUp` を「クラウドかどうか」で切り替えられないのは、合成時にはまだ `BLOCKS_STACK_NAME` が無いため。
   明示の環境変数で開ける形にした
 
+### sandbox での実測（同日）
+
+- 売り手 `BillingMcpStack-dev` を再 deploy（メインのチェックアウトの `parameter.ts` / `server/.env` を写して
+  `pnpm cdk deploy`。78 秒）。Function URL の `initialize` が応答することを確認。検証後も置いてある
+- `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` を付けて `npm run amplify:sandbox -- --once`
+  （188 秒）。共有 Lambda に 3 変数と `CORS_ALLOWED_ORIGINS`（localhost）・`BLOCKS_CROSS_DOMAIN` が入り、ロールの
+  ポリシーに `bedrock-agentcore:CreatePaymentSession` / `GetPaymentSession` / `ProcessPayment`（Resource `*`）が
+  付き、ユーザープールは `AllowAdminCreateUserOnly: true`（決定36 が効いている）
+- クラウドの buyer API を認証込みで通す `scripts/buy-via-cloud.ts` を追加（`tsx -C browser` で Blocks の
+  クライアントを使い、`AuthState` を手で進める。OTP は `BUYER_OTP_FILE`、セッション Cookie は
+  `BUYER_COOKIE_FILE` で持ち回る）。利用者は `admin-create-user` で作成
+- つまずき: Node の `fetch` は `Set-Cookie` を保持しないため、サインインは通っても次の呼び出しが 401 になった。
+  スクリプト内で `globalThis.fetch` を包む最小の cookie jar を入れて解決（OTP の再送が 1 回増えた）
+- 1 回目の購入: Lambda のログに `[payment-session] PaymentSession を作成`（期限 60 分・上限 1.00 USD）が出て、
+  実オンチェーン決済（tx `0xbcc3071b…d414c85`）→ 生成 → KVStore 保存 → `getPurchasedHtml` で 5,296 バイトの HTML
+  まで通った。KVStore `payment-session` の表には `pk=sample-user-1` の記録が `ttl`（epoch 秒）付きで入り、
+  TTL は ENABLED
+
+- 2 回目の購入（使い回しの確認）: Lambda は新しいセッションを作らず（ログに作成行なし）`ProcessPayment` まで
+  進んだが、売り手が支払い証明を受け取った後に再び 402 を返し、ツールは
+  「支払い後の再呼び出しでも支払い要求が返りました」で失敗した。オンチェーン（Base Sepolia の USDC
+  `Transfer` ログ）ではウォレットからの送金は 1 回目の 1 件だけで、残高は 0.9 USDC。upfront（決定21）の
+  決済確定（settle）が facilitator 側で通らず、資金は動いていない。決定31 の防護どおり LLM は再試行せず報告した。
+  ただし AgentCore Payments 側のセッション残枠は 1.00 → 0.8 USD と、決済確定に失敗した分も署名時点で
+  差し引かれていた（`GetPaymentSession` の `availableLimits`）。売り手側の 402 の理由（`PaymentRequired.error`）が
+  買い手の記録に残らなかったので、`paid-tool-caller.ts` の失敗文面に含めるよう直した（テスト付き）
+- 3 回目の購入（作り直しの確認）: `DeletePaymentSession` で保存中のセッションを消してから発注。Lambda のログに
+  `[x402-payer] PaymentSession が拒否されたため作り直します: ValidationException: Payment session not found: …`
+  → `[payment-session] PaymentSession を作成` と出て、実オンチェーン決済（tx `0x5830a9b7…7111cd9`）→ 生成 →
+  896 バイトの HTML まで通った。セッション起因の拒否は **`ValidationException`（message に
+  `Payment session not found`）** で来ることが確定（決定35 の推定どおり `isSessionRejection` が拾った）
+- 検証後に `npm run amplify:sandbox:delete`。売り手 `BillingMcpStack-dev` は置いたまま（main での検証に使う）
+
 ### 残していること（次の手順）
 
-1. 売り手 `BillingMcpStack-dev` の再 deploy（メインのチェックアウトの `parameter.ts` / `server/.env` を写す。
+1. ~~売り手 `BillingMcpStack-dev` の再 deploy~~（済）（メインのチェックアウトの `parameter.ts` / `server/.env` を写す。
    無認証の公開エンドポイントなので実行前に確認）
-2. `npm run amplify:sandbox -- --once` に `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` を
-   付けて deploy し、実オンチェーン決済（テスト USDC）で決定35 の作成・使い回し・作り直しを実測 → 削除
+2. ~~sandbox で決定35 の作成・使い回し・作り直しを実測~~（済。上記）
 3. main のブランチ環境変数に同じ値を設定して再ビルドし、main で実決済
 4. `docs/architecture.drawio.png` の Amplify 構成への差し替え（PR-1）
 

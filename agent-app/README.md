@@ -63,6 +63,9 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   共有 Lambda の環境変数に写す（決定34。AppSetting 化はしない）。ブランチ deploy では
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
   欠けても通る（認証と API の疎通だけを見る用途）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける
+- クラウドの buyer API を認証込みで UI なしに通す縦串検証は `scripts/buy-via-cloud.ts`
+  （`BLOCKS_API_URL=<custom.blocks_api_url> BUYER_EMAIL=<Cognito の利用者> npx tsx -C browser scripts/buy-via-cloud.ts "指示"`。
+  OTP はプロンプトか `BUYER_OTP_FILE`、セッション Cookie は `BUYER_COOKIE_FILE` で持ち回る。実オンチェーン決済が発生する）
 - 自己サインアップは既定で閉じている（決定36）。クラウドの利用者は管理者が作る（Cognito コンソールで
   ユーザーを作成。サインインはメール OTP）。ローカルの `npm run dev` / `npm run test:e2e` は
   `BUYER_SELF_SIGNUP=true` を付けて開けている

@@ -87,4 +87,6 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - クラウドの実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は Amplify のブランチ環境変数（sandbox はシェル）から
   `amplify/runtime-env.ts` の許可リストで Lambda に写す（決定34）。ブランチ deploy では必須値が無いと合成で落ちる
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給
-- `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**
+- `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証（ローカルのエージェント）。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**
+- `BLOCKS_API_URL=... BUYER_EMAIL=... npx tsx -C browser scripts/buy-via-cloud.ts "指示"` — クラウドの buyer API を認証込みで通す縦串検証。
+  利用者は Cognito に管理者が作る。**実オンチェーン決済が発生する。実行前に確認を取ること**
