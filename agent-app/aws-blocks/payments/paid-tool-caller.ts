@@ -107,10 +107,14 @@ export async function callPaidTool(
 
   const again = parsePaymentRequired(second);
   if (again) {
-    // 売り手は upfront（決定21）で決済確定に失敗すると再び 402 を返す。このとき資金は動いていない
-    // （2026-09-04 の sandbox 実測: facilitator の settle 失敗）。理由は PaymentRequired.error に載る
-    throw new Error(
+    // 売り手は upfront（決定21）で決済確定に失敗すると再び 402 を返す。理由は PaymentRequired.error に載る。
+    // 2026-09-04 の sandbox 実測では facilitator の settle が失敗し、オンチェーンの送金は起きなかったが、
+    // 署名は売り手に渡っており PaymentSession の残枠は署名の時点で減っている（1.00 → 0.8 USD）。
+    // 売り手は署名の有効期限内なら後から決済を確定できるので、「資金が動いていないから無害」とは扱わない。
+    // PaidToolError にしてレシート（nonce）を残し、決定31 ③ の承認要求を働かせる
+    throw new PaidToolError(
       `支払い後の再呼び出しでも支払い要求が返りました（決済が受理されていません）: ${again.error ?? '理由なし'}`,
+      paymentPayload,
     );
   }
 
