@@ -111,6 +111,20 @@
 4. Amplify Hosting の外から `ampx pipeline-deploy` すると `AWS_APP_ID` が無く CORS 未設定のまま deploy
    される → `requireCorsAllowedOrigins`（テスト付き）で合成時に落とすようにし、README に明記
 
+### PR #5 の CI 失敗と修正（同日）
+
+- agent-app ジョブの `npm ci` が「lock と package.json が不整合」で失敗。`npm install --save-dev` で Amplify の
+  依存を足したときに書かれた `package-lock.json` に、`@aws-amplify/backend-cli` 配下が要求する
+  `zod@3.25.17` や `@aws-cdk/toolkit-lib` などが記録されていなかった（`node_modules` には入っていたため
+  手元のテストは通っていた。`npm ci --dry-run` で再現）
+- `npm install` の再実行では直らず、いったん `node_modules` と lock を消して作り直したところ、
+  `@aws-blocks/blocks` の指定が `"*"` のため AWS Blocks が 0.3.1 → 0.4.0 に、`aws-cdk-lib` が
+  2.267 → 2.268 に上がった。sandbox で検証した版から動かしたくないので採らず、HEAD の lock を戻して
+  `npm install --package-lock-only` で不足分だけ補った（+1,556 行。`@aws-blocks/*` と `aws-cdk-lib` は据え置き）。
+  `npm ci` で入れ直して test / typecheck を確認
+- 教訓: `@aws-blocks/blocks` が `"*"` である限り、lock の全体再生成は框架の版を黙って動かす。
+  lock を直すときは `--package-lock-only` で差分に留めること（版を上げるときは意図して行う）
+
 ## 2026-09-03: AWS 構成図の作成（docs/architecture.drawio.png）
 
 ### やったこと
