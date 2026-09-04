@@ -7,7 +7,8 @@
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "verify:bundle": "node scripts/verify-bundle.mjs",
-    "synth": "cdk synth --quiet"
+    "synth": "cdk synth --quiet",
+    "outputs": "tsx scripts/outputs.ts"
   },
   "devDependencies": {
     "@swc/core": "^1.15.0",

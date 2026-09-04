@@ -108,4 +108,22 @@ describe("billing-mcp スタック", () => {
       expect.arrayContaining(["McpEndpointUrl", "LogGroupName"]),
     );
   });
+
+  // 買い手（agent-app）が突き合わせる値。deploy 後に describe-stacks だけで揃うようにする
+  test("買い手に引き継ぐ受取先と価格を出力する", () => {
+    const outputs = template.findOutputs("*");
+    expect(Object.keys(outputs)).toEqual(
+      expect.arrayContaining(["PayToAddress", "Price"]),
+    );
+    expect(outputs.PayToAddress?.Value).toBe(parameter.payToAddress);
+    expect(outputs.Price?.Value).toBe("$0.01");
+  });
+
+  test("price を省いたら Price は出力しない（サーバー既定の額が効くため、値を二重に持たない）", () => {
+    const outputs = synth({ price: undefined }).findOutputs("*");
+    expect(Object.keys(outputs)).not.toContain("Price");
+    expect(Object.keys(outputs)).toEqual(
+      expect.arrayContaining(["McpEndpointUrl", "PayToAddress"]),
+    );
+  });
 });

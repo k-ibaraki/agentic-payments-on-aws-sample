@@ -64,13 +64,38 @@ pnpm cdk diff                         # 差分を確認してから
 pnpm cdk deploy
 ```
 
-デプロイすると `McpEndpointUrl`（無認証の公開 MCP エンドポイント）と `LogGroupName` が出力される。
 クラウド上の決済検証は接続先を差し替えるだけでよい。
 
 ```bash
 cd server
 MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
 ```
+
+## デプロイ後に値を取り出す（買い手への引き継ぎ）
+
+出力は「買い手（agent-app）に引き継ぐ値」を揃えてある。deploy 時のログを遡らなくても、
+いつでも次のコマンドで取り出せる（読み取りのみ。AWS CLI と有効な資格情報が要る）。
+
+```bash
+pnpm outputs            # parameter.ts の envName からスタック名を決める
+pnpm outputs -- <名前>  # スタック名を直接指定する
+```
+
+| 出力 | 中身 | 買い手側の対応 |
+| --- | --- | --- |
+| `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
+| `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
+| `Price` | 1 回あたりの価格（`parameter.ts` で設定した場合のみ） | agent-app の `PAYMENT_MAX_AMOUNT` がこれを賄えるか確認する |
+| `LogGroupName` | Lambda のロググループ名 | —（調査用）|
+
+`Price` は `parameter.ts` で `price` を省くと出力されない。その場合はサーバー側の既定額が効く
+（値を二重に持たないため、スタックからは出さない）。
+
+**`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
+その時点の出力を取り直すこと。
+
+`PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` は売り手ではなく買い手側の資源で、
+agent-app の `npx tsx scripts/payments-setup.ts` が出力する（agent-app/README.md 参照）。
 
 > **注意**: `pnpm cdk deploy` は無認証の公開エンドポイントをインターネットに出す。
 > 誰でも Bedrock を動かせる状態になるため、`reservedConcurrency` と価格の設定を確認してから実行すること。
