@@ -5,6 +5,8 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 
 ## 構成
 
+### アーキテクチャ
+
 - 雛形は `npx @aws-blocks/create-blocks-app --template auth-cognito` の生成物（決定13・15。npm 管理）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime（決定26）。
   Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する
@@ -16,12 +18,17 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   として sandbox iframe に描画する（決定29）
 - 二重支払いの防護（決定31）: 有料ツールの待ち時間は売り手上限に合わせ（`BUYER_TOOL_TIMEOUT_MS`）、
   決済後の失敗はレシートを残し、同じ会話に未解決の支払いがあれば次の購入は人の承認（interrupt）を要求する
+
+### 運用上の注意
+
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33。下記「クラウド deploy」）。
   CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名になる。
   Amplify のスタック名が長く、Agent 内蔵の S3 バケット名を 63 文字に収めるために短い。deploy 後は変えないこと
 
 ## コマンド
+
+### ローカル開発
 
 - `npm run dev` — ローカル起動（ポート 3000）。LLM はローカルでも Bedrock（`BUYER_LOCAL_MODEL=canned` で偽 LLM）。
   ブラウザからの依頼は**実オンチェーン決済（テスト USDC）が発生する**
@@ -34,6 +41,9 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - ウォレット作成後、出力される WalletHub の URL でエンドユーザーが署名権限を許可するまで
   支払いは通らない（許可には有効期限がある。決定27）
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（0.1 テスト USDC）が発生する**
+
+### Amplify sandbox
+
 - `npm run amplify:sandbox -- --once` — Amplify の sandbox へ deploy（AWS 資格情報が要る。課金あり）。
   `--once` を外すとファイル監視で再 deploy し続ける。`npm run amplify:sandbox:delete` で削除
 - `npm run build:amplify` — Amplify Hosting 用のフロントのビルド（`client.js` 生成 → `tsc` + `vite build` →
@@ -43,11 +53,16 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 
 ## クラウド deploy（Amplify Gen2。決定33）
 
+### スタック構成
+
 - `amplify/backend.ts` の `defineBackend({})` に `backend.createStack('blocks')` でネストスタックを切り、
   `amplify/blocks.ts` → `aws-blocks/amplify.cdk.ts` の `BlocksBackend.create()` で `aws-blocks/` を丸ごと載せる。
   Amplify 側の auth / data は使わない（認証は `AuthCognito` Block のまま）
 - Block を CDK 実装に解決させるため、`ampx` は必ず `NODE_OPTIONS="--conditions=cdk"` で動かす
   （無いと黙ってモック実装に解決され、空のインフラが合成される）。npm スクリプトと `amplify.yml` が付ける
+
+### ネットワークと命名
+
 - フロント（Amplify Hosting）と API（API Gateway）は別オリジン。ブラウザは `/.blocks-sandbox/config.json` の
   `apiUrl` で API の絶対 URL を知る。Lambda には `CORS_ALLOWED_ORIGINS`（`amplify/cors-origins.ts` が
   `AWS_APP_ID` から導く。独自ドメインは Amplify の環境変数 `CORS_ALLOWED_ORIGINS` で上書き。
@@ -58,6 +73,9 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
 - 名前の制約: S3 バケット名が `<Amplify のスタック名>-b-app-buyer-sn` になるため、ブランチ名は 7 文字以内
   （`main` / `develop` / `staging` は可）、sandbox の識別子（既定は OS ユーザー名。`--identifier` で指定）は 12 文字以内
+
+### 実行時設定と検証
+
 - 実決済に要る実行時設定（下記「縦串検証に必要な環境変数」の `PAYMENT_*` など）は、合成時の環境変数
   （Amplify コンソールのブランチ環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
   共有 Lambda の環境変数に写す（決定34。AppSetting 化はしない）。ブランチ deploy では

@@ -1,9 +1,24 @@
 # agentic-payments-on-aws-sample
 
-AWS 上で Agentic Payments（AI エージェントによる自律的な支払い）を試すサンプルモノレポ。
+AWS 上で Agentic Payments（AI エージェントが人の介在なしに自律的に支払いを行うこと）を試すサンプルモノレポ。
 
-x402 プロトコルで課金する MCP Apps（UI 配信付き MCP サーバー）を AWS Lambda（Function URL・無認証）上に立て、
-AWS Blocks 製のエージェント + Web アプリがそれを「支払いながら」利用する構成を目指す。
+x402（Coinbase 発の決済プロトコル。HTTP 402 Payment Required を土台に、リクエスト単位で支払いを検証・決済する）で課金する
+MCP Apps（Model Context Protocol の拡張仕様。ツールに画面〈HTML UI〉を添えて配信できるようにする）を
+AWS Lambda（Function URL・無認証）上に立て、AWS Blocks 製のエージェント + Web アプリが
+AgentCore Payments（Amazon Bedrock AgentCore のマネージドウォレット。エージェントに代わって決済を実行する）で
+「支払いながら」利用する構成を目指す。
+
+## ドキュメントの読み方
+
+はじめての方は次の順に読むとよい。
+
+1. この README — 全体像とステータス
+2. [billing-mcp/README.md](billing-mcp/README.md) / [agent-app/README.md](agent-app/README.md) — 各アプリの構成・セットアップ・コマンド
+3. [docs/DESIGN.md](docs/DESIGN.md) — 設計判断とその理由を番号付きで記録した決定録。本文中の「決定N」はここを指す
+4. [docs/implementation-log.md](docs/implementation-log.md) — 日付ごとの作業記録。判断に至った経緯の詳細
+
+AI エージェントへの作業指示は別系統で、[CLAUDE.md](CLAUDE.md)（プロジェクト全体の規約）と
+[agent-app/AGENTS.md](agent-app/AGENTS.md)（AWS Blocks 固有の規約。スキャフォールドの生成物）に分かれている。
 
 ## 構成
 
@@ -32,7 +47,7 @@ AWS Blocks 製のエージェント + Web アプリがそれを「支払いな�
 ## ステータス
 
 - billing-mcp: 実装・CDK・デプロイ・クラウド上での実オンチェーン決済検証まで完了（フェーズ②完了）。検証後にスタックは削除済みで、必要なときに `cdk deploy` で作り直す
-- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④進行中）。Amplify Gen2 への deploy 経路を用意し sandbox で疎通を確認（フェーズ⑤の土台。決定33）。`PAYMENT_*` の配線など⑤の残論点は決定28
+- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④進行中）。Amplify Gen2 への deploy 経路を用意し sandbox で疎通を確認（フェーズ⑤の土台。決定33）。実行時設定の Lambda 配線（決定34）・PaymentSession のアプリ内作成（決定35）・selfSignUp の閉鎖（決定36）は完了。レート制限と支払い主体の二重化（利用者ごとの instrument と WalletHub 委任）は未着手（決定28）
 
 経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。
 
@@ -41,3 +56,7 @@ AWS Blocks 製のエージェント + Web アプリがそれを「支払いな�
 - 機能の踏襲元: [k-ibaraki/html-creator-mcp-apps](https://github.com/k-ibaraki/html-creator-mcp-apps)
 - CDK の作り・開発規約の参考: [k-ibaraki/ops-agent-sample-on-aws](https://github.com/k-ibaraki/ops-agent-sample-on-aws)
 - AWS Blocks の参考: [k-ibaraki/handson-aws-blocks](https://github.com/k-ibaraki/handson-aws-blocks)
+
+## ライセンス
+
+[MIT](LICENSE)
