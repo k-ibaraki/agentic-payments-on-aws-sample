@@ -1,0 +1,296 @@
+/*
+ * 買い手の画面の見た目。Pico.css（classless）を土台に、淡いブルー系のテーマと、
+ * この画面だけの独自要素（吹き出し・購入一覧・イベントログ）を重ねる。
+ *
+ * TypeScript から import せず index.html の <link> で読むのは、tsconfig に
+ * vite/client の型が無く `import './style.css'` が `npm run build` の tsc で落ちるため。
+ */
+@import '@picocss/pico/css/pico.blue.min.css';
+
+/*
+ * ── テーマ ──────────────────────────────────────────────────
+ * 淡い色は「面」（背景・枠線・吹き出し）に使い、白抜き文字が載る primary は
+ * コントラスト比 4.5:1 を満たす濃さに留める（#2c6fb0 は白に対して 5.24:1）。
+ * セレクタが :root:not([data-theme=dark]) なのは、Pico が同じ強さで先に定義しており
+ * 素の :root では負けるため。
+ */
+:root:not([data-theme=dark]) {
+  --pico-primary: #2c6fb0;
+  --pico-primary-background: #2c6fb0;
+  --pico-primary-underline: rgba(44, 111, 176, 0.5);
+  --pico-primary-hover: #245c95;
+  --pico-primary-hover-background: #245c95;
+  --pico-primary-focus: rgba(44, 111, 176, 0.3);
+  --pico-primary-inverse: #fff;
+
+  --pico-background-color: #f2f7fc;
+  --pico-muted-border-color: #dbe4ef;
+  --pico-card-background-color: #fff;
+  --pico-card-border-color: #d8e4f0;
+  --pico-card-sectioning-background-color: var(--app-surface);
+  --pico-code-background-color: #eef4fb;
+  --pico-form-element-border-color: #c6d5e6;
+}
+
+/* 独自要素の淡いブルー。テーマ変数と同じ場所で持ち、値の散らばりを防ぐ */
+:root {
+  --app-tint: #e7f0fa;
+  --app-tint-border: #cfe0f1;
+  --app-surface: #f7fafd;
+  --app-neutral: #f1f3f6;
+  --app-warn: #fdf3e3;
+  --app-warn-border: #eed9b4;
+}
+
+/*
+ * Pico の .container は 1280px 以上で 1200px、1536px 以上で 1450px まで広がる。
+ * 会話の一行が長くなりすぎるので、旧実装と同じ 960px で頭打ちにする
+ */
+body > main {
+  max-width: 960px;
+  padding-block: 2.5rem;
+}
+
+/* Pico の既定は記事向けで大きい。画面の見出しとしては章題くらいの大きさに落とす */
+h1 {
+  font-size: 1.75rem;
+}
+
+article > header h2 {
+  margin-bottom: 0;
+  font-size: 1.2rem;
+}
+
+article h3 {
+  font-size: 1rem;
+}
+
+/* ── 補助テキスト ─────────────────────────────────────────── */
+.hint {
+  color: var(--pico-muted-color);
+  font-size: 0.85em;
+}
+
+.success {
+  color: #1a7f37;
+}
+
+.error {
+  color: #b3261e;
+}
+
+/* ── サインイン ───────────────────────────────────────────── */
+#auth-status {
+  margin-bottom: 0.75rem;
+  font-weight: bold;
+}
+
+/*
+ * Authenticator（@aws-blocks/auth-common）は自前で枠線付きのカードを inline style で描く。
+ * 外側の article と枠が二重になるので打ち消す。inline style が相手なので !important が要る。
+ * DOM が変わって当たらなくなっても、二重枠に戻るだけで機能には影響しない。
+ */
+[data-testid='authenticator'] {
+  max-width: none !important;
+}
+
+[data-testid='authenticator'] > div {
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.code-hint {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+  color: var(--pico-muted-color);
+  font-size: 0.85em;
+}
+
+#last-code-result {
+  font-family: var(--pico-font-family-monospace);
+}
+
+/* Pico の button は既定で width:100%。行の中に並べるボタンは幅を内容に戻す */
+#auth-container button,
+.code-hint button,
+.interrupt button,
+.purchase button {
+  width: auto;
+  margin-bottom: 0;
+}
+
+.code-hint button {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85em;
+}
+
+/* ── サインイン後にだけ見せる区画 ───────────────────────────── */
+.signed-in-only {
+  display: none;
+}
+
+.signed-in .signed-in-only {
+  display: block;
+}
+
+/* ── チャット ─────────────────────────────────────────────── */
+/* 空でも「ここが会話の場」と分かるよう、面として見せる */
+#chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 120px;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+}
+
+.msg {
+  max-width: 85%;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--pico-border-radius);
+  white-space: pre-wrap;
+  /* tx ハッシュや URL など空白を含まない長い文字列で吹き出しがはみ出さないように */
+  overflow-wrap: anywhere;
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: var(--app-tint);
+}
+
+.msg.assistant {
+  align-self: flex-start;
+  background: var(--app-neutral);
+}
+
+.msg.approval {
+  align-self: center;
+  background: var(--app-warn);
+  font-size: 0.85em;
+}
+
+.chat-input {
+  margin-bottom: 0.75rem;
+}
+
+/* role=group は子を等分に伸ばす。入力欄に幅を寄せ、ボタンは内容幅に留める */
+.chat-input button {
+  flex: 0 0 auto;
+}
+
+/* 人の承認待ち（決定31）。支払いが絡むので、注意を促す暖色のままにする */
+.interrupt {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--app-warn-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-warn);
+}
+
+#events {
+  min-height: 60px;
+  max-height: 180px;
+  padding: 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+  color: var(--pico-muted-color);
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.8em;
+}
+
+#events div {
+  padding: 1px 0;
+}
+
+/* ── 購入したページ ───────────────────────────────────────── */
+#purchases {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/*
+ * 一覧が空・取得失敗のときは JS が class の無い span を差し込む（`showMessage`）。
+ * 初期表示の `<span class="hint">` と見た目が変わらないよう、ここで揃える
+ * （`.error` の赤は class 側が勝つので、失敗の表示は赤のまま）
+ */
+#purchases > span {
+  color: var(--pico-muted-color);
+  font-size: 0.85em;
+}
+
+.purchase {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.9em;
+}
+
+.purchase code {
+  font-size: 0.85em;
+}
+
+/* 一覧の行なので、ボタンは主役にならない大きさに。幅を揃えて「表示 / 失敗」を縦に整列させる */
+.purchase button {
+  min-width: 5rem;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.9em;
+}
+
+#purchase-status {
+  margin-top: 0.5rem;
+}
+
+/* ── 狭い画面 ─────────────────────────────────────────────── */
+/* 横一列に並べている行は、収まらなければ折り返させる（ボタンが潰れるのを防ぐ） */
+.code-hint,
+.interrupt,
+.purchase {
+  flex-wrap: wrap;
+}
+
+/*
+ * role=group は枠線を連結する前提で折り返さない。狭い画面では連結をやめ、
+ * 入力欄を 1 行使い、ボタンをその下に並べる
+ */
+@media (max-width: 576px) {
+  .chat-input[role='group'] {
+    flex-wrap: wrap;
+    box-shadow: none;
+  }
+
+  .chat-input[role='group'] > * {
+    border-radius: var(--pico-border-radius);
+  }
+
+  .chat-input[role='group'] > #chat-text {
+    flex: 1 0 100%;
+    margin-bottom: 0.5rem;
+  }
+
+  .chat-input[role='group'] > button {
+    flex: 1 1 auto;
+  }
+
+  .chat-input[role='group'] > button:not(:first-child) {
+    margin-left: 0;
+  }
+}
+
+#preview-frame {
+  width: 100%;
+  height: 520px;
+  margin-top: 0.75rem;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: #fff;
+}

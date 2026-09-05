@@ -2,6 +2,57 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-05: 買い手の画面を Pico.css で整える（決定41）
+
+### 着工前の詰め（grill-me）で決めたこと
+
+- 「UI が分かりづらい」→ 直すのは **見た目だけ** 。デバッグ用の表示（直近コード・イベントログ・会話 ID）は
+  情報設計ごと現状維持、というユーザー選択。対象は `index.html` の 3 区画すべて
+- 手段は軽量な classless CSS フレームワーク（Pico.css）。読み込みは CDN 直読みではなく npm 依存
+  （他の依存の管理方針に合わせ、オフラインでも動くため）
+
+### やったこと
+
+- `@picocss/pico` 2.1.1 を追加し、`src/style.css` を新設（`pico.blue.min.css` を `@import` し、
+  淡いブルーのテーマ変数と独自要素のスタイルを重ねる）。`index.html` の `<style>` は撤去して `<link>` に
+- マークアップを Pico の作法に寄せた: `main.container` / `article` + `header` のカード / チャット入力は
+  `role="group"` 。`viewport` の meta を足し、見出しは `h2` のまま残して意味づけを壊さないようにした
+- ID とクラス名（`msg` `interrupt` `purchase` `signed-in-only` など `src/index.ts` が触るもの）は据え置き
+
+### つまずき・判断
+
+- Pico の `button` は既定で `width: 100%` 。行の中に並ぶボタン（サインイン・購入一覧・承認待ち・コード表示）は
+  `width: auto` に戻す必要があった。`role="group"` の中も子が等分に伸びるため、ボタンだけ `flex: 0 0 auto` に
+- テーマ変数を素の `:root` に置くと Pico の `:root:not([data-theme=dark])` に負けて効かない。同じ強さの
+  セレクタで後に書いて上書きした
+- 暗色環境で崩れるのを避けるため `data-theme="light"` を固定した。独自要素の吹き出し・ログが明色前提で、
+  自動切替に任せると白い箱に白い文字になる
+- Authenticator は自前のカード枠を inline style で描くため、`article` と枠が二重になる。inline style が
+  相手なので `!important` で打ち消した
+- 淡い色を primary に使うと白抜き文字とのコントラストが落ちるので、primary は `#2c6fb0`（白に対して 5.24:1）に
+  留め、淡さは背景・枠線・吹き出しで出した
+- 390px で 「直近のコードを表示」 のボタンが 3 行に潰れていた。横並びの行（`.code-hint` `.interrupt`
+  `.purchase`）に `flex-wrap: wrap` を足し、チャット入力は 576px 以下で枠線の連結をやめて入力欄を 1 行、
+  ボタンをその下に並べるようにした
+- セルフレビューで 3 件直した。①Pico の `.container` は 1280px 以上で 1200px、1536px 以上で 1450px まで
+  広がり、会話の一行が長くなりすぎるので `body > main` を旧実装と同じ 960px で頭打ちにした
+  ②`.msg` に `overflow-wrap: anywhere` を足した（tx ハッシュのような空白を含まない長い文字列で
+  吹き出しがはみ出す。旧実装から在る穴だが、`#chat-log` を面にして目立つようになった）
+  ③購入一覧の「まだありません」は、JS の再描画で class の無い span になり初期表示と見た目が変わるため、
+  `#purchases > span` を muted に揃えた（`.error` の赤は class 側が勝つ）
+- `npm install` が package-lock.json を書き換えて CI（`npm ci`）を落とした。手元の npm 11.16.0 は
+  `@aws-amplify/data-construct` に同梱（`inBundle: true`）された `@opentelemetry/*` の入れ子の記述 74 行を
+  「不要」と判断して削るが、CI の npm はそれを必要とし `Missing: @opentelemetry/core@2.0.0 from lock file` で
+  止まる。lockfile を origin/main の状態に戻し、`@picocss/pico` の 2 箇所（ルートの dependencies と
+  `node_modules/@picocss/pico`）だけを足す形にした。`rm -rf node_modules && npm ci` が通ることを手元で確認済み。
+  **教訓**: この lockfile は手元の npm と挙動が食い違うので、依存を足すときは `npm install` の結果を
+  そのまま信じず、差分が足したパッケージだけに収まっているかと `npm ci` が通るかを必ず見ること
+- 検証: `npm run typecheck` `npm run test`（98 件）`npm run build` が通ることを確認。見た目は `npm run dev` に
+  Playwright を当て、未サインイン・OTP 入力中・サインイン後を広い画面とモバイル幅（390px）で撮って確認した。
+  会話や購入が入った状態は一時的な確認用 HTML にサンプルの markup を置いて撮り、確認後に削除している
+  （実決済は発生させていない）
+- CSS だけの変更なので TDD のレッド → グリーンは踏んでいない（振る舞いを変えていないため既存テストが回帰の網）
+
 ## 2026-09-05: フェーズ⑤の完了 — main で実決済を通し、⑤の残論点 2 件を片づける（決定39・40）
 
 ### 着工前の詰め（grill-me）で崩れた前提

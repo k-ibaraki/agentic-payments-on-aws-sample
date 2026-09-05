@@ -35,6 +35,7 @@
     "@aws-blocks/blocks": "*",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@picocss/pico": "^2.1.1",
     "zod": "^4.3.0"
   },
   "devDependencies": {
