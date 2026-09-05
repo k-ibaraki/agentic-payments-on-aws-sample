@@ -1,11 +1,35 @@
-# agent-app（買い手: MCP を実行する Agent + 制御 Web アプリ）
+# agent-app（買い手）
 
-AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォレットで x402 支払いしながら実行するエージェントと、
-その制御・MCP Apps UI（iframe）表示を行う Web アプリ。
-「ブラウザから依頼 → エージェントが x402 で支払う → 生成されたページが画面に出る」までを、
-ローカルとクラウドの双方で確認済み。
+売り手（billing-mcp）の有料ツールを、ウォレットで支払いながら使うエージェントと、
+その操作・表示を行う Web アプリです。AWS Blocks で書いています。
 
-## 構成
+ブラウザで依頼を送ると、エージェントが有料ツールを使うと判断し、AgentCore Payments の
+ウォレットで x402 の支払いに署名して呼び出し、返ってきた HTML を画面に描きます。
+
+## まず動かす
+
+売り手が先に立っている必要があります（`billing-mcp/README.md`）。
+
+```bash
+npm install
+
+# 1. ウォレットを作る。.env に PAYMENTS_LINK_EMAIL と CDP の資格情報3点を置いてから
+#    （.env.example 参照。AWS Marketplace の Coinbase サブスクリプション加入が前提）
+npx tsx scripts/payments-setup.ts
+#    → 表示される WalletHub の URL を開いて署名権限を委ねる（人の操作。有効期限あり）
+
+# 2. テスト USDC を入れる
+npx tsx scripts/faucet.ts <アドレス>
+
+# 3. 起動する。1 の出力と売り手の URL を渡す
+PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localhost:8000/mcp \
+  npm run dev   # ポート 3000
+```
+
+ブラウザから依頼を送ると、実際にオンチェーンの決済（0.1 テスト USDC）が起きます。
+渡せる環境変数は下の「環境変数」にまとめてあります。
+
+## しくみ
 
 ### アーキテクチャ
 
@@ -37,12 +61,10 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 - `npm run test` / `npm run typecheck` — コミット前に必ず通すこと
 - `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。buyer API を認証込みで通す。実費は出ない。
   自前で起動するサーバーは偽 LLM、起動済みのサーバーを再利用する場合はその LLM 設定に従う）
-- `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。
-  `PAYMENTS_LINK_EMAIL` と CDP の資格情報3点を `.env` に置く。`.env.example` 参照。
-  前提として AWS Marketplace の Coinbase サブスクリプション加入が要る）
-- ウォレット作成後、出力される WalletHub の URL でエンドユーザーが署名権限を許可するまで
-  支払いは通らない（許可には有効期限がある）
-- `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証。**実オンチェーン決済（0.1 テスト USDC）が発生する**
+- `npx tsx scripts/payments-setup.ts` — ウォレットのセットアップ（冪等。上の「まず動かす」を参照）
+- `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給する
+- `npx tsx scripts/buy-via-agent.ts "指示"` — UI を通さずに一連の流れを検証する。
+  **実オンチェーン決済（0.1 テスト USDC）が発生する**
 
 ### Amplify sandbox
 
@@ -78,7 +100,7 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
 
 ### 実行時設定と検証
 
-- 実決済に要る実行時設定（下記「縦串検証に必要な環境変数」の `PAYMENT_*` など）は、合成時の環境変数
+- 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
   （Amplify コンソールのブランチ環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
   共有 Lambda の環境変数に写す（AppSetting 化はしない）。ブランチ deploy では
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
@@ -90,9 +112,9 @@ AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォ�
   ユーザーを作成。サインインはメール OTP）。ローカルの `npm run dev` / `npm run test:e2e` は
   `BUYER_SELF_SIGNUP=true` を付けて開けている
 
-## 縦串検証に必要な環境変数
+## 環境変数
 
-値の出どころは 2 つある（.env 等は使わず実行時に渡す）:
+実決済に要る値は `.env` に置かず、実行時に環境変数で渡します。出どころは 2 つです。
 
 | 値 | 出どころ | 取り出し方 |
 | --- | --- | --- |

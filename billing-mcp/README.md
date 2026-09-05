@@ -1,15 +1,37 @@
-# billing-mcp（売り手: x402 課金付き MCP Apps）
+# billing-mcp（売り手）
 
-x402 で課金する MCP Apps（HTML 生成ツール + プレビュー UI）を、CDK で **Lambda（Function URL・無認証）** にデプロイする。
-実装・デプロイ・クラウド上での実オンチェーン決済まで検証済み。
-使うには下記の手順でデプロイする（Function URL はデプロイし直すたびに変わる）。
+依頼を受けて HTML ページを作る有料ツールを、x402 で課金しながら提供する MCP サーバーです。
+支払いを済ませた相手にだけツールが開きます。生成物を表示するための画面（MCP Apps の UI）も
+同じサーバーが配ります。
 
-認証は掛けない。**「支払った者にツールが開く」を x402 が単独で担う**のがこのサンプルの主張であり、
-その手前に IAM や JWT のゲートを置くと認可の主体が支払いではなく権限付与になってしまうため。
-無認証で公開する代わりに、支払いフローは `upfront`（決済確定後に生成）とし、
-reserved concurrency と関数タイムアウトで瞬間的な流量に上限を掛ける（累積コストの上限にはならないため、必要なら AWS Budgets 等を併用する）。
+## まず動かす
 
-添付ファイルは最大1件。Function URL のリクエスト上限 6MB（base64 後）に収めるため。
+ローカルなら 3 コマンドで立ちます。
+
+```bash
+cd server
+cp .env.example .env   # PAY_TO_ADDRESS（売上の受取先）を自分のアドレスに変える
+pnpm install && pnpm dev   # http://localhost:8000/mcp
+
+pnpm buy:once          # 使い捨てウォレットで実際に買ってみる
+```
+
+`pnpm buy:once` は接続先を省くと `http://localhost:8000/mcp` に向きます。ポート 8000 に古いサーバーが
+残っていると、そちらに当たって紛らわしい 404 になるので、`lsof -nP -iTCP:8000 -sTCP:LISTEN` で
+確かめてから起動してください。
+
+クラウドへ出す手順は下の「デプロイ」にあります。
+
+## 認証を掛けない理由
+
+**「支払った者にツールが開く」を x402 が単独で担う**のがこのサンプルの主張です。
+その手前に IAM や JWT のゲートを置くと、認可の主体が支払いではなく権限付与になってしまいます。
+
+無認証で公開する代わりに、支払いフローは `upfront`（決済の確定後に生成）とし、
+reserved concurrency と関数タイムアウトで瞬間的な流量に上限を掛けています。
+これは累積コストの上限にはならないので、必要なら AWS Budgets 等を併用してください。
+
+添付ファイルは最大 1 件です。Function URL のリクエスト上限 6MB（base64 後）に収めるためです。
 
 ## 構成
 
@@ -32,20 +54,6 @@ billing-mcp/
 
 主要ライブラリ:
 `@modelcontextprotocol/sdk` 1.30 系 / `@modelcontextprotocol/ext-apps` 1.7 系 / `@x402/*`（v2） / `aws-cdk-lib`（aws-lambda-nodejs）
-
-## ローカル実行
-
-```bash
-cd server
-cp .env.example .env   # PAY_TO_ADDRESS 等を設定
-pnpm install
-pnpm dev               # http://localhost:8000/mcp
-pnpm buy:once          # 使い捨てウォレットで実決済テスト
-```
-
-`pnpm buy:once` は `MCP_SERVER_URL` を省略すると `http://localhost:8000/mcp` に向く。
-**ポート 8000 に古いサーバーが残っていると、そちらに当たって紛らわしい 404 になる**ので、
-`lsof -nP -iTCP:8000 -sTCP:LISTEN` で確認してから起動すること。
 
 ## デプロイ
 
