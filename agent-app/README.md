@@ -1,14 +1,14 @@
 # agent-app（買い手）
 
 売り手（billing-mcp）の有料ツールを、ウォレットで支払いながら使うエージェントと、
-その操作・表示を行う Web アプリです。AWS Blocks で書いています。
+その操作・表示を行う Web アプリ。AWS Blocks で書いている。
 
 ブラウザで依頼を送ると、エージェントが有料ツールを使うと判断し、AgentCore Payments の
-ウォレットで x402 の支払いに署名して呼び出し、返ってきた HTML を画面に描きます。
+ウォレットで x402 の支払いに署名して呼び出し、返ってきた HTML を画面に描く。
 
 ## まず動かす
 
-売り手が先に立っている必要があります（`billing-mcp/README.md`）。
+売り手を先に起動しておくこと（`billing-mcp/README.md`）。
 
 ```bash
 npm install
@@ -26,8 +26,8 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   npm run dev   # ポート 3000
 ```
 
-ブラウザから依頼を送ると、実際にオンチェーンの決済（0.1 テスト USDC）が起きます。
-渡せる環境変数は下の「環境変数」にまとめてあります。
+ブラウザから依頼を送ると、実際にオンチェーンの決済（0.1 テスト USDC）が起きる。
+渡せる環境変数は下の「環境変数」にまとめてある。
 
 ## しくみ
 
@@ -114,7 +114,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 
 ## 環境変数
 
-実決済に要る値は `.env` に置かず、実行時に環境変数で渡します。出どころは 2 つです。
+実決済に要る値は `.env` に置かず、実行時に環境変数で渡す。出どころは 2 つある。
 
 | 値 | 出どころ | 取り出し方 |
 | --- | --- | --- |
