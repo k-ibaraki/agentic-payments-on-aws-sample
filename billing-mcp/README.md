@@ -1,17 +1,16 @@
 # billing-mcp（売り手: x402 課金付き MCP Apps）
 
 x402 で課金する MCP Apps（HTML 生成ツール + プレビュー UI）を、CDK で **Lambda（Function URL・無認証）** にデプロイする。
-実装・デプロイ・クラウド上での実オンチェーン決済まで検証済み（DESIGN.md 決定18）。
+実装・デプロイ・クラウド上での実オンチェーン決済まで検証済み。
 スタックは main での検証に使うため、2026-09-04 の再 deploy 以降そのまま置いてある。
 消してしまった場合や作り直す場合は下記の手順による（Function URL は作り直すたびに変わる）。
 
 認証は掛けない。**「支払った者にツールが開く」を x402 が単独で担う**のがこのサンプルの主張であり、
-その手前に IAM や JWT のゲートを置くと認可の主体が支払いではなく権限付与になってしまうため（DESIGN.md 決定19）。
+その手前に IAM や JWT のゲートを置くと認可の主体が支払いではなく権限付与になってしまうため。
 無認証で公開する代わりに、支払いフローは `upfront`（決済確定後に生成）とし、
-reserved concurrency と関数タイムアウトで瞬間的な流量に上限を掛ける（DESIGN.md 決定21。
-累積コストの上限にはならないため、必要なら AWS Budgets 等を併用する）。
+reserved concurrency と関数タイムアウトで瞬間的な流量に上限を掛ける（累積コストの上限にはならないため、必要なら AWS Budgets 等を併用する）。
 
-添付ファイルは最大1件。Function URL のリクエスト上限 6MB（base64 後）に収めるため（DESIGN.md 決定23）。
+添付ファイルは最大1件。Function URL のリクエスト上限 6MB（base64 後）に収めるため。
 
 ## 構成
 
@@ -32,7 +31,7 @@ billing-mcp/
         └── ui/           # ui:// で配信する単一 HTML（vite singlefile）
 ```
 
-主要ライブラリ（DESIGN.md 決定3・5・7・19・22参照）:
+主要ライブラリ:
 `@modelcontextprotocol/sdk` 1.30 系 / `@modelcontextprotocol/ext-apps` 1.7 系 / `@x402/*`（v2） / `aws-cdk-lib`（aws-lambda-nodejs）
 
 ## ローカル実行
@@ -116,4 +115,13 @@ pnpm cdk destroy
 ## 採らなかった構成
 
 AgentCore Runtime・API Gateway・AgentCore + Cognito Identity Pool のゲスト資格情報を検討したうえで不採用にした。
-理由は DESIGN.md 決定19・20 に記録している。Lambda の制限（リクエスト 6MB / 実行 15分）を超えたくなった場合は ECS へ移す。
+
+- AgentCore Runtime: 匿名のインバウンドを許さず、認可は IAM（SigV4）か JWT の二択しかない。
+  IAM で絞ると認可の主体が支払いではなく権限付与になり、x402 で課金する意味が消える
+- API Gateway: HTTP API は統合タイムアウト 30 秒が上限。REST API も引き上げ不可の
+  アイドル接続タイムアウト 310 秒があり、生成の上限 570 秒が通らない
+- AgentCore + Cognito のゲスト資格情報: 実質の匿名公開はできるが、買い手に
+  「ゲスト資格情報の取得と SigV4 署名」という AWS 固有の作法を強いる。
+  事前の関係なしに HTTP と決済だけで買える、という x402 の売りが消える
+
+Lambda の制限（リクエスト 6MB / 実行 15分）を超えたくなった場合は ECS へ移す。
