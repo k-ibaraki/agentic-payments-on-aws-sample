@@ -14,7 +14,7 @@ AgentCore Payments（Amazon Bedrock AgentCore のマネージドウォレット�
 
 1. この README — 全体像とステータス
 2. [billing-mcp/README.md](billing-mcp/README.md) / [agent-app/README.md](agent-app/README.md) — 各アプリの構成・セットアップ・コマンド
-3. [docs/DESIGN.md](docs/DESIGN.md) — 設計判断とその理由を番号付きで記録した決定録。本文中の「決定N」はここを指す
+3. [docs/DESIGN.md](docs/DESIGN.md) — 設計判断とその理由を番号付きで記録した決定録。この README で触れている「決定N」はここを指す
 4. [docs/implementation-log.md](docs/implementation-log.md) — 日付ごとの作業記録。判断に至った経緯の詳細
 
 AI エージェントへの作業指示は別系統で、[CLAUDE.md](CLAUDE.md)（プロジェクト全体の規約）と
@@ -42,12 +42,12 @@ AI エージェントへの作業指示は別系統で、[CLAUDE.md](CLAUDE.md)�
               (ap-southeast-1・クロスリージョン)                │ ネットワーク: Base Sepolia（テスト USDC）
 ```
 
-なお agent-app のクラウド deploy 先は Amplify Gen2 + Amplify Hosting（決定33。`amplify.yml` と `agent-app/amplify/`）で、フェーズ⑤の土台として sandbox への deploy まで通している。agent-app の sandbox は検証のたびに作って消すため常設ではない。billing-mcp のスタックは main での検証に使うため、2026-09-04 の再 deploy 以降そのまま置いてある。
+なお agent-app のクラウド deploy 先は Amplify Gen2 + Amplify Hosting（決定33。`amplify.yml` と `agent-app/amplify/`）で、sandbox と main ブランチの両方へ deploy を通している（2026-09-04）。sandbox は検証のたびに作って消すため常設ではない。billing-mcp のスタックは main での検証に使うため、2026-09-04 の再 deploy 以降そのまま置いてある。
 
 ## ステータス
 
 - billing-mcp: 実装・CDK・デプロイ・クラウド上での実オンチェーン決済検証まで完了（フェーズ②完了）。スタックは main での検証に使うため現在も deploy したまま。作り直すと Function URL が変わるので、接続先は `billing-mcp/` の `pnpm outputs` で取り直す
-- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④〜⑤進行中）。Amplify Gen2 への deploy 経路を用意し、sandbox ではクラウドの買い手と売り手を結合して実オンチェーン決済・生成・取得まで確認（決定33・35）。実行時設定の Lambda 配線（決定34）・PaymentSession のアプリ内作成（決定35）・selfSignUp の閉鎖（決定36）は完了。main ブランチへの deploy と実決済、レート制限、支払い主体の二重化（利用者ごとの instrument と WalletHub 委任）は未着手（決定28）
+- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④〜⑤進行中）。Amplify Gen2 への deploy 経路を用意し、sandbox ではクラウドの買い手と売り手を結合して実オンチェーン決済・生成・取得まで確認（決定33・35）。実行時設定の Lambda 配線（決定34）・PaymentSession のアプリ内作成（決定35）・selfSignUp の閉鎖（決定36）は完了。main ブランチも Amplify Hosting へ deploy 済み（2026-09-04）。残るのは、main のブランチ環境変数への `PAYMENT_*` の設定と main での実決済、およびレート制限と支払い主体の二重化（利用者ごとの instrument と WalletHub 委任。決定28）
 
 経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。
 

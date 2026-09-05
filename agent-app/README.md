@@ -3,7 +3,8 @@
 AWS Blocks 製。billing-mcp の有料ツールを AgentCore Payments のウォレットで x402 支払いしながら実行するエージェントと、
 その制御・MCP Apps UI（iframe）表示を行う Web アプリ。フェーズ④〜⑤: ローカル売り手に対する縦串と、
 Amplify sandbox でのクラウド結合（買い手・売り手ともクラウド。実オンチェーン決済まで）を検証済み。
-main ブランチへの deploy と実決済は未実施。
+main ブランチも Amplify Hosting へ deploy 済み（2026-09-04）。main のブランチ環境変数への
+`PAYMENT_*` の設定と、main での実決済は未実施。
 
 ## 構成
 
