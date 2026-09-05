@@ -1,43 +1,105 @@
 # agentic-payments-on-aws-sample
 
-AWS 上で Agentic Payments（AI エージェントによる自律的な支払い）を試すサンプルモノレポ。
+ブラウザで「こんなページを作って」と頼むと、AI エージェントが有料のツールを見つけ出し、
+テスト USDC で支払いを済ませてから呼び出し、できあがったページを画面に表示します。
+支払いのたびに人が承認する必要はなく、最初にウォレットへ署名権限を委ねておくだけで済みます。
 
-x402 プロトコルで課金する MCP Apps（UI 配信付き MCP サーバー）を AWS Lambda（Function URL・無認証）上に立て、
-AWS Blocks 製のエージェント + Web アプリがそれを「支払いながら」利用する構成を目指す。
+AWS 上にこの一連の流れを組んだサンプルです。
+実際にやり取りされるのはテストネットのテスト USDC だけで、本物のお金は使いません。
 
-## 構成
+## 何が起きるか
 
-| ディレクトリ | 役割 | 主な技術 |
-| --- | --- | --- |
-| `billing-mcp/` | 売り手。x402 課金付き MCP Apps（HTML 生成ツール + プレビュー UI） | MCP SDK 1.30 系 + ext-apps / @x402/*（v2） / CDK / Lambda + Function URL |
-| `agent-app/` | 買い手。MCP を実行するエージェントと制御用 Web アプリ | AWS Blocks（Agent / AuthCognito ほか） |
-| `docs/` | 設計決定録（DESIGN.md）・実装記録（implementation-log.md）・AWS 構成図（architecture.drawio.png） | - |
+1 回の購入では、次の流れで処理が進みます。
 
-## アーキテクチャ（計画）
+1. ブラウザから依頼を送る
+2. 買い手のエージェント（Amazon Bedrock）が、売り手の `generate-html` という有料ツールを使うと決める
+3. 売り手が「0.1 テスト USDC を支払ってください」と返す
+4. エージェントがウォレットで支払いに署名し、支払い証明を添えてツールを呼び直す
+5. 売り手は決済の確定を見届けてから HTML を生成して返す
+6. ブラウザは、あらかじめ売り手から無料で受け取っていた空の画面に完成したページを流し込み、表示する
 
-構成図（AWS リソースと決済の経路）は [docs/architecture.drawio.png](docs/architecture.drawio.png) にある。draw.io で開けばそのまま編集できる。以下は経路だけを抜き出した略図。
+売り手のエンドポイントに認証はありません。
+決済を済ませた相手にだけツールを使わせることを、決済の仕組みだけで成立させるのがこのサンプルの狙いです。
 
-```
-[ブラウザ] ──(ui:// の空の表示器を取得・iframe 描画。無課金。生成物は含まない)──┐
-    │ 操作・Realtime 受信                                             │
-[agent-app: AWS Blocks / ap-northeast-1]                              ▼
-    └─ Agent (Lambda) ──(x402 支払い + 有料ツール実行)──> [billing-mcp: Lambda Function URL / ap-northeast-1]
-          │                                                    │ 認可は x402 の支払いのみ（無認証）
-          └─ ウォレット: AgentCore Payments                    │ 検証・決済: x402.org facilitator
-              (ap-southeast-1・クロスリージョン)                │ ネットワーク: Base Sepolia（テスト USDC）
-```
+![AWS 構成図](docs/architecture.drawio.png)
 
-なお agent-app のクラウド deploy 先は Amplify Gen2 + Amplify Hosting（決定33。`amplify.yml` と `agent-app/amplify/`）で、フェーズ⑤の土台として sandbox への deploy まで通している。上図の Lambda 一式は常設ではなく、検証後に削除している。billing-mcp も検証後にスタックを削除しており、必要なときに `cdk deploy` で作り直す。
+上の図は、買い手・売り手の両方をクラウドに置いたときの構成です。draw.io で開けばそのまま編集できます。
+
+## 使っている技術
+
+| | |
+| --- | --- |
+| x402 | HTTP の 402 Payment Required を土台にした決済プロトコル（Coinbase 発）。リクエスト 1 回ごとに支払いを検証・決済する。事前の契約も API キーも不要なのが特徴 |
+| MCP / MCP Apps | Model Context Protocol は、エージェントにツールを使わせるための規格。MCP Apps はその拡張で、ツールに画面（HTML UI）を添えて配布できる |
+| AgentCore Payments | Amazon Bedrock AgentCore のマネージドウォレット。エージェントに代わって支払いへ署名する。人は最初に一度、署名権限を委ねるだけでよい |
+| AWS Blocks | インフラをコードで定義するフレームワーク。買い手のアプリはこれを使って書いている |
+
+## 動かす
+
+### 前提
+
+- AWS アカウント。Amazon Bedrock のモデルを ap-northeast-1 で有効化しておく
+- AWS Marketplace で Coinbase のサブスクリプションに加入する（AgentCore Payments のコネクタに要る）
+- Coinbase Developer Platform の API キーとウォレットシークレット
+- Node 24 / pnpm 10（`mise install` で入る）
+
+### 手順
+
+売り手 → 買い手の順に起動します。詳しい手順と選択肢は、それぞれの README にあります。
+
+1. 売り手を起動する（[billing-mcp/README.md](billing-mcp/README.md)）
+
+   ローカルであれば `pnpm dev` を実行するだけで、ポート 8000 で起動します。
+   クラウドに出す場合は `pnpm cdk deploy` を使いますが、
+   これは無認証の公開エンドポイントをインターネット上に公開する操作です。
+   価格と同時実行数の設定を確認してから実行し、使い終わったら `pnpm cdk destroy` で閉じてください。
+
+2. 買い手のウォレットを用意する（[agent-app/README.md](agent-app/README.md)）
+
+   `npx tsx scripts/payments-setup.ts` を実行するとウォレットが作成され、WalletHub の URL が表示されます。
+   そのページを開いて署名権限を委任してください。人が操作するのはここだけで、委任には有効期限があります。
+   続けて `npx tsx scripts/faucet.ts <アドレス>` を実行し、テスト USDC を入金します。
+
+3. 買い手を起動する
+
+   `payments-setup.ts` の出力である `PAYMENT_*` と、売り手の URL（`BILLING_MCP_URL`）を環境変数として渡し、
+   `npm run dev` を実行します。ポート 3000 で起動します。
+
+> ブラウザから依頼を送ると、実際にオンチェーンの決済（テスト USDC）が発生します。
+
+## ディレクトリ構成
+
+| ディレクトリ | 中身 |
+| --- | --- |
+| `billing-mcp/` | 売り手。x402 で課金する MCP Apps サーバーと、それを Lambda へ載せる CDK |
+| `agent-app/` | 買い手。支払って MCP を実行するエージェントと、操作・表示を行う Web アプリ |
+| `docs/` | 設計決定録・実装記録・AWS 構成図 |
 
 ## ステータス
 
-- billing-mcp: 実装・CDK・デプロイ・クラウド上での実オンチェーン決済検証まで完了（フェーズ②完了）。検証後にスタックは削除済みで、必要なときに `cdk deploy` で作り直す
-- agent-app: ローカル売り手に対する縦串（依頼 → 実決済 → MCP Apps 描画）まで検証済み（フェーズ④進行中）。Amplify Gen2 への deploy 経路を用意し sandbox で疎通を確認（フェーズ⑤の土台。決定33）。`PAYMENT_*` の配線など⑤の残論点は決定28
+作りかけのサンプルで、動くところと手つかずのところがあります。
 
-経緯と判断はすべて `docs/DESIGN.md` と `docs/implementation-log.md` に残す方針。
+- 売り手: 実装・デプロイまで完了。クラウド上の Lambda に対して実オンチェーン決済が通ることを確認済み
+- 買い手: 上の「何が起きるか」を、ローカルとクラウドの双方で確認済み
+- 手つかず: 利用者ごとに支払い主体を分ける仕組み（現状はウォレット 1 つを全員で共有）、
+  および無認証で公開したときのレート制限
+
+## もっと詳しく
+
+このサンプルは、結論だけでなく判断に至った経緯を残すことも目的にしています。
+
+- [docs/DESIGN.md](docs/DESIGN.md) — 設計判断とその理由を番号付きで記録した決定録。
+  この README で触れている「決定N」はここを指します
+- [docs/implementation-log.md](docs/implementation-log.md) — 日付ごとの作業記録。
+  何につまずき、どう判断したかの詳細
+- [CLAUDE.md](CLAUDE.md) / [agent-app/AGENTS.md](agent-app/AGENTS.md) — AI エージェントに作業させるための規約
 
 ## 参考リポジトリ
 
 - 機能の踏襲元: [k-ibaraki/html-creator-mcp-apps](https://github.com/k-ibaraki/html-creator-mcp-apps)
 - CDK の作り・開発規約の参考: [k-ibaraki/ops-agent-sample-on-aws](https://github.com/k-ibaraki/ops-agent-sample-on-aws)
 - AWS Blocks の参考: [k-ibaraki/handson-aws-blocks](https://github.com/k-ibaraki/handson-aws-blocks)
+
+## ライセンス
+
+[MIT](LICENSE)
