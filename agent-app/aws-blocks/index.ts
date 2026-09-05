@@ -1,7 +1,10 @@
-import { ApiNamespace, Scope, AuthCognito } from '@aws-blocks/blocks';
+import { ApiNamespace, AuthCognito, KVStore, Scope } from '@aws-blocks/blocks';
+import { z } from 'zod';
 import { createBuyerAgent, purchasedHtmlKey, sellerInfoFromEnv } from './buyer-agent.js';
 import { assertOwnedConversation } from './conversation-guard.js';
+import { assertPendingInterrupts } from './interrupt-guard.js';
 import { extractPurchases } from './purchases.js';
+import { rateLimitConfigFromEnv, rateLimiter } from './rate-limit.js';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -42,6 +45,13 @@ const auth = new AuthCognito(scope, 'auth', {
 // 構成と配線は buyer-agent.ts 参照
 const { agent: buyerAgent, artifacts: purchasedHtml } = createBuyerAgent(scope);
 
+// 利用者ごとの依頼回数の記録（決定40）。キーは「利用者/時間窓の開始」で、窓が過ぎた記録は TTL で消える。
+// 支払いに至らない依頼でも Bedrock の費用は掛かるため、支出上限（決定37・@39@）とは別に数える
+const requestCounts = new KVStore(scope, 'request-count', {
+  schema: z.object({ count: z.number() }),
+  ttl: true,
+});
+
 // エージェントの会話 API。
 // Agent BB は conversationId / channelId の認可を呼び出し側に委ねる仕様なので、
 // 会話に触れる経路（読み書き・購読）はすべて listConversations で所有を検証する。
@@ -59,6 +69,14 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   async sendMessage(conversationId: string, message: string) {
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
+    // 依頼回数の上限（決定40）。所有検証の後・エージェント起動の前に数える。
+    // 環境変数は呼び出しごとに読む（他の実行時設定と同じ扱い）
+    const verdict = await rateLimiter(requestCounts, rateLimitConfigFromEnv()).consume(user.userSub);
+    if (!verdict.allowed) {
+      throw new Error(
+        `依頼が多すぎます。${verdict.retryAt.toISOString()} 以降にやり直してください（利用者ごとの回数上限。決定40）`,
+      );
+    }
     await buyerAgent.stream(message, {
       conversationId,
       channelId: conversationId,
@@ -76,6 +94,10 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   ) {
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
+    // resume は依頼回数に数えない。数えない代わりに、承認待ちが実在する応答だけを通す。
+    // Agent BB の resume() 自体はこれを検証せず、応答さえ渡せばジョブを投入するため、
+    // ここで塞がないと上限を通らずにモデルを起動できる経路が残る
+    assertPendingInterrupts(await buyerAgent.getPendingInterrupts(conversationId), responses);
     await buyerAgent.resume(conversationId, responses, {
       conversationId,
       userId: user.userSub,
