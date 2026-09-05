@@ -44,6 +44,13 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   として sandbox iframe に描画する
 - 二重支払いの防護: 有料ツールの待ち時間は売り手上限に合わせ（`BUYER_TOOL_TIMEOUT_MS`）、
   決済後の失敗はレシートを残し、同じ会話に未解決の支払いがあれば次の購入は人の承認（interrupt）を要求する
+- 支出の枠は利用者ごと: ウォレットはアプリで 1 つを共有するが、支払いの枠（PaymentSession）は
+  サインインした利用者ごとに切る。上限と期限は利用者 1 人あたりに効き、どのセッションで支払ったかを
+  たどれば誰の依頼だったかが分かる。利用者ごとにウォレットを分けないのは、ウォレットを増やすたびに
+  Coinbase 側の署名権限の委任を人が行う必要があり、サンプルの手順が重くなるため
+- 依頼の回数も利用者ごとに制限する: 支払いに至らない依頼でも LLM の費用はかかるので、
+  支出の枠とは別に依頼の回数を数える（`BUYER_RATE_LIMIT`）。承認への応答は回数に数えないが、
+  承認待ちが実在する応答だけを通すことで、承認の経路から回数制限を迂回できないようにしている
 
 ### 運用上の注意
 
@@ -101,7 +108,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 実行時設定と検証
 
 - 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
-  （Amplify コンソールのブランチ環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
+  （Amplify コンソールのアプリまたはブランチの環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
   共有 Lambda の環境変数に写す（AppSetting 化はしない）。ブランチ deploy では
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
   欠けても通る（認証と API の疎通だけを見る用途）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける
@@ -124,16 +131,23 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 `BILLING_MCP_URL` は売り手の Function URL で、**売り手を作り直すたびに変わる**。
 過去のログに載っている URL をそのまま使わず、`pnpm outputs` で取り直すこと。
 
-クラウド（Amplify のブランチ環境変数）では `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` /
-`BILLING_MCP_URL` の 3 つが必須で、無いと合成で落ちる。
+クラウド（Amplify の環境変数。アプリ単位・ブランチ単位のどちらでもビルドに届く）では
+`PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` の 3 つが必須で、無いと合成で落ちる。
+値は形まで見ずに「あるか」だけを見るので、コンソールへ貼るときは 1 行だけを正確に貼ること
+（`payments-setup.ts` の出力は表形式なので、3 行まとめて貼ると気づかないまま deploy が通ってしまう）。
 
 残りは既定値があり、必要なときだけ渡す:
 
 - `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`（アプリが購入時に切る PaymentSession の期限と
-  支出上限。既定 `60` / `1.00`。有効なセッションは KVStore `payment-session` に記録して使い回し、
-  失効・削除で拒否されたら一度だけ作り直す。支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため）
+  支出上限。既定 `60` / `1.00`。期限は 15 分以上でなければ AgentCore Payments 側が受け付けない。
+  値は**利用者 1 人・1 セッションあたり**で、セッションは利用者ごとに切る。有効なセッションは
+  KVStore `payment-session` に利用者をキーに記録して使い回し、失効・削除で拒否されたら一度だけ作り直す。
+  支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため）
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
 - `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `100000` = 0.1 USDC）・
   `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +
   テスト USDC に固定しており、売り手の提示がこれに合わなければ支払わない
 - `BUYER_TOOL_TIMEOUT_MS`（有料ツールの待ち時間。既定 `600000`。短くすると決済後に失敗して支払いだけが残る）
+- `BUYER_RATE_LIMIT` / `BUYER_RATE_WINDOW_MINUTES`（利用者 1 人が依頼を出せる回数と、その時間窓。
+  既定 `10` 回 / `60` 分。支払いに至らない依頼でも LLM の費用はかかるので、支出上限とは別に数える。
+  超えた依頼は受け付けず、窓が明ける時刻を返す。記録は KVStore `request-count`）

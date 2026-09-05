@@ -84,9 +84,11 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。`.env` に CDP 資格情報と
   `PAYMENTS_LINK_EMAIL`。AWS Marketplace の Coinbase サブスクリプション加入が前提。出力される WalletHub の
   URL で署名権限の委任を人間が行う。PaymentSession は作らず、アプリが購入時に切る。DESIGN.md 決定35）
+- 支払いの枠（PaymentSession）と依頼回数の上限は利用者（Cognito の sub）ごと（決定39・40）。
+  ウォレットは 1 つを共有したまま。`PAYMENT_SESSION_MINUTES` は 15 以上（AgentCore Payments の下限）
 - 自己サインアップは既定で閉じている（決定36）。`npm run dev` / `npm run test:e2e` は `BUYER_SELF_SIGNUP=true` を
   付けて開ける。クラウドの利用者は Cognito コンソールで作る
-- クラウドの実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は Amplify のブランチ環境変数（sandbox はシェル）から
+- クラウドの実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は Amplify の環境変数（アプリ単位・ブランチ単位のどちらでも可。sandbox はシェル）から
   `amplify/runtime-env.ts` の許可リストで Lambda に写す（決定34）。ブランチ deploy では必須値が無いと合成で落ちる
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証（ローカルのエージェント）。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**
