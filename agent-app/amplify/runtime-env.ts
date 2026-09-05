@@ -1,3 +1,5 @@
+import { MIN_SESSION_MINUTES } from '../aws-blocks/payments/payment-session.js';
+
 /**
  * 合成時の環境変数から、共有 Lambda に写す実行時設定を決める（決定34）。
  *
@@ -20,6 +22,8 @@ export const RUNTIME_ENV_KEYS = [
   'BUYER_TOOL_TIMEOUT_MS',
   'PAYMENT_SESSION_MINUTES',
   'PAYMENT_SESSION_MAX_USD',
+  'BUYER_RATE_LIMIT',
+  'BUYER_RATE_WINDOW_MINUTES',
 ] as const;
 
 /** ブランチ deploy で無ければ実決済が通らない変数。合成で落として気づけるようにする */
@@ -75,8 +79,20 @@ export function runtimeEnvironment(
   const minutes = result.PAYMENT_SESSION_MINUTES;
   if (minutes !== undefined) {
     const value = Number(minutes);
+    if (!Number.isInteger(value) || value < MIN_SESSION_MINUTES) {
+      throw new Error(
+        `PAYMENT_SESSION_MINUTES=${minutes} は ${MIN_SESSION_MINUTES} 以上の整数ではありません（CreatePaymentSession の下限）`,
+      );
+    }
+  }
+
+  // 依頼回数の上限（決定40）。回数と時間窓はどちらも正の整数
+  for (const key of ['BUYER_RATE_LIMIT', 'BUYER_RATE_WINDOW_MINUTES'] as const) {
+    const raw = result[key];
+    if (raw === undefined) continue;
+    const value = Number(raw);
     if (!Number.isInteger(value) || value <= 0) {
-      throw new Error(`PAYMENT_SESSION_MINUTES=${minutes} は正の整数ではありません`);
+      throw new Error(`${key}=${raw} は正の整数ではありません`);
     }
   }
 

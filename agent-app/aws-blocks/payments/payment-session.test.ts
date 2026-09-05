@@ -12,6 +12,8 @@ import {
 
 const CONFIG = {
   userId: 'sample-user-1',
+  // 利用者（Cognito の sub）。記録のキーにだけ使い、Payments 側の userId には使わない（決定39）
+  storeKey: 'user-sub-a',
   paymentManagerArn:
     'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/agenticpaymentssample-xxxx',
   expiryMinutes: 60,
@@ -24,7 +26,7 @@ function memoryStore(initial?: PaymentSessionRecord): PaymentSessionStore & {
   puts: Array<{ key: string; value: PaymentSessionRecord; options?: unknown }>;
 } {
   const data = new Map<string, PaymentSessionRecord>();
-  if (initial) data.set(CONFIG.userId, initial);
+  if (initial) data.set(CONFIG.storeKey, initial);
   const puts: Array<{ key: string; value: PaymentSessionRecord; options?: unknown }> = [];
   return {
     puts,
@@ -75,7 +77,7 @@ describe('paymentSessionSource', () => {
     });
     expect(input.clientToken).toBeTruthy();
     expect(store.puts).toHaveLength(1);
-    expect(store.puts[0]!.key).toBe(CONFIG.userId);
+    expect(store.puts[0]!.key).toBe(CONFIG.storeKey);
     expect(store.puts[0]!.value).toEqual({
       paymentSessionId: 'session-new',
       createdAt: now,
@@ -123,7 +125,7 @@ describe('paymentSessionSource', () => {
     const source = paymentSessionSource(client, store, CONFIG, () => now);
 
     await expect(source.renew('session-rejected')).resolves.toBe('session-renewed');
-    await expect(store.get(CONFIG.userId)).resolves.toMatchObject({ paymentSessionId: 'session-renewed' });
+    await expect(store.get(CONFIG.storeKey)).resolves.toMatchObject({ paymentSessionId: 'session-renewed' });
   });
 
   it('renew は別の呼び出しが既に作り直していれば、その有効なセッションに乗る', async () => {
@@ -188,6 +190,24 @@ describe('paymentSessionSource', () => {
     await expect(source.acquire()).resolves.toBe('session-fresh');
     expect(saved).toMatchObject({ paymentSessionId: 'session-fresh' });
     expect(options[0]).not.toHaveProperty('ifNotExists');
+  });
+
+  it('利用者が違えば同じウォレットでも別のセッションを切り、記録も別に持つ（決定39）', async () => {
+    const now = Date.parse('2026-09-05T12:00:00Z');
+    const store = memoryStore({
+      paymentSessionId: 'session-of-a',
+      createdAt: now,
+      expiresAt: now + 60 * 60_000,
+    });
+    const client = clientCreating(['session-of-b']);
+    const forB = paymentSessionSource(client, store, { ...CONFIG, storeKey: 'user-sub-b' }, () => now);
+
+    await expect(forB.acquire()).resolves.toBe('session-of-b');
+    // Payments 側の userId はウォレットの持ち主のまま
+    const input = (client.send.mock.calls[0]![0] as CreatePaymentSessionCommand).input;
+    expect(input.userId).toBe('sample-user-1');
+    expect(store.puts[0]!.key).toBe('user-sub-b');
+    await expect(store.get('user-sub-a')).resolves.toMatchObject({ paymentSessionId: 'session-of-a' });
   });
 
   it('CreatePaymentSession が ID を返さなければ失敗にする', async () => {

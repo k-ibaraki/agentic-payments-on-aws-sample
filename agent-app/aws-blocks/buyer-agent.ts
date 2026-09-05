@@ -9,7 +9,8 @@
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力
 //   PAYMENT_INSTRUMENT_ID … 〃
 //   PAYMENT_SESSION_MINUTES / PAYMENT_SESSION_MAX_USD
-//                         … アプリが切る PaymentSession の期限と支出上限（既定 60 分・1.00 USD。決定35）
+//                         … アプリが切る PaymentSession の期限と支出上限（既定 60 分・1.00 USD。決定35）。
+//                            利用者 1 人・1 セッションあたりの値（決定39）。期限の下限は 15 分
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
 //   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 100000 = 0.1 USDC）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
@@ -17,12 +18,12 @@
 //                            売り手は Bedrock 呼び出しを 570 秒で打ち切り、その外側の Lambda が 600 秒）。
 //                            MCP SDK の既定 60 秒のままだと決済後に諦めて成果物を失う（決定31）
 //
-// 支払い主体について（⑤への繰り越し。決定28）:
+// 支払い主体について（決定28 → 決定39）:
 //   ProcessPayment の userId はウォレット（PaymentInstrument）の持ち主 ID であり、
-//   ③では PAYMENTS_USER_ID の単一ウォレットを全利用者で共有している。一方、購入物の
-//   所有者は Cognito の userSub（ツールコンテキスト）で分けている。利用者ごとの支出上限や
-//   Payments 側の監査で「誰が支払わせたか」を追うには、利用者ごとに instrument と
-//   WalletHub 委任が要るため⑤で扱う（implementation-log「残していること」参照）
+//   PAYMENTS_USER_ID の単一ウォレットを全利用者で共有している。一方、購入物の所有者と
+//   PaymentSession（支出上限・期限の枠）は Cognito の userSub（ツールコンテキスト）で分けている。
+//   利用者ごとの上限はセッション単位で効き、「誰が支払わせたか」はセッション ID と userSub の
+//   対応（KVStore の記録とログ）で追う。利用者ごとのウォレット（instrument と WalletHub 委任）は採らない
 import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
 import { Agent, BedrockModels, KVStore, type ModelConfig, type Scope } from '@aws-blocks/blocks';
 import { randomUUID } from 'node:crypto';
@@ -30,7 +31,7 @@ import { z } from 'zod';
 import { buyHtml } from './payments/buy-html.js';
 import { extractPurchases } from './purchases.js';
 import { unresolvedPayments } from './repurchase-guard.js';
-import { paymentSessionSource } from './payments/payment-session.js';
+import { MIN_SESSION_MINUTES, paymentSessionSource } from './payments/payment-session.js';
 import { createAgentCorePayer } from './payments/x402-payer.js';
 import type { PaymentPolicy } from './payments/x402-types.js';
 
@@ -84,10 +85,10 @@ export function paymentSessionConfigFromEnv(): { expiryMinutes: number; maxSpend
   const minutes = Number(rawMinutes ?? '60');
   const usd = rawUsd ?? '1.00';
 
-  const validMinutes = Number.isInteger(minutes) && minutes > 0;
+  const validMinutes = Number.isInteger(minutes) && minutes >= MIN_SESSION_MINUTES;
   const validUsd = /^\d+(\.\d{1,2})?$/.test(usd);
   if (rawMinutes !== undefined && !validMinutes) {
-    console.warn(`[buyer-agent] PAYMENT_SESSION_MINUTES=${rawMinutes} は正の整数ではないため既定の 60 分を使います`);
+    console.warn(`[buyer-agent] PAYMENT_SESSION_MINUTES=${rawMinutes} は ${MIN_SESSION_MINUTES} 以上の整数ではないため既定の 60 分を使います`);
   }
   if (rawUsd !== undefined && !validUsd) {
     console.warn(`[buyer-agent] PAYMENT_SESSION_MAX_USD=${rawUsd} は金額の書式でないため既定の 1.00 USD を使います`);
@@ -133,7 +134,7 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  // アプリが切った PaymentSession の記録（決定35）。ウォレットの持ち主 ID をキーにアプリ全体で 1 つ。
+  // アプリが切った PaymentSession の記録（決定35）。利用者（Cognito の sub）をキーに利用者ごとに 1 つ（決定39）。
   // 期限切れの記録は DynamoDB の TTL で消える
   const paymentSessions = new KVStore(scope, 'payment-session', {
     schema: z.object({
@@ -210,9 +211,11 @@ export function createBuyerAgent(scope: Scope) {
           const userId = process.env.PAYMENTS_USER_ID ?? 'sample-user-1';
           const paymentManagerArn = requireEnv('PAYMENT_MANAGER_ARN');
           const paymentInstrumentId = requireEnv('PAYMENT_INSTRUMENT_ID');
-          // 有効な PaymentSession は KVStore の記録から使い回し、無ければここで切る（決定35）
+          // 有効な PaymentSession は KVStore の記録から使い回し、無ければここで切る（決定35）。
+          // 記録と枠は利用者（Cognito の sub）ごと。ウォレットは共有のまま（決定39）
           const paymentSession = paymentSessionSource(paymentsClient, paymentSessions, {
             userId,
+            storeKey: context.userId,
             paymentManagerArn,
             ...paymentSessionConfigFromEnv(),
           });

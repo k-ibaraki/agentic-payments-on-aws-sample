@@ -1,7 +1,8 @@
 // PaymentSession をアプリ側で作って使い回す（決定35）。
 // セッションは AgentCore Payments の時限・支出上限つきの枠で、60 分ほどで失効する。
 // 手渡しの PAYMENT_SESSION_ID に頼らず、有効なものが無ければツールハンドラがここで切る。
-// 保存先は KVStore（ウォレットの持ち主 ID をキーにアプリ全体で 1 つ）。
+// 保存先は KVStore。キーは利用者（Cognito の sub）で、利用者ごとに 1 つのセッションを持つ（決定39）。
+// Payments 側の userId はウォレットの持ち主のまま（セッションは同じ持ち主の下に複数持てる。実測済み）。
 import { CreatePaymentSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { randomUUID } from 'node:crypto';
 
@@ -29,8 +30,10 @@ export interface PaymentSessionStore {
 }
 
 export interface PaymentSessionConfig {
-  /** ウォレット（PaymentInstrument）の持ち主 ID。保存のキーにも使う */
+  /** ウォレット（PaymentInstrument）の持ち主 ID。Payments 側の userId */
   userId: string;
+  /** 記録のキー。利用者（Cognito の sub）。上限と期限はこの単位で効く（決定39） */
+  storeKey: string;
   paymentManagerArn: string;
   expiryMinutes: number;
   /** セッションあたりの支出上限（USD。"1.00" のような文字列） */
@@ -41,7 +44,7 @@ export interface PaymentSessionConfig {
 export interface PaymentSessionSource {
   acquire(): Promise<string>;
   /**
-   * 拒否された ID を渡して作り直す。記録はウォレットの持ち主単位でアプリ全体に 1 つなので、
+   * 拒否された ID を渡して作り直す。記録は利用者単位に 1 つなので、同じ利用者の
    * 別の購入が既に作り直していればその有効なセッションに乗る（作り直しの重複を避ける）
    */
   renew(rejectedSessionId: string): Promise<string>;
@@ -50,6 +53,14 @@ export interface PaymentSessionSource {
 interface AwsClientLike {
   send(command: unknown): Promise<unknown>;
 }
+
+/**
+ * CreatePaymentSession の expiryTimeInMinutes の下限。
+ * 2026-09-05 に 5 分で ValidationException が返ることを実測して確かめた。
+ * 合成時の検証（amplify/runtime-env.ts）と実行時の既定への差し戻し（buyer-agent.ts）が
+ * 同じ値を見るよう、API の制約を持つこのモジュールに置く
+ */
+export const MIN_SESSION_MINUTES = 15;
 
 /** 期限のこれだけ手前からは使わない（署名から決済までの間に失効させないため） */
 const SAFETY_MARGIN_MS = 60_000;
@@ -93,7 +104,7 @@ export function paymentSessionSource(
     const expiresAt = createdAt + config.expiryMinutes * 60_000;
     try {
       await store.put(
-        config.userId,
+        config.storeKey,
         { paymentSessionId, createdAt, expiresAt },
         {
           expiresAt: new Date(expiresAt),
@@ -101,13 +112,13 @@ export function paymentSessionSource(
         },
       );
       console.log(
-        `[payment-session] PaymentSession を作成 id=${paymentSessionId} 期限=${new Date(expiresAt).toISOString()} 上限=${config.maxSpendUsd} USD`,
+        `[payment-session] PaymentSession を作成 利用者=${config.storeKey} id=${paymentSessionId} 期限=${new Date(expiresAt).toISOString()} 上限=${config.maxSpendUsd} USD`,
       );
     } catch (error) {
       if (!(error instanceof Error) || error.name !== CONDITIONAL_CHECK_FAILED) throw error;
       // 別の購入が先に書いていた。相手の記録はそのままにし、作ったセッションはこの購入にだけ使う
       console.warn(
-        `[payment-session] PaymentSession を作成したが記録は別の購入に書き換えられていた id=${paymentSessionId} 上限=${config.maxSpendUsd} USD。保存はせず、この購入にだけ使う`,
+        `[payment-session] PaymentSession を作成したが記録は別の購入に書き換えられていた 利用者=${config.storeKey} id=${paymentSessionId} 上限=${config.maxSpendUsd} USD。保存はせず、この購入にだけ使う`,
       );
     }
     return paymentSessionId;
@@ -115,12 +126,12 @@ export function paymentSessionSource(
 
   return {
     async acquire() {
-      const saved = await store.get(config.userId);
+      const saved = await store.get(config.storeKey);
       if (usable(saved)) return saved.paymentSessionId;
       return create(saved);
     },
     async renew(rejectedSessionId) {
-      const saved = await store.get(config.userId);
+      const saved = await store.get(config.storeKey);
       // 別の購入が既に作り直していれば、その有効なセッションに乗る
       if (usable(saved) && saved.paymentSessionId !== rejectedSessionId) {
         return saved.paymentSessionId;

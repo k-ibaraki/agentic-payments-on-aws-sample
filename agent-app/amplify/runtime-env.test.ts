@@ -61,8 +61,8 @@ describe('runtimeEnvironment', () => {
     ).toMatchObject({ PAYMENT_SESSION_MAX_USD: '10.50' });
   });
 
-  it('PAYMENT_SESSION_MINUTES が正の整数でなければ落とす', () => {
-    for (const bad of ['0', '-5', '90.5', 'abc']) {
+  it('PAYMENT_SESSION_MINUTES が 15 以上の整数でなければ落とす（API の下限。決定39 の実測）', () => {
+    for (const bad of ['0', '-5', '14', '90.5', 'abc']) {
       expect(() =>
         runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MINUTES: bad }, { sandboxMode: true }),
       ).toThrow(/PAYMENT_SESSION_MINUTES/);
@@ -70,5 +70,21 @@ describe('runtimeEnvironment', () => {
     expect(
       runtimeEnvironment({ ...FULL, PAYMENT_SESSION_MINUTES: '30' }, { sandboxMode: true }),
     ).toMatchObject({ PAYMENT_SESSION_MINUTES: '30' });
+  });
+  it('BUYER_RATE_LIMIT / BUYER_RATE_WINDOW_MINUTES を写し、正の整数でなければ落とす（決定40）', () => {
+    expect(
+      runtimeEnvironment(
+        { ...FULL, BUYER_RATE_LIMIT: '20', BUYER_RATE_WINDOW_MINUTES: '30' },
+        { sandboxMode: true },
+      ),
+    ).toMatchObject({ BUYER_RATE_LIMIT: '20', BUYER_RATE_WINDOW_MINUTES: '30' });
+    for (const bad of ['0', '-1', '1.5', 'abc']) {
+      expect(() =>
+        runtimeEnvironment({ ...FULL, BUYER_RATE_LIMIT: bad }, { sandboxMode: true }),
+      ).toThrow(/BUYER_RATE_LIMIT/);
+      expect(() =>
+        runtimeEnvironment({ ...FULL, BUYER_RATE_WINDOW_MINUTES: bad }, { sandboxMode: true }),
+      ).toThrow(/BUYER_RATE_WINDOW_MINUTES/);
+    }
   });
 });
