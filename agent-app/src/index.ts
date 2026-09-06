@@ -113,7 +113,7 @@ function renderMessages(messages: ChatMessage[]) {
     bubbles.delete(id);
   }
   messages.forEach((message, i) => updateBubble(message, i !== streamingIndex));
-  layoutChatLog();
+  layoutChatLog(messages.map((m) => m.id));
 }
 
 // 中身が変わったときだけ書き込む（毎回書くと、選択やスクロールの位置が飛ぶ）
@@ -129,10 +129,11 @@ function updateBubble(message: ChatMessage, done: boolean) {
   bubbles.set(message.id, { node, content: message.content, markdown });
 }
 
-// 吹き出しと購入カードを並べ直す。並びの規則は ui-rules.ts（テスト済み）
-function layoutChatLog() {
+// 吹き出しと購入カードを並べ直す。並びの規則は ui-rules.ts（テスト済み）。
+// 吹き出しの順は会話（messages）の順であって、作った順ではない
+function layoutChatLog(messageIds: readonly string[]) {
   const cards = [...purchaseCards].map(([resultId, card]) => ({ resultId, afterMessageId: card.afterMessageId }));
-  const nodes = orderChatNodes([...bubbles.keys()], cards)
+  const nodes = orderChatNodes(messageIds, cards)
     .map((key) => (key.kind === 'message' ? bubbles.get(key.id)?.node : purchaseCards.get(key.id)?.node))
     .filter((node): node is HTMLElement => node !== undefined);
   const log = el('chat-log');
@@ -205,9 +206,8 @@ function createChat() {
       }
       if (chunk.type === 'tool-result' || chunk.type === 'done') {
         // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
+        // 購入が増えていれば refreshPurchases が購入履歴も古い扱いにする
         refreshPurchases(true).catch(() => {});
-        // 買えたページは購入履歴にも増える（見えていなければ、開いたときに取り直す）
-        markHistoryStale();
         // 支払いの後の残高と残枠を取り直す（残高の推移はここで積み上がる。決定42）
         refreshWallet().catch(() => {});
       }
@@ -485,7 +485,7 @@ async function sendCurrentInput() {
 
 // ── 購入物（決定50: 買えたページは会話の中に描き、履歴は会話をまたいで一覧する） ─────
 
-// 会話の購入をカードにして会話の中に描く。会話に含まれる購入はすべて自動でプレビューまで載せる
+// 会話の購入をカードにして会話の中に描く。
 // autoShow: その場で買えた（ストリームで届いた）ものは自動で載せる。再開した会話の
 // 買い置きは、開くかどうかを利用者に委ねる（売り手への接続を、見たいものだけに絞る）
 async function refreshPurchases(autoShow: boolean) {
@@ -502,13 +502,17 @@ async function refreshPurchases(autoShow: boolean) {
     throw error;
   }
   el('chat-status').replaceChildren();
-  for (const purchase of purchases) addPurchaseCard(purchase, autoShow);
-  layoutChatLog();
+  let added = false;
+  for (const purchase of purchases) added = addPurchaseCard(purchase, autoShow) || added;
+  layoutChatLog(lastMessages.map((m) => m.id));
+  // 履歴が変わるのは購入が増えたときだけ。買っていない応答で 20 会話ぶんを読み直さない
+  if (added) markHistoryStale();
 }
 
-// 会話の中のカードを 1 件足す。既にあるものは作り直さない（iframe の読み込み直しを避ける）
-function addPurchaseCard(purchase: Purchase, autoShow: boolean) {
-  if (purchaseCards.has(purchase.resultId)) return;
+// 会話の中のカードを 1 件足す。既にあるものは作り直さない（iframe の読み込み直しを避ける）。
+// 戻り値は「新しく足したか」（購入履歴を取り直すかの判断に使う）
+function addPurchaseCard(purchase: Purchase, autoShow: boolean): boolean {
+  if (purchaseCards.has(purchase.resultId)) return false;
   const node = document.createElement('div');
   node.className = 'purchase-card';
   const row = purchaseRow(purchase);
@@ -522,10 +526,10 @@ function addPurchaseCard(purchase: Purchase, autoShow: boolean) {
     afterMessageId: lastMessages[lastMessages.length - 1]?.id ?? null,
     host: null,
   });
-  if (!purchase.ok) return;
+  if (!purchase.ok) return true;
   if (autoShow) {
     void showCardPreview(purchase.resultId, node, status);
-    return;
+    return true;
   }
   // 再開した会話の買い置きは自動で載せない。押されたときに載せる
   // （成果物は「購入履歴」からも開けるので、接続は見たいものにだけ開く）
@@ -538,6 +542,7 @@ function addPurchaseCard(purchase: Purchase, autoShow: boolean) {
     else button.disabled = false;
   });
   row.insertBefore(button, row.firstChild);
+  return true;
 }
 
 // 購入 1 件の見出し（resultId・支払いの状況・tx）。会話の中のカードと履歴の行で共用する
