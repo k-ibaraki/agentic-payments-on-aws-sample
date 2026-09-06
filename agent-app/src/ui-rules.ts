@@ -78,3 +78,17 @@ export function balanceKey(status: { balance: { display: string } | null | undef
 export function didBalanceChange(prev: string | null, next: string | null): boolean {
   return prev !== null && next !== null && prev !== next;
 }
+
+/**
+ * 失敗した購入に添える見出し（決定48）。金が動いたのか、動いたかどうかも分からないのかを
+ * 利用者に見せる。paymentUncertain は ProcessPayment の応答が確認できなかった購入で、
+ * 支払われた可能性が残るため「失敗」とだけ見せてはいけない
+ */
+export function purchaseFailurePrefix(purchase: {
+  paymentMade: boolean;
+  paymentUncertain?: boolean;
+}): string {
+  if (purchase.paymentMade) return '支払い済み・';
+  if (purchase.paymentUncertain) return '支払いの成否不明・';
+  return '';
+}

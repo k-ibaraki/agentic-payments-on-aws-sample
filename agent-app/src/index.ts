@@ -15,6 +15,7 @@ import {
   formatStripBalance,
   formatStripRemaining,
   isPaidToolCall,
+  purchaseFailurePrefix,
   readInternalsOpen,
   shouldConfirmNewConversation,
   shouldContinueBalanceWatch,
@@ -463,7 +464,7 @@ function renderPurchase(purchase: Purchase): HTMLElement {
   detail.className = purchase.ok ? 'success' : 'error';
   detail.textContent = purchase.ok
     ? `${purchase.paymentMade ? '支払い済み' : '無課金'} ${purchase.htmlBytes ?? '?'} バイト`
-    : `${purchase.paymentMade ? '支払い済み・' : ''}${purchase.error ?? '失敗'}`;
+    : `${purchaseFailurePrefix(purchase)}${purchase.error ?? '失敗'}`;
   row.appendChild(detail);
 
   if (purchase.transaction) {

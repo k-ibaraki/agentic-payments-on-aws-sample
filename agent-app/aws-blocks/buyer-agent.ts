@@ -32,7 +32,12 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buyHtml } from './payments/buy-html.js';
 import { extractPurchases } from './purchases.js';
-import { unresolvedPayments } from './repurchase-guard.js';
+import {
+  clearUnresolved,
+  loadUnresolved,
+  pendingApprovals,
+  recordUnresolved,
+} from './repurchase-guard.js';
 import {
   MIN_SESSION_MINUTES,
   describePaymentSession,
@@ -128,6 +133,73 @@ export function purchasedHtmlKey(userId: string, resultId: string): string {
   return `${userId}/${resultId}`;
 }
 
+/** 購入のレシートの保存先。KVStore の必要最小限（テストではメモリ実装で代える） */
+export interface PurchaseArtifactStore {
+  put(
+    key: string,
+    value: {
+      purchasedAt: number;
+      error?: string;
+      transaction?: string;
+      authorizationNonce?: string;
+      paymentUncertain?: boolean;
+    },
+  ): Promise<void>;
+}
+
+export interface FailedPurchaseStores {
+  artifacts: PurchaseArtifactStore;
+  unresolvedPurchases: Parameters<typeof recordUnresolved>[0];
+}
+
+/**
+ * 金が動いた、または動いたかもしれない失敗を記録する（決定31・48）。
+ *
+ * **例外を外に出さない**。ここで投げるとツールが要約を返せず、tool-result が会話に残らない。
+ * すると利用者単位の記録（KVStore）と会話単位の判定（会話履歴）が同時に失われ、
+ * 次の購入が承認を求められないまま通ってしまう。書けなかったことはログに残す。
+ *
+ * 書く順は防護の記録が先、レシートが後。レシートは後から辿るための証跡なので、
+ * 片方しか残らないなら残すべきは次の支払いを止める側
+ */
+export async function recordFailedPurchase(
+  stores: FailedPurchaseStores,
+  purchase: {
+    userId: string;
+    resultId: string;
+    message: string;
+    paymentUncertain?: boolean;
+    transaction?: string;
+    authorizationNonce?: string;
+  },
+): Promise<void> {
+  const { userId, resultId, message, paymentUncertain, transaction, authorizationNonce } = purchase;
+  console.error(
+    paymentUncertain
+      ? `[buyer-agent] 支払いの成否を確認できなかった resultId=${resultId}（ProcessPayment の clientToken と同じ値。Payments 側の記録と突き合わせること）`
+      : `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'} nonce=${authorizationNonce ?? '(なし)'}`,
+  );
+  try {
+    await recordUnresolved(stores.unresolvedPurchases, userId, resultId);
+  } catch (error) {
+    console.error(
+      `[buyer-agent] 未解決の記録に失敗した resultId=${resultId}（会話単位の防護に委ねる）`,
+      error,
+    );
+  }
+  try {
+    await stores.artifacts.put(purchasedHtmlKey(userId, resultId), {
+      purchasedAt: Date.now(),
+      error: message,
+      ...(transaction ? { transaction } : {}),
+      ...(authorizationNonce ? { authorizationNonce } : {}),
+      ...(paymentUncertain ? { paymentUncertain: true } : {}),
+    });
+  } catch (error) {
+    console.error(`[buyer-agent] レシートの保存に失敗した resultId=${resultId}`, error);
+  }
+}
+
 export function createBuyerAgent(scope: Scope) {
   // 購入の記録。成功時は HTML 本体を、決済後に成果物を得られなかった場合も
   // レシート（tx）を残す。決定21 の upfront は「決済後の失敗リスクを買い手が負う」ため、
@@ -139,8 +211,22 @@ export function createBuyerAgent(scope: Scope) {
       transaction: z.string().optional(),
       // 支払い後に応答を得られなかった場合の手がかり（tx が無いときの代わり）
       authorizationNonce: z.string().optional(),
+      // 支払いの成否そのものを確認できなかった（決定48）。tx も nonce も無く、
+      // 突き合わせの手がかりは resultId（= ProcessPayment の clientToken）だけ
+      paymentUncertain: z.boolean().optional(),
       purchasedAt: z.number(),
       error: z.string().optional(),
+    }),
+  });
+
+  // 利用者ごとに残る「未解決の支払い」の記録（決定48）。会話履歴だけを見る防護は、
+  // 事故の残る会話を離れて新しい会話を作れば回避できた。ウォレットと支払いの枠は
+  // 利用者ごとで会話をまたぐので、防護の記録も利用者ごとに持つ。
+  // TTL は付けない（期限切れで防護が黙って外れるのを避ける。購入の成功時に消す）
+  const unresolvedPurchases = new KVStore(scope, 'unresolved-payment', {
+    schema: z.object({
+      resultIds: z.array(z.string()),
+      updatedAt: z.number(),
     }),
   });
 
@@ -178,10 +264,11 @@ export function createBuyerAgent(scope: Scope) {
       '金額は売り手の提示によりますが、1回あたりの上限を超える提示には応じません。',
       '結果は resultId で参照できる旨をユーザーに伝えてください。',
       'ツールが失敗しても自動で再試行してはいけません。支払いが済んでいる可能性があるため、',
-      '失敗の内容（paymentMade と resultId）をユーザーに報告し、指示を待ってください。',
+      '失敗の内容（paymentMade・paymentUncertain と resultId）をユーザーに報告し、指示を待ってください。',
+      'paymentUncertain が真の場合は、支払われたかどうか自体が分かっていません。',
     ].join('\n'),
-    // 購入物を購入者に紐づけるため userId を、二重支払いの防護（決定31）のため
-    // conversationId を、呼び出しごとに必須で受け取る
+    // 購入物の紐づけと利用者ごとの防護の記録に userId を、会話単位の防護に
+    // conversationId を、呼び出しごとに必須で受け取る（決定31・48）
     toolContextSchema: z.object({ userId: z.string(), conversationId: z.string() }),
     tools: (tool) => ({
       generateHtml: tool({
@@ -198,19 +285,23 @@ export function createBuyerAgent(scope: Scope) {
           context,
           interrupt,
         }): Promise<{ [key: string]: string | number | boolean }> => {
-          // 硬い防護（決定31）: この会話に「支払い済みなのに成果物が無い」購入があれば、
-          // LLM の判断だけでは次の支払いに進ませない。人の承認（interrupt）を要求する。
-          // interrupt は承認前なら処理を中断し、resume 後にこのハンドラが先頭から再実行される
-          const unresolved = unresolvedPayments(
+          // 硬い防護（決定31・48）: 「支払い済みなのに成果物が無い」購入や「支払いの成否が
+          // 不明」な購入が残っていれば、LLM の判断だけでは次の支払いに進ませず、人の承認
+          // （interrupt）を要求する。interrupt は承認前なら処理を中断し、resume 後に
+          // このハンドラが先頭から再実行される。
+          // 会話履歴（この会話）と KVStore（この利用者）の両方を見る。会話単位だけだと、
+          // 事故の残る会話を離れて新しい会話を作れば承認を経ずに買い直せた（決定48）
+          const unresolved = pendingApprovals(
             extractPurchases(await agent.getConversation(context.conversationId)),
+            await loadUnresolved(unresolvedPurchases, context.userId),
           );
           if (unresolved.length > 0) {
             const answer = interrupt<string>({
               name: 'confirm-repurchase',
               reason: {
                 message:
-                  'この会話には支払い済みで成果物を受け取れなかった購入があります。もう一度支払って購入しますか？',
-                unresolved: unresolved.map((u) => u.resultId),
+                  'この会話には支払い済み、または支払いの成否が確認できていない購入があります。もう一度支払って購入しますか？',
+                unresolved,
                 prompt: input.prompt,
               },
             });
@@ -258,20 +349,26 @@ export function createBuyerAgent(scope: Scope) {
               paymentMade: outcome.paymentMade,
               message,
             };
-            if (outcome.paymentMade) {
-              // 支払いは成立したのに成果物が無い。レシートを残し、観測可能な signal も出す
-              await artifacts.put(purchasedHtmlKey(context.userId, resultId), {
-                purchasedAt: Date.now(),
-                error: message,
-                ...(transaction ? { transaction } : {}),
-                ...(outcome.authorizationNonce ? { authorizationNonce: outcome.authorizationNonce } : {}),
-              });
-              console.error(
-                `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'} nonce=${outcome.authorizationNonce ?? '(なし)'}`,
-              );
+            // 金が動いた、または動いたかもしれない失敗（決定31・48）。記録は投げない
+            // （recordFailedPurchase 参照）ので、summary は必ず返る
+            if (outcome.paymentMade || outcome.paymentUncertain) {
               summary.resultId = resultId;
+              if (outcome.paymentUncertain) summary.paymentUncertain = true;
               if (transaction) summary.transaction = transaction;
               if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
+              await recordFailedPurchase(
+                { artifacts, unresolvedPurchases },
+                {
+                  userId: context.userId,
+                  resultId,
+                  message,
+                  ...(outcome.paymentUncertain ? { paymentUncertain: true } : {}),
+                  ...(transaction ? { transaction } : {}),
+                  ...(outcome.authorizationNonce
+                    ? { authorizationNonce: outcome.authorizationNonce }
+                    : {}),
+                },
+              );
             }
             return summary;
           }
@@ -282,6 +379,9 @@ export function createBuyerAgent(scope: Scope) {
             ...(transaction ? { transaction } : {}),
             purchasedAt: Date.now(),
           });
+          // 買えたので、この利用者の未解決は決着とみなして記録を消す（決定48）。
+          // 承認だけでは消さない（承認 → 再び失敗、で防護が外れてしまうため）
+          await clearUnresolved(unresolvedPurchases, context.userId);
           const summary: { [key: string]: string | number | boolean } = {
             ok: true,
             resultId,
@@ -295,7 +395,7 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  return { agent, artifacts, paymentSessions, spendLimits };
+  return { agent, artifacts, paymentSessions, spendLimits, unresolvedPurchases };
 }
 
 // ── ウォレットと支払いの枠（決定42・43）。buyer API から利用者ごとに呼ぶ ──────────────
