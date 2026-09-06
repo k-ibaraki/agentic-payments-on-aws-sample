@@ -9,11 +9,12 @@
 </head>
 <body>
   <!--
-    画面の構成（決定44・47・50）:
+    画面の構成（決定44・47・50・51）:
     ヘッダー（題名・サインイン中の利用者とサインアウト）
     → 未サインイン: 説明とサインインのカード
-    → サインイン後: タブ 2 枚（決定50 で決定44 の「タブ部品は使わない」を上書き）
-       ・依頼: 左に会話（残高と残枠の帯を含み、購入したページはこの中に描く）／右にウォレットと支払いの枠
+    → サインイン後: タブ 3 枚（決定50 で決定44 の「タブ部品は使わない」を上書き。3 枚目は決定51）
+       ・依頼: 会話（残高と残枠の帯を含み、購入したページはこの中に描く）
+       ・ウォレット: ウォレットと支払いの枠（残高・セッション・上限の変更・残高の推移）
        ・購入履歴: 会話をまたいだ購入の一覧と、選んだ 1 件のプレビュー
     → 内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）
   -->
@@ -53,7 +54,7 @@
     </section>
 
     <!--
-      画面内の面の切り替え（決定50）。押した面だけを見せ、もう一方は hidden で隠す。
+      画面内の面の切り替え（決定50・51）。押した面だけを見せ、残りは hidden で隠す。
       role="tablist" / role="tab" は名乗らない。ARIA のタブは矢印キーでの移動と roving tabindex が
       あるものとして支援技術が案内するので、名乗る以上は自前で持つ必要があり、それは決定44 が
       details を選んだ理由（キー操作と aria を自分で面倒見なくてよい）に反する。
@@ -61,10 +62,11 @@
     -->
     <div class="tabs signed-in-only" role="group" aria-label="画面の切り替え">
       <button type="button" id="tab-chat" class="tab" aria-pressed="true" aria-controls="panel-chat">依頼</button>
+      <button type="button" id="tab-wallet" class="tab" aria-pressed="false" aria-controls="panel-wallet">ウォレット</button>
       <button type="button" id="tab-history" class="tab" aria-pressed="false" aria-controls="panel-history">購入履歴</button>
     </div>
 
-    <div id="panel-chat" class="workspace signed-in-only" role="region" aria-labelledby="tab-chat">
+    <div id="panel-chat" class="signed-in-only" role="region" aria-labelledby="tab-chat">
       <article class="panel" aria-labelledby="chat-heading">
         <header class="panel-header">
           <h2 id="chat-heading">エージェントへの依頼</h2>
@@ -72,7 +74,7 @@
           <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
         </header>
         <!-- 残高と残枠の帯（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
-             詳細（期限・ID・上限の変更・推移）は右の「ウォレットと支払いの枠」に -->
+             詳細（期限・ID・上限の変更・推移）は「ウォレット」タブに（決定51） -->
         <div class="wallet-strip" role="status" aria-label="ウォレット残高と支払いの残枠">
           <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
           <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
@@ -86,7 +88,9 @@
           <button id="chat-send-btn">送信</button>
         </div>
       </article>
+    </div>
 
+    <div id="panel-wallet" class="signed-in-only" role="region" aria-labelledby="tab-wallet" hidden>
       <article class="panel" aria-labelledby="wallet-heading">
         <header class="panel-header">
           <h2 id="wallet-heading">ウォレットと支払いの枠</h2>
