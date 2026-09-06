@@ -132,6 +132,13 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 `BILLING_MCP_URL` は売り手の Function URL で、**売り手を作り直すたびに変わる**。
 過去のログに載っている URL をそのまま使わず、`pnpm outputs` で取り直すこと。
 
+Coinbase CDP の資格情報 3 点（`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET`）は
+**クラウドには渡さない**。`payments-setup.ts` が初回に AgentCore Identity の credential provider として預け、
+以後の決済では AWS 側がそこから引くため、Lambda にも Amplify の環境変数にも要らない。手元の `.env` に
+残す用途は、provider の作り直しと `scripts/faucet.ts` での入金だけ。なお AgentCore コンソールの
+「支払い」画面は言語設定が English (US) 以外だと白画面になるので、目で確かめるときは言語を切り替えるか
+`aws bedrock-agentcore-control list-payment-credential-providers --region ap-southeast-1` を使う。
+
 クラウド（Amplify の環境変数。アプリ単位・ブランチ単位のどちらでもビルドに届く）では
 `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` の 3 つが必須で、無いと合成で落ちる。
 値は形まで見ずに「あるか」だけを見るので、コンソールへ貼るときは 1 行だけを正確に貼ること

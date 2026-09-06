@@ -1281,3 +1281,31 @@ AgentCore + 公開プロキシ）は理由ごと決定20 に記録した。
 内容はそのままに、日本語の表現だけ見直した。フラグメント文（「〜だけ。」）の解消、
 常体・敬体の混在の解消（3ファイルとも、追加した文を既存の常体へ揃えた）、句読点の位置の調整、
 「空の表示器」など初見では通じない語の言い換え、不自然な位置での改行の是正。
+
+## 2026-09-06: CDP 資格情報の所在の確認と、コンソールの支払い画面が白画面になる原因の特定
+
+### 発端（grill-me）
+
+- ユーザーの疑問「Amplify で通すには `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET` を
+  どの段階で設定する想定か」。Amplify の deploy 設定には無いのに main で決済が通っている理由が不明だった
+
+### 確認した事実
+
+- CDP の 3 点を読むのは `scripts/payments-setup.ts` と `scripts/faucet.ts` だけ。`aws-blocks/` `src/` `amplify/` は
+  参照せず、`amplify/runtime-env.ts` の許可リストにも入っていない（決定34: Lambda に写すのは秘密でない値のみ）
+- `payments-setup.ts` が `CreatePaymentCredentialProvider` で 3 点を AgentCore Identity（ap-southeast-1）の
+  credential provider `coinbaseManual` として一度だけ預け、PaymentConnector `coinbaseQuick` はその ARN を参照する。
+  以後 `ProcessPayment` の署名に要る CDP の資格は AWS 側がサービスロール経由で引く。Lambda が持つのは
+  `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` と IAM 権限だけで、CDP の 3 点は手元の `.env` にしか残らない
+- 3 点が改めて要るのは、provider の作り直し・別アカウントでの一からの provisioning・`faucet.ts` の入金の 3 場面
+
+### コンソールの白画面の原因
+
+- 決定27 の変更理由だった「AgentCore コンソールの支払い画面が白画面のまま」は、コンソールの
+  **言語設定** が原因だった。English (US) にすると表示され、日本語はもちろん English (UK) でも描画されない
+  （ユーザーが特定）。当時は 3 回失敗して MANUAL へ切り替えたが、コネクタの経路は MANUAL のまま据え置く
+  （スクリプトで再現でき、資格情報がコードの外へ出ないため）
+- 決定27 の理由欄に追記し、agent-app/README.md の環境変数の節に「CDP の 3 点は Amplify に設定しない」旨を足した
+- 検証で AWS CLI を使おうとしたがセッション切れで、credential provider の一覧取得は未実施
+  （`aws bedrock-agentcore-control list-payment-credential-providers --region ap-southeast-1` で見える）
+
