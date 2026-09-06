@@ -3,7 +3,11 @@
 // 手渡しの PAYMENT_SESSION_ID に頼らず、有効なものが無ければツールハンドラがここで切る。
 // 保存先は KVStore。キーは利用者（Cognito の sub）で、利用者ごとに 1 つのセッションを持つ（決定39）。
 // Payments 側の userId はウォレットの持ち主のまま（セッションは同じ持ち主の下に複数持てる。実測済み）。
-import { CreatePaymentSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
+import {
+  CreatePaymentSessionCommand,
+  DeletePaymentSessionCommand,
+  GetPaymentSessionCommand,
+} from '@aws-sdk/client-bedrock-agentcore';
 import { randomUUID } from 'node:crypto';
 
 export interface PaymentSessionRecord {
@@ -27,6 +31,8 @@ export interface PaymentSessionStore {
       ifValueEquals?: PaymentSessionRecord;
     },
   ): Promise<void>;
+  /** 読んだ時点の記録と一致するときだけ消す（条件不一致は ConditionalCheckFailedException） */
+  delete(key: string, options?: { ifValueEquals?: PaymentSessionRecord }): Promise<void>;
 }
 
 export interface PaymentSessionConfig {
@@ -36,8 +42,12 @@ export interface PaymentSessionConfig {
   storeKey: string;
   paymentManagerArn: string;
   expiryMinutes: number;
-  /** セッションあたりの支出上限（USD。"1.00" のような文字列） */
-  maxSpendUsd: string;
+  /**
+   * セッションあたりの支出上限（USD。"1.00" のような文字列）。
+   * 関数なら作成のたびに呼ぶ。利用者が画面で上限を変えた（決定43）後に作り直す経路でも、
+   * 購入開始時の値ではなくその時点の値で切るため
+   */
+  maxSpendUsd: string | (() => Promise<string>);
 }
 
 /** 支払い手が使う。acquire で有効な ID を得て、拒否されたら renew で作り直す */
@@ -88,12 +98,14 @@ export function paymentSessionSource(
   // そうなると記録を保存できないまま、購入のたびに新しいセッションを切り続けることになる
   async function create(previous: PaymentSessionRecord | null): Promise<string> {
     const createdAt = now();
+    const maxSpendUsd =
+      typeof config.maxSpendUsd === 'function' ? await config.maxSpendUsd() : config.maxSpendUsd;
     const response = (await client.send(
       new CreatePaymentSessionCommand({
         userId: config.userId,
         paymentManagerArn: config.paymentManagerArn,
         expiryTimeInMinutes: config.expiryMinutes,
-        limits: { maxSpendAmount: { value: config.maxSpendUsd, currency: 'USD' } },
+        limits: { maxSpendAmount: { value: maxSpendUsd, currency: 'USD' } },
         clientToken: randomUUID(),
       }),
     )) as { paymentSession?: { paymentSessionId?: string } };
@@ -112,13 +124,13 @@ export function paymentSessionSource(
         },
       );
       console.log(
-        `[payment-session] PaymentSession を作成 利用者=${config.storeKey} id=${paymentSessionId} 期限=${new Date(expiresAt).toISOString()} 上限=${config.maxSpendUsd} USD`,
+        `[payment-session] PaymentSession を作成 利用者=${config.storeKey} id=${paymentSessionId} 期限=${new Date(expiresAt).toISOString()} 上限=${maxSpendUsd} USD`,
       );
     } catch (error) {
       if (!(error instanceof Error) || error.name !== CONDITIONAL_CHECK_FAILED) throw error;
       // 別の購入が先に書いていた。相手の記録はそのままにし、作ったセッションはこの購入にだけ使う
       console.warn(
-        `[payment-session] PaymentSession を作成したが記録は別の購入に書き換えられていた 利用者=${config.storeKey} id=${paymentSessionId} 上限=${config.maxSpendUsd} USD。保存はせず、この購入にだけ使う`,
+        `[payment-session] PaymentSession を作成したが記録は別の購入に書き換えられていた 利用者=${config.storeKey} id=${paymentSessionId} 上限=${maxSpendUsd} USD。保存はせず、この購入にだけ使う`,
       );
     }
     return paymentSessionId;
@@ -144,7 +156,8 @@ export function paymentSessionSource(
 /**
  * 支出上限や残高の不足による拒否かどうか。
  * これを作り直しで通すと、上限に当たった支払いがその場で成立してしまい
- * `PAYMENT_SESSION_MAX_USD` が上限として機能しなくなるため、再試行の対象から外す（決定37）。
+ * セッションの支出上限（既定は `PAYMENT_SESSION_MAX_USD`、利用者が画面で変えた値が優先。決定43）が
+ * 上限として機能しなくなるため、再試行の対象から外す（決定37）。
  *
  * 判定は業務ルールの拒否を表す例外（`ValidationException` / `ConflictException`）に限る。
  * 文言だけで見ると `ThrottlingException` の `Rate exceeded` なども拾ってしまい、
@@ -185,5 +198,103 @@ export function fixedPaymentSession(paymentSessionId: string): PaymentSessionSou
     async renew(_rejectedSessionId: string) {
       throw new Error(`固定の PaymentSession（${paymentSessionId}）は作り直せません`);
     },
+  };
+}
+
+/** AgentCore 側で「そのセッションは無い」と返された（失効・削除済み）とみなす判定 */
+function isSessionMissing(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'ResourceNotFoundException') return true;
+  return error.name === 'ValidationException' && /not found/i.test(error.message);
+}
+
+type SessionIdentity = Pick<PaymentSessionConfig, 'userId' | 'storeKey' | 'paymentManagerArn'>;
+
+/**
+ * 利用者の現在の PaymentSession を破棄する（決定43: 上限の変更を即時に効かせる）。
+ * AgentCore のセッションを DeletePaymentSession で消し、KVStore の記録も消す。次の購入で
+ * 新しい上限のセッションが切られる。AgentCore 側で既に無い場合も記録は消して成功とする。
+ * それ以外の失敗（スロットリング等）は記録を残したまま投げる。記録だけ消すと、
+ * 旧上限のセッションが AgentCore 側に生き残ったまま新しいものが切られ、枠が二重に開くため。
+ * 記録の削除は読んだ記録を条件にする。読んでから消すまでの間に同じ利用者の購入が作り直して
+ * 新しい記録を書いていたら、それを消すと有効なセッションが 2 本並ぶので相手を残す
+ */
+export async function discardPaymentSession(
+  client: AwsClientLike,
+  store: PaymentSessionStore,
+  config: SessionIdentity,
+): Promise<{ discarded: string | null }> {
+  const saved = await store.get(config.storeKey);
+  if (!saved) return { discarded: null };
+  try {
+    await client.send(
+      new DeletePaymentSessionCommand({
+        userId: config.userId,
+        paymentManagerArn: config.paymentManagerArn,
+        paymentSessionId: saved.paymentSessionId,
+      }),
+    );
+  } catch (error) {
+    if (!isSessionMissing(error)) throw error;
+  }
+  try {
+    await store.delete(config.storeKey, { ifValueEquals: saved });
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== CONDITIONAL_CHECK_FAILED) throw error;
+    console.warn(
+      `[payment-session] 破棄の間に別の購入が記録を書き換えていたため、その記録は残す 利用者=${config.storeKey} 破棄した id=${saved.paymentSessionId}`,
+    );
+  }
+  console.log(`[payment-session] PaymentSession を破棄 利用者=${config.storeKey} id=${saved.paymentSessionId}`);
+  return { discarded: saved.paymentSessionId };
+}
+
+export interface PaymentSessionStatus {
+  paymentSessionId: string;
+  createdAt: number;
+  expiresAt: number;
+  /** セッション作成時の上限（USD） */
+  maxSpendUsd: string | null;
+  /** 残枠（USD）。署名した時点で差し引かれ、settle が失敗した分も戻らない（決定35 の実測） */
+  availableSpendUsd: string | null;
+}
+
+/**
+ * 利用者の現在の PaymentSession の上限と残枠を返す（決定42・43 の画面表示用）。
+ * 記録が無い・期限切れなら API を呼ばずに null。記録はあるが AgentCore 側に無ければ null
+ */
+export async function describePaymentSession(
+  client: AwsClientLike,
+  store: PaymentSessionStore,
+  config: SessionIdentity,
+  now: () => number = Date.now,
+): Promise<PaymentSessionStatus | null> {
+  const saved = await store.get(config.storeKey);
+  if (!saved || saved.expiresAt - SAFETY_MARGIN_MS <= now()) return null;
+  let response: {
+    paymentSession?: {
+      limits?: { maxSpendAmount?: { value?: string } };
+      availableLimits?: { availableSpendAmount?: { value?: string } };
+    };
+  };
+  try {
+    response = (await client.send(
+      new GetPaymentSessionCommand({
+        userId: config.userId,
+        paymentManagerArn: config.paymentManagerArn,
+        paymentSessionId: saved.paymentSessionId,
+      }),
+    )) as typeof response;
+  } catch (error) {
+    if (isSessionMissing(error)) return null;
+    throw error;
+  }
+  const session = response.paymentSession;
+  return {
+    paymentSessionId: saved.paymentSessionId,
+    createdAt: saved.createdAt,
+    expiresAt: saved.expiresAt,
+    maxSpendUsd: session?.limits?.maxSpendAmount?.value ?? null,
+    availableSpendUsd: session?.availableLimits?.availableSpendAmount?.value ?? null,
   };
 }

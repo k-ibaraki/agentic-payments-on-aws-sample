@@ -127,10 +127,18 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 | 値 | 出どころ | 取り出し方 |
 | --- | --- | --- |
 | `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` | 買い手の AgentCore Payments | `npx tsx scripts/payments-setup.ts`（冪等。何度でも実行して確認できる）|
+| `PAYMENT_CONNECTOR_ID` | 〃。画面のウォレット残高（`GetPaymentInstrumentBalance`）にだけ要る。無くても決済は通る | 同上 |
 | `BILLING_MCP_URL` | 売り手のスタックの `McpEndpointUrl` 出力 | `billing-mcp/` で `pnpm outputs` |
 
 `BILLING_MCP_URL` は売り手の Function URL で、**売り手を作り直すたびに変わる**。
 過去のログに載っている URL をそのまま使わず、`pnpm outputs` で取り直すこと。
+
+Coinbase CDP の資格情報 3 点（`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET`）は
+**クラウドには渡さない**。`payments-setup.ts` が初回に AgentCore Identity の credential provider として預け、
+以後の決済では AWS 側がそこから引くため、Lambda にも Amplify の環境変数にも要らない。手元の `.env` に
+残す用途は、provider の作り直しと `scripts/faucet.ts` での入金だけ。なお AgentCore コンソールの
+「支払い」画面は言語設定が English (US) 以外だと白画面になるので、目で確かめるときは言語を切り替えるか
+`aws bedrock-agentcore-control list-payment-credential-providers --region ap-southeast-1` を使う。
 
 クラウド（Amplify の環境変数。アプリ単位・ブランチ単位のどちらでもビルドに届く）では
 `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` の 3 つが必須で、無いと合成で落ちる。
@@ -140,7 +148,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 残りは既定値があり、必要なときだけ渡す:
 
 - `PAYMENT_SESSION_MINUTES` / `PAYMENT_SESSION_MAX_USD`（アプリが購入時に切る PaymentSession の期限と
-  支出上限。既定 `60` / `1.00`。期限は 15 分以上でなければ AgentCore Payments 側が受け付けない。
+  支出上限。既定 `60` / `1.00`。上限は利用者が画面の「ウォレットと支払いの枠」で自分の分を変えられ、
+  変えた値（KVStore `spend-limit`）が環境変数より優先される。変えると今のセッションは破棄され、次の購入で
+  新しい上限のセッションが切られる。AgentCore Payments にセッションの上限を後から変える API は無いため。
+  天井は無い。期限は 15 分以上でなければ AgentCore Payments 側が受け付けない。
   値は**利用者 1 人・1 セッションあたり**で、セッションは利用者ごとに切る。有効なセッションは
   KVStore `payment-session` に利用者をキーに記録して使い回し、失効・削除で拒否されたら一度だけ作り直す。
   支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため）

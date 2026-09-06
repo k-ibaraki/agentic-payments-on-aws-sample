@@ -88,3 +88,17 @@ describe('runtimeEnvironment', () => {
     }
   });
 });
+
+describe('runtimeEnvironment（決定42: 残高の取得）', () => {
+  it('PAYMENT_CONNECTOR_ID を写す。無くても落とさない（残高の表示にだけ要る）', () => {
+    const FULL = {
+      PAYMENT_MANAGER_ARN: 'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/x',
+      PAYMENT_INSTRUMENT_ID: 'instrument-1',
+      BILLING_MCP_URL: 'https://example.lambda-url.ap-northeast-1.on.aws/mcp',
+    };
+    expect(runtimeEnvironment({ ...FULL, PAYMENT_CONNECTOR_ID: 'connector-1' }, { sandboxMode: false })).toMatchObject({
+      PAYMENT_CONNECTOR_ID: 'connector-1',
+    });
+    expect(runtimeEnvironment(FULL, { sandboxMode: false })).not.toHaveProperty('PAYMENT_CONNECTOR_ID');
+  });
+});

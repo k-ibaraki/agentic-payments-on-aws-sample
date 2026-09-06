@@ -3,6 +3,12 @@
 import { CreatePaymentSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DeletePaymentSessionCommand,
+  GetPaymentSessionCommand,
+} from '@aws-sdk/client-bedrock-agentcore';
+import {
+  describePaymentSession,
+  discardPaymentSession,
   isSessionRejection,
   isSpendLimitRejection,
   paymentSessionSource,
@@ -47,6 +53,15 @@ function memoryStore(initial?: PaymentSessionRecord): PaymentSessionStore & {
         });
       }
       data.set(key, value);
+    },
+    async delete(key, options) {
+      const current = data.get(key) ?? null;
+      if (options?.ifValueEquals !== undefined && JSON.stringify(current) !== JSON.stringify(options.ifValueEquals)) {
+        throw Object.assign(new Error('条件を満たしませんでした'), {
+          name: 'ConditionalCheckFailedException',
+        });
+      }
+      data.delete(key);
     },
   };
 }
@@ -147,6 +162,7 @@ describe('paymentSessionSource', () => {
     const now = Date.parse('2026-09-04T12:00:00Z');
     // 読んだ後・書く前に別の呼び出しが書き換えた状況。条件付き書き込みが必ず落ちる店を使う
     const store: PaymentSessionStore = {
+      async delete() {},
       async get() {
         return { paymentSessionId: 'session-rejected', createdAt: now, expiresAt: now + 60 * 60_000 };
       },
@@ -171,6 +187,7 @@ describe('paymentSessionSource', () => {
     let saved: PaymentSessionRecord | null = null;
     const options: unknown[] = [];
     const store: PaymentSessionStore = {
+      async delete() {},
       async get() {
         return null; // 期限切れとして濾される（実体は残っている）
       },
@@ -267,5 +284,133 @@ describe('isSpendLimitRejection', () => {
     expect(isSpendLimitRejection(named('ThrottlingException', 'Rate exceeded'))).toBe(false);
     expect(isSpendLimitRejection(named('ServiceQuotaExceededException', 'limit exceeded'))).toBe(false);
     expect(isSpendLimitRejection(named('AccessDeniedException', 'insufficient permissions'))).toBe(false);
+  });
+});
+
+// ── 決定43: 上限の動的な解決と、上限変更に伴うセッションの破棄・参照 ──────────────
+describe('paymentSessionSource（上限を関数で受ける）', () => {
+  it('maxSpendUsd が関数なら作成のたびに呼び、その時点の値で切る', async () => {
+    const store = memoryStore();
+    const client = clientCreating(['s1', 's2']);
+    const now = Date.parse('2026-09-06T10:00:00Z');
+    const limits = ['2.00', '5.00'];
+    const source = paymentSessionSource(
+      client,
+      store,
+      { ...CONFIG, maxSpendUsd: async () => limits.shift()! },
+      () => now,
+    );
+
+    await expect(source.acquire()).resolves.toBe('s1');
+    await expect(source.renew('s1')).resolves.toBe('s2');
+
+    const inputs = client.send.mock.calls.map((c) => (c[0] as CreatePaymentSessionCommand).input);
+    expect(inputs[0]!.limits).toEqual({ maxSpendAmount: { value: '2.00', currency: 'USD' } });
+    expect(inputs[1]!.limits).toEqual({ maxSpendAmount: { value: '5.00', currency: 'USD' } });
+  });
+});
+
+describe('discardPaymentSession', () => {
+  const now = Date.parse('2026-09-06T10:00:00Z');
+  const record = { paymentSessionId: 'session-old', createdAt: now - 60_000, expiresAt: now + 30 * 60_000 };
+
+  it('記録があれば AgentCore のセッションを消し、記録も消す', async () => {
+    const store = memoryStore(record);
+    const send = vi.fn(async (command: unknown) => {
+      if (!(command instanceof DeletePaymentSessionCommand)) throw new Error('想定外のコマンド');
+      return {};
+    });
+
+    await expect(discardPaymentSession({ send }, store, CONFIG)).resolves.toEqual({ discarded: 'session-old' });
+
+    expect((send.mock.calls[0]![0] as DeletePaymentSessionCommand).input).toEqual({
+      userId: CONFIG.userId,
+      paymentManagerArn: CONFIG.paymentManagerArn,
+      paymentSessionId: 'session-old',
+    });
+    await expect(store.get(CONFIG.storeKey)).resolves.toBeNull();
+  });
+
+  it('記録が無ければ何も呼ばない', async () => {
+    const send = vi.fn(async () => ({}));
+    await expect(discardPaymentSession({ send }, memoryStore(), CONFIG)).resolves.toEqual({ discarded: null });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('AgentCore 側で既に無いセッション（失効・削除済み）でも記録は消して成功にする', async () => {
+    const store = memoryStore(record);
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('Payment session not found: session-old'), { name: 'ValidationException' });
+    });
+    await expect(discardPaymentSession({ send }, store, CONFIG)).resolves.toEqual({ discarded: 'session-old' });
+    await expect(store.get(CONFIG.storeKey)).resolves.toBeNull();
+  });
+
+  it('読んでから消すまでに別の購入が記録を書き換えていたら、その記録は残す（有効なセッションを 2 本並べない）', async () => {
+    const store = memoryStore(record);
+    const newer = { paymentSessionId: 'session-new', createdAt: now, expiresAt: now + 60 * 60_000 };
+    const send = vi.fn(async (command: unknown) => {
+      if (!(command instanceof DeletePaymentSessionCommand)) throw new Error('想定外のコマンド');
+      // AgentCore の削除中に、別の購入が作り直して記録を書いた状況
+      await store.put(CONFIG.storeKey, newer);
+      return {};
+    });
+    await expect(discardPaymentSession({ send }, store, CONFIG)).resolves.toEqual({ discarded: 'session-old' });
+    await expect(store.get(CONFIG.storeKey)).resolves.toEqual(newer);
+  });
+
+  it('それ以外の失敗は記録を残したまま投げる（次の購入で旧上限のセッションに乗らないよう、握り潰さない）', async () => {
+    const store = memoryStore(record);
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
+    });
+    await expect(discardPaymentSession({ send }, store, CONFIG)).rejects.toThrow(/Rate exceeded/);
+    await expect(store.get(CONFIG.storeKey)).resolves.toEqual(record);
+  });
+});
+
+describe('describePaymentSession', () => {
+  const now = Date.parse('2026-09-06T10:00:00Z');
+  const record = { paymentSessionId: 'session-1', createdAt: now - 60_000, expiresAt: now + 30 * 60_000 };
+
+  it('有効な記録があれば GetPaymentSession で上限と残枠を取って返す', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (!(command instanceof GetPaymentSessionCommand)) throw new Error('想定外のコマンド');
+      return {
+        paymentSession: {
+          paymentSessionId: 'session-1',
+          limits: { maxSpendAmount: { value: '1.00', currency: 'USD' } },
+          availableLimits: { availableSpendAmount: { value: '0.7', currency: 'USD' } },
+        },
+      };
+    });
+
+    await expect(describePaymentSession({ send }, memoryStore(record), CONFIG, () => now)).resolves.toEqual({
+      paymentSessionId: 'session-1',
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+      maxSpendUsd: '1.00',
+      availableSpendUsd: '0.7',
+    });
+    expect((send.mock.calls[0]![0] as GetPaymentSessionCommand).input).toEqual({
+      userId: CONFIG.userId,
+      paymentManagerArn: CONFIG.paymentManagerArn,
+      paymentSessionId: 'session-1',
+    });
+  });
+
+  it('記録が無い・期限切れなら null（API は呼ばない）', async () => {
+    const send = vi.fn(async () => ({}));
+    await expect(describePaymentSession({ send }, memoryStore(), CONFIG, () => now)).resolves.toBeNull();
+    const expired = { ...record, expiresAt: now + 30_000 };
+    await expect(describePaymentSession({ send }, memoryStore(expired), CONFIG, () => now)).resolves.toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('AgentCore 側で既に無ければ null（記録だけが残っている状態）', async () => {
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('Payment session not found: session-1'), { name: 'ValidationException' });
+    });
+    await expect(describePaymentSession({ send }, memoryStore(record), CONFIG, () => now)).resolves.toBeNull();
   });
 });

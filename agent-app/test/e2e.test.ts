@@ -91,6 +91,8 @@ let conversationA = '';
 
 test('未認証では会話を作れない', async () => {
   await assert.rejects(buyer.createConversation());
+  await assert.rejects(buyer.getWalletStatus());
+  await assert.rejects(buyer.setSpendLimit('1.00'));
 });
 
 test('サインインした利用者は会話を作り、依頼を送り、履歴・購入一覧・売り手情報を取れる', async () => {
@@ -121,9 +123,36 @@ test('サインインした利用者は会話を作り、依頼を送り、履�
   assert.strictEqual(await buyer.getPurchasedHtml('no-such-result'), null);
 });
 
+// ウォレットの状態と、利用者ごとの支出上限（決定42・43）。ローカルの開発サーバーは PAYMENT_* を
+// 持たないので残高とセッションは理由つきで null になり、上限の保存と検証だけを本物の経路で確かめる
+test('ウォレットの状態を取れ、自分の支出上限を変えられる', async () => {
+  const before = await buyer.getWalletStatus();
+  assert.deepStrictEqual(before.spendLimit, { maxSpendUsd: '1.00', source: 'default' });
+  assert.strictEqual(before.balance, null);
+  assert.match(before.balanceError ?? '', /PAYMENT_/);
+  assert.strictEqual(before.session, null);
+  assert.strictEqual(before.sessionMinutes, 60);
+
+  const changed = await buyer.setSpendLimit('2.5');
+  assert.deepStrictEqual(changed, {
+    spendLimit: { maxSpendUsd: '2.50', source: 'user' },
+    discardedSession: null,
+  });
+  const after = await buyer.getWalletStatus();
+  assert.deepStrictEqual(after.spendLimit, { maxSpendUsd: '2.50', source: 'user' });
+
+  // 書式外と 0 は拒み、保存した値は変わらない
+  await assert.rejects(buyer.setSpendLimit('abc'));
+  await assert.rejects(buyer.setSpendLimit('0'));
+  assert.strictEqual((await buyer.getWalletStatus()).spendLimit.maxSpendUsd, '2.50');
+});
+
 test('他人の会話には発注・閲覧・購読・購入一覧・承認のいずれもできない', async () => {
   await signOut();
   await signUpAndSignIn(userB);
+
+  // 支出上限は利用者ごと。A が変えた値は B には見えない（決定43）
+  assert.deepStrictEqual((await buyer.getWalletStatus()).spendLimit, { maxSpendUsd: '1.00', source: 'default' });
 
   await assert.rejects(buyer.sendMessage(conversationA, 'generateHtml で何か作って'));
   await assert.rejects(buyer.getMessages(conversationA));

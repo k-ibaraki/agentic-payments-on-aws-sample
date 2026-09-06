@@ -56,6 +56,9 @@ export async function initBlocks(backend: BackendBase) {
         'bedrock-agentcore:CreatePaymentSession',
         'bedrock-agentcore:GetPaymentSession',
         'bedrock-agentcore:ProcessPayment',
+        // 残高の表示（決定42）と、上限変更に伴うセッションの破棄（決定43）
+        'bedrock-agentcore:GetPaymentInstrumentBalance',
+        'bedrock-agentcore:DeletePaymentSession',
       ],
       resources: [
         `arn:aws:bedrock-agentcore:*:${Stack.of(blocksStack).account}:payment-manager/*`,

@@ -44,6 +44,31 @@
     </article>
 
     <article class="signed-in-only">
+      <header><h2>ウォレットと支払いの枠</h2></header>
+      <p class="hint">
+        残高は全員で共有するウォレット（AgentCore Payments の PaymentInstrument）の値。
+        枠（PaymentSession の上限と残枠）はサインインした利用者ごとで、購入のたびにエージェントが切ります。
+      </p>
+      <dl class="wallet">
+        <div><dt>ウォレット残高</dt><dd id="wallet-balance">（未取得）</dd></div>
+        <div><dt>今のセッション</dt><dd id="session-status">（未取得）</dd></div>
+        <div><dt>次のセッションの上限</dt><dd id="spend-limit">（未取得）</dd></div>
+      </dl>
+      <div class="spend-limit-input" role="group">
+        <input type="text" id="spend-limit-text" inputmode="decimal" placeholder="例: 2.00（USD）">
+        <button id="spend-limit-btn">上限を変更</button>
+        <button id="wallet-refresh-btn" class="secondary outline">更新</button>
+      </div>
+      <p class="hint">
+        上限を変えると今のセッションは破棄され、次の購入で新しい上限のセッションが切られます
+        （AgentCore Payments にはセッションの上限を後から変える API が無いため）。
+      </p>
+      <div id="wallet-status" class="hint"></div>
+      <h3>残高の推移</h3>
+      <div id="balance-history"><span class="hint">まだありません</span></div>
+    </article>
+
+    <article class="signed-in-only">
       <header><h2>購入したページ</h2></header>
       <p class="hint">エージェントが支払って受け取った成果物。選ぶと下のプレビュー（売り手の MCP Apps UI）に注入します。</p>
       <div id="purchases"><span class="hint">まだありません</span></div>

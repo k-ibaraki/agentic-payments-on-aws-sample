@@ -381,6 +381,8 @@ async function main() {
   console.log('agent-app（ローカルはシェル、クラウドは Amplify のブランチ環境変数）に設定する値:');
   console.log(`export PAYMENT_MANAGER_ARN=${manager.arn}`);
   console.log(`export PAYMENT_INSTRUMENT_ID=${instrumentId}`);
+  // 残高の表示（GetPaymentInstrumentBalance。決定42）にだけ要る
+  console.log(`export PAYMENT_CONNECTOR_ID=${connector.id}`);
 }
 
 main().catch((e) => {

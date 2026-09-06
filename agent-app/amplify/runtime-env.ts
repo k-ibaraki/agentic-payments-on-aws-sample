@@ -15,6 +15,8 @@ import { MIN_SESSION_MINUTES } from '../aws-blocks/payments/payment-session.js';
 export const RUNTIME_ENV_KEYS = [
   'PAYMENT_MANAGER_ARN',
   'PAYMENT_INSTRUMENT_ID',
+  // 残高の表示（決定42）にだけ要る。無くても実決済は通るので必須にはしない
+  'PAYMENT_CONNECTOR_ID',
   'BILLING_MCP_URL',
   'PAYMENTS_USER_ID',
   'PAYMENT_MAX_AMOUNT',

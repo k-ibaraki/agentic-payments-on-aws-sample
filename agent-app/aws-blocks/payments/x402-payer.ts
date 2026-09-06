@@ -134,7 +134,7 @@ export function createAgentCorePayer(
         if (isSpendLimitRejection(error)) {
           throw new Error(
             'PaymentSession の支出上限に達しました。作り直しでの自動的な回避はしません' +
-              `（上限を上げるなら PAYMENT_SESSION_MAX_USD を見直してください）: ${(error as Error).message}`,
+              `（上限を上げるなら画面の「ウォレットと支払いの枠」で変更してください）: ${(error as Error).message}`,
             { cause: error },
           );
         }

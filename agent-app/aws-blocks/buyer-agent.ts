@@ -8,9 +8,11 @@
 //   BUYER_LOCAL_MODEL     … ローカル実行時の LLM。既定 bedrock（決定28）。canned で決定的な偽 LLM
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力
 //   PAYMENT_INSTRUMENT_ID … 〃
+//   PAYMENT_CONNECTOR_ID  … 〃。残高の表示（GetPaymentInstrumentBalance。決定42）にだけ要る
 //   PAYMENT_SESSION_MINUTES / PAYMENT_SESSION_MAX_USD
 //                         … アプリが切る PaymentSession の期限と支出上限（既定 60 分・1.00 USD。決定35）。
-//                            利用者 1 人・1 セッションあたりの値（決定39）。期限の下限は 15 分
+//                            利用者 1 人・1 セッションあたりの値（決定39）。期限の下限は 15 分。
+//                            上限は利用者が画面で変えられ、変えた値が KVStore にあればそちらが勝つ（決定43）
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
 //   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 100000 = 0.1 USDC）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
@@ -31,7 +33,15 @@ import { z } from 'zod';
 import { buyHtml } from './payments/buy-html.js';
 import { extractPurchases } from './purchases.js';
 import { unresolvedPayments } from './repurchase-guard.js';
-import { MIN_SESSION_MINUTES, paymentSessionSource } from './payments/payment-session.js';
+import {
+  MIN_SESSION_MINUTES,
+  describePaymentSession,
+  discardPaymentSession,
+  paymentSessionSource,
+  type PaymentSessionStatus,
+} from './payments/payment-session.js';
+import { spendLimitSource, type SpendLimit } from './payments/spend-limit.js';
+import { getWalletBalance, type WalletBalance } from './payments/wallet-balance.js';
 import { createAgentCorePayer } from './payments/x402-payer.js';
 import type { PaymentPolicy } from './payments/x402-types.js';
 
@@ -145,6 +155,14 @@ export function createBuyerAgent(scope: Scope) {
     ttl: true,
   });
 
+  // 利用者が画面で変えた支出上限（決定43）。無ければ環境変数の既定。TTL は無し（利用者の設定として残す）
+  const spendLimits = new KVStore(scope, 'spend-limit', {
+    schema: z.object({
+      maxSpendUsd: z.string(),
+      updatedAt: z.number(),
+    }),
+  });
+
   // id は物理名の一部。内蔵 S3 バケットは CDK 直経路では <スタック名>-app-buyer-sn、Amplify 経路では
   // <Amplify のルートスタック名>-b-app-buyer-sn になる。Amplify のスタック名の長さに合わせて
   // 短くしている（決定33）。一度 deploy したら変えないこと
@@ -213,11 +231,15 @@ export function createBuyerAgent(scope: Scope) {
           const paymentInstrumentId = requireEnv('PAYMENT_INSTRUMENT_ID');
           // 有効な PaymentSession は KVStore の記録から使い回し、無ければここで切る（決定35）。
           // 記録と枠は利用者（Cognito の sub）ごと。ウォレットは共有のまま（決定39）
+          const sessionConfig = paymentSessionConfigFromEnv();
           const paymentSession = paymentSessionSource(paymentsClient, paymentSessions, {
             userId,
             storeKey: context.userId,
             paymentManagerArn,
-            ...paymentSessionConfigFromEnv(),
+            expiryMinutes: sessionConfig.expiryMinutes,
+            // 上限は作成のたびに解決する。利用者が画面で変えた値（決定43）があればそれ、無ければ既定
+            maxSpendUsd: async () =>
+              (await spendLimitSource(spendLimits, sessionConfig.maxSpendUsd).get(context.userId)).maxSpendUsd,
           });
           const payer = createAgentCorePayer(
             paymentsClient,
@@ -273,5 +295,118 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  return { agent, artifacts };
+  return { agent, artifacts, paymentSessions, spendLimits };
+}
+
+// ── ウォレットと支払いの枠（決定42・43）。buyer API から利用者ごとに呼ぶ ──────────────
+
+export interface WalletStatus {
+  /** ウォレット残高。PAYMENT_CONNECTOR_ID が無い・取得に失敗したときは null と理由 */
+  balance: WalletBalance | null;
+  balanceError: string | null;
+  /** 次に切るセッションの上限（利用者の設定か既定） */
+  spendLimit: SpendLimit;
+  /** 現在のセッション（無ければ null。次の購入で切られる） */
+  session: PaymentSessionStatus | null;
+  sessionError: string | null;
+  /** セッションの期限（分。作成時の設定） */
+  sessionMinutes: number;
+}
+
+/** KVStore の必要最小限（payments/ の Store 型と同じ）。テストではメモリ実装で代える */
+export interface WalletStores {
+  paymentSessions: Parameters<typeof describePaymentSession>[1];
+  spendLimits: Parameters<typeof spendLimitSource>[0];
+}
+
+interface AwsClientLike {
+  send(command: unknown): Promise<unknown>;
+}
+
+// 画面の表示は決済の経路と違い、環境変数の欠落や API の失敗で全体を落とさず、理由を添えて返す。
+// client はテストで差し替えるための引数（既定は共有の SDK クライアント）。
+// API の例外文は ARN や ID を含み得るので画面には出さず、原文はログに残して一般化した理由を返す
+// （この取得はサインイン時・購入後・更新のたびに走り、全利用者の目に触れるため）
+export async function walletStatus(
+  stores: WalletStores,
+  userSub: string,
+  client: AwsClientLike = paymentsClient,
+): Promise<WalletStatus> {
+  const userId = process.env.PAYMENTS_USER_ID ?? 'sample-user-1';
+  const sessionConfig = paymentSessionConfigFromEnv();
+  const spendLimit = await spendLimitSource(stores.spendLimits, sessionConfig.maxSpendUsd).get(userSub);
+  const paymentManagerArn = process.env.PAYMENT_MANAGER_ARN;
+  const paymentInstrumentId = process.env.PAYMENT_INSTRUMENT_ID;
+  const paymentConnectorId = process.env.PAYMENT_CONNECTOR_ID;
+
+  const status: WalletStatus = {
+    balance: null,
+    balanceError: null,
+    spendLimit,
+    session: null,
+    sessionError: null,
+    sessionMinutes: sessionConfig.expiryMinutes,
+  };
+
+  if (!paymentManagerArn || !paymentInstrumentId) {
+    status.balanceError = 'PAYMENT_MANAGER_ARN / PAYMENT_INSTRUMENT_ID が未設定です';
+    status.sessionError = status.balanceError;
+    return status;
+  }
+
+  if (!paymentConnectorId) {
+    status.balanceError = 'PAYMENT_CONNECTOR_ID が未設定です（payments-setup.ts の出力を設定してください）';
+  } else {
+    try {
+      status.balance = await getWalletBalance(client, {
+        userId,
+        paymentManagerArn,
+        paymentConnectorId,
+        paymentInstrumentId,
+      });
+    } catch (error) {
+      status.balanceError = describeApiFailure('残高', 'GetPaymentInstrumentBalance', userSub, error);
+    }
+  }
+
+  try {
+    status.session = await describePaymentSession(client, stores.paymentSessions, {
+      userId,
+      storeKey: userSub,
+      paymentManagerArn,
+    });
+  } catch (error) {
+    status.sessionError = describeApiFailure('セッション', 'GetPaymentSession', userSub, error);
+  }
+  return status;
+}
+
+// 原文（例外名とメッセージ）はサーバーのログへ。画面には例外名だけを添えた一般化した文を返す
+function describeApiFailure(what: string, api: string, userSub: string, error: unknown): string {
+  const name = error instanceof Error ? error.name : 'Error';
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[buyer-agent] ${what}の取得に失敗 利用者=${userSub} api=${api} ${name}: ${message}`);
+  return `${what}を取得できませんでした（${name}。詳細はサーバーのログを参照）`;
+}
+
+/**
+ * 利用者の支出上限を変え、現在のセッションを破棄して即時に効かせる（決定43）。
+ * 破棄に失敗したら上限の保存は済んだまま投げる（次の作り直しでは新しい上限になる）
+ */
+export async function changeSpendLimit(
+  stores: WalletStores,
+  userSub: string,
+  maxSpendUsd: string,
+  client: AwsClientLike = paymentsClient,
+): Promise<{ spendLimit: SpendLimit; discardedSession: string | null }> {
+  const sessionConfig = paymentSessionConfigFromEnv();
+  const spendLimit = await spendLimitSource(stores.spendLimits, sessionConfig.maxSpendUsd).set(userSub, maxSpendUsd);
+  const paymentManagerArn = process.env.PAYMENT_MANAGER_ARN;
+  if (!paymentManagerArn) return { spendLimit, discardedSession: null };
+  const { discarded } = await discardPaymentSession(client, stores.paymentSessions, {
+    userId: process.env.PAYMENTS_USER_ID ?? 'sample-user-1',
+    storeKey: userSub,
+    paymentManagerArn,
+  });
+  return { spendLimit, discardedSession: discarded };
 }

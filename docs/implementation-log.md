@@ -2,6 +2,70 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-06: CDP 資格情報の所在の確認と、コンソールの支払い画面が白画面になる原因の特定
+
+### 発端（grill-me）
+
+- ユーザーの疑問「Amplify で通すには `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET` を
+  どの段階で設定する想定か」。Amplify の deploy 設定には無いのに main で決済が通っている理由が不明だった
+
+### 確認した事実
+
+- CDP の 3 点を読むのは `scripts/payments-setup.ts` と `scripts/faucet.ts` だけ。`aws-blocks/` `src/` `amplify/` は
+  参照せず、`amplify/runtime-env.ts` の許可リストにも入っていない（決定34: Lambda に写すのは秘密でない値のみ）
+- `payments-setup.ts` が `CreatePaymentCredentialProvider` で 3 点を AgentCore Identity（ap-southeast-1）の
+  credential provider `coinbaseManual` として一度だけ預け、PaymentConnector `coinbaseQuick` はその ARN を参照する。
+  以後 `ProcessPayment` の署名に要る CDP の資格は AWS 側がサービスロール経由で引く。Lambda が持つのは
+  `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` と IAM 権限だけで、CDP の 3 点は手元の `.env` にしか残らない
+- 3 点が改めて要るのは、provider の作り直し・別アカウントでの一からの provisioning・`faucet.ts` の入金の 3 場面
+
+### コンソールの白画面の原因
+
+- 決定27 の変更理由だった「AgentCore コンソールの支払い画面が白画面のまま」は、コンソールの
+  **言語設定** が原因だった。English (US) にすると表示され、日本語はもちろん English (UK) でも描画されない
+  （ユーザーが特定）。当時は 3 回失敗して MANUAL へ切り替えたが、コネクタの経路は MANUAL のまま据え置く
+  （スクリプトで再現でき、資格情報がコードの外へ出ないため）
+- 決定27 の理由欄に追記し、agent-app/README.md の環境変数の節に「CDP の 3 点は Amplify に設定しない」旨を足した
+- 検証で AWS CLI を使おうとしたがセッション切れで、credential provider の一覧取得は未実施
+  （`aws bedrock-agentcore-control list-payment-credential-providers --region ap-southeast-1` で見える）
+
+### ウォレット残高の表示と、支出上限の画面からの変更（決定42・43）
+
+ユーザーの要望「残高の推移を画面に出したい」「AgentCore Payments の機能で上限を画面から操作したい」を
+下調べの上で 4 点に分けて確認し、着工した（残高は Payments の API から／上限は利用者が自分の枠を天井なしで／
+変更は即時（現在のセッションを破棄）／残枠と期限も並べて出す）。
+
+- 下調べで分かったこと: SDK に `GetPaymentInstrumentBalance` がある（`paymentConnectorId` が要る。
+  これまで環境変数に無かった）。`UpdatePaymentSession` は無く、上限は作成時に固定。`PaymentSession` には
+  `availableLimits.availableSpendAmount`（残枠）がある。CLI で引けなかったのはヘッダーの都合で SDK なら通る
+- TDD（赤 → 緑）で追加: `payments/wallet-balance.ts`（残高取得と十進表記）、`payments/spend-limit.ts`
+  （利用者ごとの上限の保存・検証・正規化）、`payment-session.ts` に `discardPaymentSession`（AgentCore → 記録の順で消す）と
+  `describePaymentSession`（上限と残枠）。`maxSpendUsd` は関数でも受けるようにし、作り直し（`renew`）でも
+  その時点の上限で切る。KVStore `spend-limit` を新設（TTL 無し）
+- buyer API に `getWalletStatus` / `setSpendLimit` を足し、画面に「ウォレットと支払いの枠」の区画を新設
+  （残高・今のセッションの残枠と期限・次の上限・上限の入力・残高の推移）。推移はブラウザ内で持ち、
+  サインイン時・tool-result / done・更新ボタンで取り直して値が変わったときだけ行を足す
+- 配線: `PAYMENT_CONNECTOR_ID` を `runtime-env.ts` の許可リスト（必須ではない）と `payments-setup.ts` の出力に追加。
+  IAM に `GetPaymentInstrumentBalance` / `DeletePaymentSession` を追加
+- 検証: unit 116 件、`npm run typecheck`、`npm run build`、e2e（偽 LLM。上限の保存・検証・利用者ごとの分離・未認証の拒否）
+  が通ることを確認。残高取得と破棄の実物（`amount` の表記、IAM のリソース形式）は未実測で、sandbox か main の
+  次回の実決済で確かめる。**deploy 前に Amplify の環境変数へ `PAYMENT_CONNECTOR_ID` を足すこと**
+- 見た目は `npm run dev`（偽 LLM）に Playwright を当て、サインアップ → 上限変更 → 書式エラーを広い画面と 390px で撮って確認。
+  直した 2 件: ①上限変更の結果表示が直後の再取得で消えていた（再取得は失敗時だけ表示を触る形に）
+  ②390px で環境変数名のような長い値が右にはみ出した（`dd` を `min-width: 0` + `overflow-wrap: anywhere`、狭い画面では 1 列に）
+- origin/main（決定41 のマージ）へリベースし、DESIGN.md の表の衝突（40 の直後に 41 と 42・43 が並ぶ）を解決した
+- セルフレビューで 4 件直した。①上限超過のエラー文とコメントが `PAYMENT_SESSION_MAX_USD` を指したままだった（画面での変更に改めた）
+  ②`discardPaymentSession` が記録を無条件に消しており、破棄の間に別の購入が作り直した記録まで消して有効なセッションが
+  2 本並び得た（`ifValueEquals` 付きの条件削除にし、不一致なら相手を残す）③`walletStatus` / `changeSpendLimit` の環境変数あり
+  の経路に単体テストが無かった（client を引数で差し替えられるようにし `wallet-status.test.ts` を追加）④ルート README の
+  ステータスに画面の機能を追記
+- PR #12 のレビュー（8 観点）で 1 件直した。`walletStatus` が AWS SDK の例外文をそのまま画面に返しており、
+  サインインのたびに走る取得で ARN や ID を含む文が全利用者に見え得た。原文はサーバーのログに残し、画面には例外名だけを
+  添えた一般化した文を返す形にした。もう 1 件の「Issue 未連携」は、本リポジトリでは DESIGN.md の決定番号が Issue の役割を
+  担っているため対応しない
+- つまずき: fresh な worktree では `aws-blocks/client.js`（生成物）が無く `npm run build` が落ちる。`npm run blocks:client`
+  で生成してから。mise の shim が `python3` / `npm` を止めるので `mise trust` が要った
+
 ## 2026-09-05: 買い手の画面を Pico.css で整える（決定41）
 
 ### 着工前の詰め（grill-me）で決めたこと
