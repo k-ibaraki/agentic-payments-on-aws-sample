@@ -1,5 +1,6 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44）。
-// 新規会話の確認の要否と、「内部情報」の折りたたみ状態の読み書き
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50）。
+// 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
+// 会話の中の購入カードの並び
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -54,39 +55,73 @@ import {
   STRIP_EMPTY,
   balanceKey,
   didBalanceChange,
-  formatStripBalance,
-  formatStripRemaining,
   isPaidToolCall,
+  stripBalance,
+  stripRemaining,
   shouldContinueBalanceWatch,
   shouldFlashValue,
 } from './ui-rules.js';
 
 describe('帯の表示文字列', () => {
+  const spendLimit = { maxSpendUsd: '1.00' };
+
   it('残高は値と通貨だけ。取れていなければ「—」', () => {
-    expect(formatStripBalance({ display: '0.30', token: 'USDC' })).toBe('0.30 USDC');
-    expect(formatStripBalance(null)).toBe(STRIP_EMPTY);
+    expect(stripBalance({ display: '0.30', token: 'USDC' })).toEqual({ text: '0.30 USDC', value: '0.30' });
+    expect(stripBalance(null)).toEqual({ text: STRIP_EMPTY, value: null });
   });
 
-  it('残枠は今のセッションの残枠。セッションが無い・値が無ければ「—」', () => {
-    expect(formatStripRemaining({ availableSpendUsd: '1.90' })).toBe('1.90 USD');
-    expect(formatStripRemaining({ availableSpendUsd: null })).toBe(STRIP_EMPTY);
-    expect(formatStripRemaining(null)).toBe(STRIP_EMPTY);
+  it('セッションがあればその残枠', () => {
+    expect(stripRemaining({ session: { availableSpendUsd: '1.90' }, sessionError: null, spendLimit })).toEqual({
+      text: '1.90 USD',
+      value: '1.90',
+    });
+  });
+
+  it('セッションがまだ無ければ、次に切る上限を添え書き付きで出す（決定49）。光らせる判定には乗せない', () => {
+    expect(stripRemaining({ session: null, sessionError: null, spendLimit })).toEqual({
+      text: '1.00 USD（セッション開始前）',
+      value: null,
+    });
+  });
+
+  it('セッションを取得できなかった回は「—」（失敗を実値らしく見せない）', () => {
+    expect(stripRemaining({ session: null, sessionError: 'セッションを取得できませんでした', spendLimit })).toEqual({
+      text: STRIP_EMPTY,
+      value: null,
+    });
+  });
+
+  it('セッションはあるが残枠が返らない回も「—」', () => {
+    expect(stripRemaining({ session: { availableSpendUsd: null }, sessionError: null, spendLimit })).toEqual({
+      text: STRIP_EMPTY,
+      value: null,
+    });
   });
 });
 
 describe('光らせてよい変化か', () => {
-  it('値どうしが変われば光らせる', () => {
-    expect(shouldFlashValue('0.30 USDC', '0.20 USDC')).toBe(true);
+  it('金額が変われば光らせる', () => {
+    expect(shouldFlashValue('0.30', '0.20')).toBe(true);
   });
 
-  it('同じ値では光らせない', () => {
-    expect(shouldFlashValue('0.30 USDC', '0.30 USDC')).toBe(false);
+  it('同じ金額では光らせない（セッションが切られて添え書きが外れただけの回を含む）', () => {
+    expect(shouldFlashValue('0.30', '0.30')).toBe(false);
+    expect(shouldFlashValue('1.00', '1.00')).toBe(false);
   });
 
-  it('取得できていない状態（—）との出入りでは光らせない（API の失敗を「減った」と見せない）', () => {
-    expect(shouldFlashValue('0.30 USDC', STRIP_EMPTY)).toBe(false);
-    expect(shouldFlashValue(STRIP_EMPTY, '0.30 USDC')).toBe(false);
-    expect(shouldFlashValue('', '0.30 USDC')).toBe(true);
+  it('取得できていない状態（null）との出入りでは光らせない（API の失敗を「減った」と見せない）', () => {
+    expect(shouldFlashValue('0.30', null)).toBe(false);
+    expect(shouldFlashValue(null, '0.30')).toBe(false);
+    expect(shouldFlashValue(null, null)).toBe(false);
+  });
+
+  // 上限を変えると今のセッションは破棄され、残枠は実値から「次に切る上限」に変わる。
+  // 支払いではないので光らせない（セッション開始前の残枠は value を持たない）
+  it('セッションの破棄（上限の変更）では光らせない', () => {
+    const spendLimit = { maxSpendUsd: '5.00' };
+    const before = stripRemaining({ session: { availableSpendUsd: '0.90' }, sessionError: null, spendLimit });
+    const after = stripRemaining({ session: null, sessionError: null, spendLimit });
+    expect(shouldFlashValue(before.value, after.value)).toBe(false);
   });
 });
 
@@ -142,5 +177,69 @@ describe('purchaseFailurePrefix', () => {
   it('支払いに至っていない失敗には何も添えない', () => {
     expect(purchaseFailurePrefix({ paymentMade: false })).toBe('');
     expect(purchaseFailurePrefix({ paymentMade: false, paymentUncertain: false })).toBe('');
+  });
+});
+
+// ── チャットの中に購入したページを差し込む並び（決定50） ──
+import { orderChatNodes, retargetAnchor } from './ui-rules.js';
+
+describe('orderChatNodes', () => {
+  it('購入カードは、届いた時点の末尾の吹き出しの直後に入る', () => {
+    expect(
+      orderChatNodes(['m1', 'm2', 'm3'], [{ resultId: 'r-1', afterMessageId: 'm2' }]),
+    ).toEqual([
+      { kind: 'message', id: 'm1' },
+      { kind: 'message', id: 'm2' },
+      { kind: 'purchase', id: 'r-1' },
+      { kind: 'message', id: 'm3' },
+    ]);
+  });
+
+  it('同じ位置の購入カードは届いた順に並ぶ', () => {
+    expect(
+      orderChatNodes(['m1'], [
+        { resultId: 'r-1', afterMessageId: 'm1' },
+        { resultId: 'r-2', afterMessageId: 'm1' },
+      ]),
+    ).toEqual([
+      { kind: 'message', id: 'm1' },
+      { kind: 'purchase', id: 'r-1' },
+      { kind: 'purchase', id: 'r-2' },
+    ]);
+  });
+
+  it('錨の吹き出しが無い（消えた・まだ無い）カードは末尾に置く', () => {
+    expect(
+      orderChatNodes(['m1'], [
+        { resultId: 'r-1', afterMessageId: null },
+        { resultId: 'r-2', afterMessageId: '消えた吹き出し' },
+      ]),
+    ).toEqual([
+      { kind: 'message', id: 'm1' },
+      { kind: 'purchase', id: 'r-1' },
+      { kind: 'purchase', id: 'r-2' },
+    ]);
+  });
+
+  it('吹き出しだけ・カードだけでも並ぶ', () => {
+    expect(orderChatNodes(['m1'], [])).toEqual([{ kind: 'message', id: 'm1' }]);
+    expect(orderChatNodes([], [{ resultId: 'r-1', afterMessageId: 'm1' }])).toEqual([
+      { kind: 'purchase', id: 'r-1' },
+    ]);
+  });
+});
+
+describe('retargetAnchor', () => {
+  it('錨の吹き出しが消えたら、直前の生き残りへ付け替える', () => {
+    expect(retargetAnchor(['m1', 'm2', 'm3'], 'm2', new Set(['m1', 'm3']))).toBe('m1');
+  });
+
+  it('直前も消えていれば、さらに前の生き残りを探す', () => {
+    expect(retargetAnchor(['m1', 'm2', 'm3'], 'm3', new Set(['m1']))).toBe('m1');
+  });
+
+  it('前に生き残りが無ければ null（カードは先頭側に置けないので末尾へ回る）', () => {
+    expect(retargetAnchor(['m1', 'm2'], 'm1', new Set(['m2']))).toBe(null);
+    expect(retargetAnchor(['m1'], '知らない吹き出し', new Set(['m1']))).toBe(null);
   });
 });

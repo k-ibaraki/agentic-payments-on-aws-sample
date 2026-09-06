@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -37,22 +37,54 @@ export const BALANCE_WATCH_INTERVAL_MS = 3000;
 /** 帯で「取得できていない」ことを表す記号。実際の値と区別するために持つ */
 export const STRIP_EMPTY = '—';
 
-/** 帯の残高。説明は付けず値と通貨だけ。取れていなければ「—」 */
-export function formatStripBalance(balance: { display: string; token: string } | null | undefined): string {
-  return balance ? `${balance.display} ${balance.token}` : STRIP_EMPTY;
+/**
+ * 帯の 1 マス。`text` は画面に出す文字列、`value` は光らせる判定にだけ使う金額。
+ * 取れていないとき、そしてまだ枠が無い（次に切る上限を出している）ときは null。
+ * 光るのは支払いによる増減の合図なので、枠の有無が変わっただけ・上限を変えただけでは光らせない。
+ * 文字列で判定すると、同じ金額でも添え書きの有無で「変わった」ことになってしまうため分けている（決定49）
+ */
+export interface StripCell {
+  text: string;
+  value: string | null;
 }
 
-/** 帯の残枠。今のセッションが無い（次の購入で切られる）ときは残枠そのものが無いので「—」 */
-export function formatStripRemaining(session: { availableSpendUsd: string | null } | null | undefined): string {
-  return session?.availableSpendUsd ? `${session.availableSpendUsd} USD` : STRIP_EMPTY;
+/** 帯の残高。説明は付けず値と通貨だけ。取れていなければ「—」 */
+export function stripBalance(balance: { display: string; token: string } | null | undefined): StripCell {
+  if (!balance) return { text: STRIP_EMPTY, value: null };
+  return { text: `${balance.display} ${balance.token}`, value: balance.display };
+}
+
+/** セッションがまだ無いときの添え書き。次の購入でこの上限のセッションが切られる（決定49） */
+const BEFORE_SESSION_NOTE = '（セッション開始前）';
+
+/**
+ * 帯の残枠（決定49。決定47 の「セッションが無ければ—」を上書き）。
+ * 今のセッションがあればその残枠。まだ無ければ次に切る上限を添え書き付きで出す。
+ * セッションの取得に失敗した回だけは「—」にする。`session` は「まだ無い」ときも
+ * 「取れなかった」ときも null になるため、後者で上限を出すと失敗が実値らしく見えてしまう
+ */
+export function stripRemaining(status: {
+  session: { availableSpendUsd: string | null } | null | undefined;
+  sessionError: string | null | undefined;
+  spendLimit: { maxSpendUsd: string };
+}): StripCell {
+  if (status.session) {
+    const available = status.session.availableSpendUsd;
+    return available ? { text: `${available} USD`, value: available } : { text: STRIP_EMPTY, value: null };
+  }
+  if (status.sessionError) return { text: STRIP_EMPTY, value: null };
+  // 上限を出すだけで枠はまだ無い。支払いで動く値ではないので光らせる判定には乗せない
+  return { text: `${status.spendLimit.maxSpendUsd} USD${BEFORE_SESSION_NOTE}`, value: null };
 }
 
 /**
  * 値が変わったことを光らせて知らせてよいか。
- * 「—」との出入りは支払いによる増減ではないので光らせない（残高 API が失敗した回を「減った」と見せないため）
+ * null（取れていない・まだ枠が無い）との出入りは支払いによる増減ではないので光らせない
+ * （残高 API が失敗した回を「減った」と見せない。上限を変えてセッションを破棄しただけでも光らせない）。
+ * 判定は金額そのもので行うので、セッションが切られて添え書きが外れただけでは光らない
  */
-export function shouldFlashValue(prev: string, next: string): boolean {
-  return prev !== next && prev !== STRIP_EMPTY && next !== STRIP_EMPTY;
+export function shouldFlashValue(prev: string | null, next: string | null): boolean {
+  return prev !== null && next !== null && prev !== next;
 }
 
 /** 取り直しを始めるのは支払いが起きる有料ツールの呼び出しだけ */
@@ -91,4 +123,53 @@ export function purchaseFailurePrefix(purchase: {
   if (purchase.paymentMade) return '支払い済み・';
   if (purchase.paymentUncertain) return '支払いの成否不明・';
   return '';
+}
+
+// ── チャットの中に購入したページを差し込む並び（決定50） ──
+
+/** チャット欄に並ぶものの識別子。吹き出しはメッセージ ID、購入カードは resultId */
+export type ChatNodeKey = { kind: 'message'; id: string } | { kind: 'purchase'; id: string };
+
+/**
+ * 吹き出しと購入カードの並びを決める（決定50: 購入したページはチャットの中に描く）。
+ * カードは「届いた時点で末尾だった吹き出し」を錨に持ち、その直後に入る。錨が見つからない
+ * （承認の応答で空の吹き出しが消えた等）カードは末尾に置く。
+ * この順序どおりに DOM を並べ替えると iframe が読み込み直しになるため、
+ * 呼び出し側は既にある要素を動かさない差分の当て方をすること
+ */
+export function orderChatNodes(
+  messageIds: readonly string[],
+  cards: readonly { resultId: string; afterMessageId: string | null }[],
+): ChatNodeKey[] {
+  const placed = new Set<string>();
+  const order: ChatNodeKey[] = [];
+  for (const id of messageIds) {
+    order.push({ kind: 'message', id });
+    for (const card of cards) {
+      if (card.afterMessageId !== id) continue;
+      placed.add(card.resultId);
+      order.push({ kind: 'purchase', id: card.resultId });
+    }
+  }
+  for (const card of cards) {
+    if (placed.has(card.resultId)) continue;
+    order.push({ kind: 'purchase', id: card.resultId });
+  }
+  return order;
+}
+
+/**
+ * 錨にしていた吹き出しが消えたときの付け替え先（直前の生き残り。無ければ null）。
+ * 付け替えないとカードが末尾へ動き、DOM の入れ直しで iframe が読み込み直しになる
+ * （承認へ応答すると、生成先の空の吹き出しが消えることがある）
+ */
+export function retargetAnchor(
+  order: readonly string[],
+  removedId: string,
+  alive: ReadonlySet<string>,
+): string | null {
+  for (let i = order.indexOf(removedId) - 1; i >= 0; i--) {
+    if (alive.has(order[i])) return order[i];
+  }
+  return null;
 }

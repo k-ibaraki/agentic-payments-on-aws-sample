@@ -1,6 +1,7 @@
-// 買い手のブラウザ UI（決定28・29）。
-// サインイン → 依頼の送信（useChat）→ Realtime のチャンク表示 → 購入物の一覧 →
-// 売り手の MCP Apps UI（ui://）をホストとして描画し、購入済み HTML を注入する
+// 買い手のブラウザ UI（決定28・29・50）。
+// サインイン → 依頼の送信（useChat）→ Realtime のチャンク表示 → 買えたページを会話の中に描画 →
+// 「購入履歴」タブで会話をまたいだ購入を一覧する。
+// ページの描画はいずれも、売り手の MCP Apps UI（ui://）をホストとして載せ、購入済み HTML を注入する
 import { api, authApi, buyer } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb-agent/client';
@@ -12,15 +13,17 @@ import {
   balanceKey,
   didBalanceChange,
   findLastAssistant,
-  formatStripBalance,
-  formatStripRemaining,
   isPaidToolCall,
+  orderChatNodes,
   purchaseFailurePrefix,
   readInternalsOpen,
+  retargetAnchor,
   shouldConfirmNewConversation,
   shouldContinueBalanceWatch,
   shouldFlashValue,
   storeInternalsOpen,
+  stripBalance,
+  stripRemaining,
 } from './ui-rules.js';
 
 // ── DOM ヘルパー（文字列は必ず textContent で入れる。innerHTML は
@@ -56,7 +59,10 @@ function appendEvent(text: string) {
 
 // ── チャット（useChat が購読の確立 → 履歴 → 送信の順序を担う。決定26） ──
 type Purchase = Awaited<ReturnType<typeof buyer.listPurchases>>['purchases'][number];
+type PurchaseHistory = Awaited<ReturnType<typeof buyer.listPurchaseHistory>>;
+type PurchaseGroup = PurchaseHistory['conversations'][number];
 
+// 「購入履歴」タブのプレビュー（選んだ 1 件だけを載せる。会話の中のプレビューとは別）
 let previewHost: PreviewHost | null = null;
 let sellerInfo: SellerInfo | null = null;
 // 画面に出ている吹き出しの数。新規会話で確認を挟むかの判断に使う（決定44）
@@ -67,6 +73,17 @@ let streamingResponse = false;
 let lastMessages: ChatMessage[] = [];
 // 変換の結果を本文で覚える。再描画は delta のたびに走り、そのつど過去の応答まで変換し直すため
 const markdownCache = new Map<string, string>();
+
+// 吹き出しはメッセージ ID を鍵に使い回す。毎回作り直すと、同じ chat-log に置いた
+// 購入カードの iframe まで DOM から外れて読み込み直しになり、MCP Apps の接続が切れる（決定50）
+const bubbles = new Map<string, { node: HTMLElement; content: string; markdown: boolean }>();
+// 会話の中に描いた購入カード。resultId ごとに 1 つで、届いた時点の末尾の吹き出しを錨に持つ
+const purchaseCards = new Map<
+  string,
+  { node: HTMLElement; afterMessageId: string | null; host: PreviewHost | null }
+>();
+// 会話の作り直しをまたいだ非同期処理を捨てるための世代。mount の途中で会話が変わったら片付ける
+let conversationGeneration = 0;
 
 function assistantHtml(content: string): string {
   let html = markdownCache.get(content);
@@ -83,21 +100,55 @@ function renderMessages(messages: ChatMessage[]) {
   // 生成中の応答は最後の assistant。承認へ応答すると末尾に approval が積まれ、
   // 生成先はその手前の空プレースホルダになり得るので、位置の決め打ちにはしない
   const streamingIndex = streamingResponse ? findLastAssistant(messages) : -1;
+  const alive = new Set(messages.map((m) => m.id));
+  const order = [...bubbles.keys()];
+  for (const [id, bubble] of bubbles) {
+    if (alive.has(id)) continue;
+    // 消える吹き出しを錨にしているカードは、直前の生き残りへ付け替える。
+    // 付け替えないとカードが末尾へ動き、載せた View（iframe）が読み込み直しになる
+    const fallback = retargetAnchor(order, id, alive);
+    for (const card of purchaseCards.values()) {
+      if (card.afterMessageId === id) card.afterMessageId = fallback;
+    }
+    bubble.node.remove();
+    bubbles.delete(id);
+  }
+  messages.forEach((message, i) => updateBubble(message, i !== streamingIndex));
+  layoutChatLog(messages.map((m) => m.id));
+}
+
+// 中身が変わったときだけ書き込む（毎回書くと、選択やスクロールの位置が飛ぶ）
+function updateBubble(message: ChatMessage, done: boolean) {
+  const markdown = message.role === 'assistant' && done;
+  const existing = bubbles.get(message.id);
+  const node = existing?.node ?? document.createElement('div');
+  if (!existing || existing.content !== message.content || existing.markdown !== markdown) {
+    node.className = `msg ${message.role}${markdown ? ' markdown' : ''}`;
+    if (markdown) node.innerHTML = assistantHtml(message.content);
+    else node.textContent = message.content;
+  }
+  bubbles.set(message.id, { node, content: message.content, markdown });
+}
+
+// 吹き出しと購入カードを並べ直す。並びの規則は ui-rules.ts（テスト済み）。
+// 吹き出しの順は会話（messages）の順であって、作った順ではない
+function layoutChatLog(messageIds: readonly string[]) {
+  const cards = [...purchaseCards].map(([resultId, card]) => ({ resultId, afterMessageId: card.afterMessageId }));
+  const nodes = orderChatNodes(messageIds, cards)
+    .map((key) => (key.kind === 'message' ? bubbles.get(key.id)?.node : purchaseCards.get(key.id)?.node))
+    .filter((node): node is HTMLElement => node !== undefined);
   const log = el('chat-log');
-  log.replaceChildren(
-    ...messages.map((m, i) => {
-      const div = document.createElement('div');
-      div.className = `msg ${m.role}`;
-      if (m.role === 'assistant' && i !== streamingIndex) {
-        div.classList.add('markdown');
-        div.innerHTML = assistantHtml(m.content);
-      } else {
-        div.textContent = m.content;
-      }
-      return div;
-    }),
-  );
+  placeChildren(log, nodes);
   log.scrollTop = log.scrollHeight;
+}
+
+// 既にある要素は動かさずに並べる。iframe は DOM から外して入れ直すと読み込み直しになり、
+// 中の View（AppBridge の接続）が切れるため、末尾への追加以外では触らない
+function placeChildren(container: HTMLElement, nodes: readonly HTMLElement[]) {
+  nodes.forEach((node, i) => {
+    if (container.childNodes[i] !== node) container.insertBefore(node, container.childNodes[i] ?? null);
+  });
+  while (container.childNodes.length > nodes.length) container.lastChild?.remove();
 }
 
 function describeChunk(chunk: AgentStreamChunk): string {
@@ -156,7 +207,8 @@ function createChat() {
       }
       if (chunk.type === 'tool-result' || chunk.type === 'done') {
         // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
-        refreshPurchases().catch(() => {});
+        // 購入が増えていれば refreshPurchases が購入履歴も古い扱いにする
+        refreshPurchases(true).catch(() => {});
         // 支払いの後の残高と残枠を取り直す（残高の推移はここで積み上がる。決定42）
         refreshWallet().catch(() => {});
       }
@@ -173,21 +225,25 @@ function createChat() {
 let chat = createChat();
 
 // 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない。
-// プレビューの iframe には前の利用者が買ったページが残るため、ここで必ず外す
+// 会話の中に描いたページは、その会話のものなのでここで外す（購入履歴タブには残る。決定50）
 function discardConversation() {
   stopBalanceWatch();
+  conversationGeneration += 1;
   chat.destroy();
   chat = createChat();
   messageCount = 0;
   lastMessages = [];
   streamingResponse = false;
   markdownCache.clear();
+  bubbles.clear();
+  for (const card of purchaseCards.values()) card.host?.destroy();
+  purchaseCards.clear();
+  purchasesLoaded = false;
   el('chat-log').replaceChildren();
+  el('chat-status').replaceChildren();
   el('events').replaceChildren();
   el('interrupts').replaceChildren();
   el('conversation-id').textContent = '（未作成）';
-  showMessage(el('purchases'), 'まだありません');
-  discardPreview();
 }
 
 // ── ウォレットと支払いの枠（決定42・43） ─────────────────────────
@@ -205,15 +261,17 @@ let walletRenderedSeq = 0;
 // 帯の数字を書き換え、値どうしが変わったときだけ一瞬光らせる（クラスを外して付け直すと再生する）。
 // 値が同じなら書き込まない（aria-live の領域なので、同じ文字列の読み上げを繰り返させない）
 function renderStrip(status: WalletStatus) {
-  for (const [id, text] of [
-    ['strip-balance', formatStripBalance(status.balance)],
-    ['strip-remaining', formatStripRemaining(status.session)],
+  for (const [id, cell] of [
+    ['strip-balance', stripBalance(status.balance)],
+    ['strip-remaining', stripRemaining(status)],
   ] as const) {
     const node = el(id);
-    const prev = node.textContent ?? '';
-    if (prev === text) continue;
-    node.textContent = text;
-    if (shouldFlashValue(prev, text)) {
+    if (node.textContent === cell.text) continue;
+    // 光らせる判定は文字列ではなく金額で行う（決定49。添え書きの有無で光らせないため）
+    const prev = node.dataset.value ?? '';
+    node.textContent = cell.text;
+    node.dataset.value = cell.value ?? '';
+    if (shouldFlashValue(prev || null, cell.value)) {
       node.classList.remove('flash');
       void node.offsetWidth;
       node.classList.add('flash');
@@ -362,6 +420,7 @@ function discardWallet() {
   walletRenderedSeq = ++walletRequestSeq;
   for (const id of ['strip-balance', 'strip-remaining']) {
     el(id).textContent = STRIP_EMPTY;
+    delete el(id).dataset.value;
     el(id).classList.remove('flash');
   }
   for (const id of ['wallet-balance', 'session-status', 'spend-limit']) el(id).textContent = '（未取得）';
@@ -374,7 +433,9 @@ function discardPreview() {
   previewHost?.destroy();
   previewHost = null;
   el('purchase-status').replaceChildren();
-  el<HTMLIFrameElement>('preview-frame').removeAttribute('srcdoc');
+  const frame = el<HTMLIFrameElement>('preview-frame');
+  frame.removeAttribute('srcdoc');
+  frame.setAttribute('hidden', '');
 }
 
 // エージェントが人の承認を求めてきた（決定31: 支払い済みで成果物の無い購入がある会話での再購入）
@@ -402,9 +463,14 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
     }),
   );
   appendEvent(`interrupt ${interrupts.map((i) => i.name).join(', ')}（人の承認待ち）`);
+  // 承認の操作は依頼タブの中にある（決定50 のタブ化）。購入履歴タブを開いたまま承認待ちになると、
+  // 中断中は done も tool-result も届かず帯の取り直しも止まるため、画面は静止したままになる。
+  // 支払いを続けるかどうかの判断（決定31）を待たせないよう、依頼タブへ引き戻す
+  if (interrupts.length > 0) showTab('chat');
 }
 
-// 直近の会話 ID をブラウザに覚えさせ、再読込後も購入一覧とプレビューへ戻れるようにする
+// 直近の会話 ID をブラウザに覚えさせ、再読込後も同じ会話（吹き出しと購入カード）へ戻れるようにする。
+// 買い置きのページは自動では載せない（「表示」で載せる）
 const LAST_CONVERSATION_KEY = 'agent-app:last-conversation';
 // 内部情報（開発者向け）の折りたたみを閉じたままにしたいかも覚える
 const INTERNALS_OPEN_KEY = 'agent-app:internals-open';
@@ -414,6 +480,9 @@ async function sendCurrentInput() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  // 再開した会話で買い置きを読めていなければ、購入が届く前に読み直す。読めないままだと
+  // 次の購入の取り直し（autoShow）で買い置きまで自動で載ってしまう。ここでも失敗したら諦める
+  if (chat.getConversationId() && !purchasesLoaded) await refreshPurchases(false).catch(() => {});
   try {
     await chat.sendMessage(text);
     const conversationId = chat.getConversationId();
@@ -424,37 +493,91 @@ async function sendCurrentInput() {
   }
 }
 
-// ── 購入物 ────────────────────────────────────────────────────────────
-async function refreshPurchases() {
+// ── 購入物（決定50: 買えたページは会話の中に描き、履歴は会話をまたいで一覧する） ─────
+
+// この会話の購入を一度でも読めたか。再開した会話の買い置きは autoShow=false で読むが、
+// その読み込みが失敗したまま次の購入が届くと、買い置きまで「新規」として自動で載ってしまう。
+// 送信の前に読み直す（sendCurrentInput）ための印
+let purchasesLoaded = false;
+
+// 会話の購入をカードにして会話の中に描く。
+// autoShow: その場で買えた（ストリームで届いた）ものは自動で載せる。再開した会話の
+// 買い置きは、開くかどうかを利用者に委ねる（売り手への接続を、見たいものだけに絞る）
+async function refreshPurchases(autoShow: boolean) {
   const conversationId = chat.getConversationId();
   if (!conversationId) return;
-  // 購入一覧は「支払ったのに成果物が無い」ことを利用者に伝える唯一の経路なので、
+  // 応答を待つ間に会話が捨てられたら（新規会話・サインアウト）、前の会話の購入を新しい画面に
+  // 描かない。showCardPreview の世代の確認は呼ばれた時点の値を見るので、ここで先に止める
+  const generation = conversationGeneration;
+  // 会話の中の購入は「支払ったのに成果物が無い」ことをその場で伝える経路なので、
   // 取得に失敗したら黙って諦めず、必ず画面に出す
   let purchases: Purchase[];
   try {
     ({ purchases } = await buyer.listPurchases(conversationId));
   } catch (error) {
+    if (generation !== conversationGeneration) return;
     appendEvent(`購入一覧を取得できませんでした: ${describeError(error)}`);
-    showError(el('purchases'), '購入一覧を取得できませんでした（支払いは記録されている可能性があります）');
+    showError(el('chat-status'), '購入一覧を取得できませんでした（支払いは記録されている可能性があります）');
     throw error;
   }
-  const container = el('purchases');
-  if (purchases.length === 0) {
-    showMessage(container, 'まだありません');
-    return;
-  }
-  container.replaceChildren(...purchases.map(renderPurchase));
+  if (generation !== conversationGeneration) return;
+  purchasesLoaded = true;
+  el('chat-status').replaceChildren();
+  let added = false;
+  for (const purchase of purchases) added = addPurchaseCard(purchase, autoShow) || added;
+  layoutChatLog(lastMessages.map((m) => m.id));
+  // 履歴が変わるのは購入が増えたときだけ。買っていない応答で会話の履歴を読み直さない
+  if (added) markHistoryStale();
 }
 
-function renderPurchase(purchase: Purchase): HTMLElement {
+// 会話の中のカードを 1 件足す。既にあるものは作り直さない（iframe の読み込み直しを避ける）。
+// 戻り値は「新しく足したか」（購入履歴を取り直すかの判断に使う）
+function addPurchaseCard(purchase: Purchase, autoShow: boolean): boolean {
+  if (purchaseCards.has(purchase.resultId)) return false;
+  const node = document.createElement('div');
+  node.className = 'purchase-card';
+  const row = purchaseRow(purchase);
+  node.appendChild(row);
+  const status = document.createElement('div');
+  status.className = 'purchase-card-status hint';
+  node.appendChild(status);
+  // 錨は今の末尾の吹き出し。以後に届く吹き出しはこのカードの後ろに並ぶ
+  purchaseCards.set(purchase.resultId, {
+    node,
+    afterMessageId: lastMessages[lastMessages.length - 1]?.id ?? null,
+    host: null,
+  });
+  if (!purchase.ok) return true;
+  if (autoShow) {
+    // 失敗したら「表示」を出してやり直せるようにする。カードは resultId ごとに 1 度しか作らないので、
+    // ここで手段を残さないと会話の中からは二度と開けない
+    void showCardPreview(purchase.resultId, node, status).then((shown) => {
+      if (!shown) attachShowButton(row, purchase.resultId, node, status);
+    });
+    return true;
+  }
+  // 再開した会話の買い置きは自動で載せない。押されたときに載せる
+  // （成果物は「購入履歴」からも開けるので、接続は見たいものにだけ開く）
+  attachShowButton(row, purchase.resultId, node, status);
+  return true;
+}
+
+// カードに「表示」を付ける。失敗したときはボタンを残す（一時的な不調でやり直せなくならないように）
+function attachShowButton(row: HTMLElement, resultId: string, node: HTMLElement, status: HTMLElement) {
+  const button = document.createElement('button');
+  button.textContent = '表示';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    if (await showCardPreview(resultId, node, status)) button.remove();
+    else button.disabled = false;
+  });
+  row.insertBefore(button, row.firstChild);
+}
+
+// 購入 1 件の見出し（resultId・支払いの状況・tx）。会話の中のカードと履歴の行で共用する
+function purchaseRow(purchase: Purchase): HTMLElement {
   const row = document.createElement('div');
   row.className = 'purchase';
-
-  const button = document.createElement('button');
-  button.textContent = purchase.ok ? '表示' : '失敗';
-  button.disabled = !purchase.ok;
-  button.addEventListener('click', () => void showPurchase(purchase.resultId));
-  row.appendChild(button);
 
   const id = document.createElement('code');
   id.textContent = purchase.resultId;
@@ -478,7 +601,143 @@ function renderPurchase(purchase: Purchase): HTMLElement {
   return row;
 }
 
-// 購入済み HTML を、売り手の MCP Apps UI（ホスト実装）に注入して描画する（決定29）
+// 履歴の行。こちらは一覧が長くなり得るので、押されたものだけをプレビューに載せる
+function renderHistoryPurchase(purchase: Purchase): HTMLElement {
+  const row = purchaseRow(purchase);
+  const button = document.createElement('button');
+  button.textContent = purchase.ok ? '表示' : '失敗';
+  button.disabled = !purchase.ok;
+  button.addEventListener('click', () => void showPurchase(purchase.resultId));
+  row.insertBefore(button, row.firstChild);
+  return row;
+}
+
+// 会話の中のカードに、売り手の MCP Apps UI を載せて購入済み HTML を描く（決定29・50）。
+// カードごとに View を 1 つ持つため、売り手への MCP 接続も載せた数だけ開く
+async function showCardPreview(resultId: string, node: HTMLElement, status: HTMLElement): Promise<boolean> {
+  const generation = conversationGeneration;
+  showMessage(status, 'ページを読み込んでいます…');
+  const frame = document.createElement('iframe');
+  frame.className = 'purchase-preview';
+  frame.title = `購入したページ（${resultId}）`;
+  frame.setAttribute('sandbox', 'allow-scripts');
+  node.insertBefore(frame, status);
+  // 載せた後に失敗したら閉じるために外で持つ。閉じ忘れると、やり直しのたびに売り手への接続が残る
+  let host: PreviewHost | null = null;
+  try {
+    const artifact = await buyer.getPurchasedHtml(resultId);
+    if (!artifact?.html) {
+      frame.remove();
+      showMessage(status, 'この購入には HTML がありません（支払い後の失敗）', 'error');
+      // 内容が無いこと自体は変わらないので、やり直しの余地は無い（成功と同じ扱いにする）
+      return true;
+    }
+    sellerInfo ??= await buyer.getSellerInfo();
+    host = await mountPreviewHost(frame, sellerInfo, { onDownload: downloadHtml });
+    const card = purchaseCards.get(resultId);
+    // 載せている間に会話が捨てられていたら、開いた接続を閉じて何も描かない
+    if (generation !== conversationGeneration || !card) {
+      host.destroy();
+      frame.remove();
+      return false;
+    }
+    await host.showHtml(artifact.html, artifact.filename);
+    // showHtml を待つ間に会話が捨てられると、discardConversation の後始末は card.host がまだ
+    // null なのでこのホストを見逃す。カードはマップから外れているため、ここで閉じないと誰も閉じない
+    if (generation !== conversationGeneration || purchaseCards.get(resultId) !== card) {
+      host.destroy();
+      frame.remove();
+      return false;
+    }
+    card.host = host;
+    status.replaceChildren();
+    return true;
+  } catch (error) {
+    host?.destroy();
+    frame.remove();
+    if (generation !== conversationGeneration) return false;
+    // 例外文は ARN や ID を含み得るので画面には出さず、詳細は内部情報のログへ（refreshHistory と同じ扱い）
+    appendEvent(`ページを表示できませんでした: ${describeError(error)}`);
+    showError(status, '表示に失敗しました（「表示」でやり直せます）');
+    return false;
+  }
+}
+
+// ── 購入履歴（決定50） ────────────────────────────────────────────────
+// 会話をまたいだ一覧。会話の履歴を丸ごと読む API なので、取るのはタブを開いたとき・「更新」のとき・
+// 会話の中の購入が増えたとき（markHistoryStale）に限る
+let historyStale = true;
+// 取得の通し番号（refreshWallet と同じ理由）。タブの切り替え・「更新」・購入の増加が並行し得るので、
+// 追い越されて遅れて返った古い一覧で新しい一覧を巻き戻さない。サインアウトでは番号を進めて
+// 飛行中の応答を捨て、前の利用者の履歴が描き戻らないようにする
+let historyRequestSeq = 0;
+let historyRenderedSeq = 0;
+
+function historyVisible(): boolean {
+  return !el('panel-history').hasAttribute('hidden');
+}
+
+// 購入が増えた・会話を捨てた。見えていれば取り直し、見えていなければ開いたときに取り直す
+function markHistoryStale() {
+  historyStale = true;
+  if (historyVisible()) refreshHistory().catch(() => {});
+}
+
+async function refreshHistory() {
+  const seq = ++historyRequestSeq;
+  const container = el('history');
+  let history: PurchaseHistory;
+  try {
+    history = await buyer.listPurchaseHistory();
+  } catch (error) {
+    if (seq < historyRenderedSeq) throw error;
+    // 例外文は ARN や ID を含み得るので画面には出さず、詳細は内部情報のログへ
+    appendEvent(`購入履歴を取得できませんでした: ${describeError(error)}`);
+    showError(container, '購入履歴を取得できませんでした');
+    throw error;
+  }
+  if (seq < historyRenderedSeq) return;
+  historyRenderedSeq = seq;
+  historyStale = false;
+  const nodes = history.conversations.map(renderHistoryGroup);
+  const note = historyNote(history);
+  if (note) {
+    const line = document.createElement('div');
+    line.className = 'hint';
+    line.textContent = note;
+    nodes.push(line);
+  }
+  if (nodes.length === 0) {
+    showMessage(container, 'まだありません');
+    return;
+  }
+  container.replaceChildren(...nodes);
+}
+
+// 読み残しと読めなかった会話を利用者に伝える（黙って欠けさせない）
+function historyNote(history: PurchaseHistory): string | null {
+  const parts: string[] = [];
+  if (history.scanned < history.total) {
+    parts.push(`新しい ${history.scanned} 会話まで読みました（それより古い ${history.total - history.scanned} 会話は読んでいません）`);
+  }
+  if (history.failed > 0) parts.push(`${history.failed} 会話は読めませんでした（「更新」でやり直せます）`);
+  return parts.length > 0 ? parts.join('。') : null;
+}
+
+function renderHistoryGroup(group: PurchaseGroup): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'history-group';
+  const heading = document.createElement('div');
+  heading.className = 'history-group-heading';
+  const current = group.conversationId === chat.getConversationId();
+  heading.textContent = `${new Date(group.updatedAt).toLocaleString()} の会話${current ? '（いま開いている会話）' : ''}`;
+  box.appendChild(heading);
+  box.append(...group.purchases.map(renderHistoryPurchase));
+  return box;
+}
+
+// 購入済み HTML を、売り手の MCP Apps UI（ホスト実装）に注入して描画する（決定29）。
+// こちらは購入履歴タブの 1 枚きりのプレビュー
 async function showPurchase(resultId: string) {
   const status = el('purchase-status');
   try {
@@ -497,20 +756,45 @@ async function showPurchase(resultId: string) {
 
 async function ensurePreviewHost(): Promise<PreviewHost> {
   if (previewHost) return previewHost;
+  el('preview-frame').removeAttribute('hidden');
   sellerInfo ??= await buyer.getSellerInfo();
   appendEvent(`ui:// を取得: ${sellerInfo.resourceUri}（${sellerInfo.mcpUrl}）`);
   previewHost = await mountPreviewHost(el<HTMLIFrameElement>('preview-frame'), sellerInfo, {
-    onDownload: (filename, html) => {
-      const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
+    onDownload: downloadHtml,
   });
   appendEvent('MCP Apps の View を初期化しました');
   return previewHost;
+}
+
+// View からの ui/download-file 要求。会話の中のカードでも履歴のプレビューでも同じ扱い
+function downloadHtml(filename: string, html: string) {
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── 面の切り替え（決定50。決定44 の「タブ部品は使わない」を上書き） ──────────────
+// ARIA の tablist は名乗らず、押した状態を aria-pressed で表す素のボタンにしている（index.html 参照）
+function showTab(name: 'chat' | 'history') {
+  for (const panel of ['chat', 'history'] as const) {
+    const active = panel === name;
+    el(`tab-${panel}`).setAttribute('aria-pressed', String(active));
+    el(`panel-${panel}`).toggleAttribute('hidden', !active);
+  }
+  if (name === 'history' && historyStale) refreshHistory().catch(() => {});
+}
+
+// 同じブラウザで別の利用者がサインインしても前の購入が見えないよう、履歴も捨てる
+function discardHistory() {
+  historyStale = true;
+  // 飛行中の取得の応答を捨てる（前の利用者の履歴が遅れて描き戻らないように）
+  historyRenderedSeq = ++historyRequestSeq;
+  showMessage(el('history'), 'まだありません');
+  discardPreview();
+  showTab('chat');
 }
 
 async function resumeLastConversation() {
@@ -529,8 +813,8 @@ async function resumeLastConversation() {
   el('conversation-id').textContent = conversationId;
   appendEvent(`前回の会話 ${conversationId} を再開しました`);
   // 一覧の取得に失敗しても会話は捨てない（一時的な不調で履歴を見失わせない）。
-  // 失敗は refreshPurchases が画面に出す
-  await refreshPurchases().catch(() => {});
+  // 失敗は refreshPurchases が画面に出す。再開した会話のページは自動では描かない
+  await refreshPurchases(false).catch(() => {});
 }
 
 // ── 起動 ──────────────────────────────────────────────────────────────
@@ -551,6 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // 同じブラウザで別の利用者がサインインしても前の会話とページが見えないよう、画面ごと捨てる
       discardConversation();
       discardWallet();
+      discardHistory();
     }
   });
 
@@ -560,6 +845,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   el('wallet-refresh-btn').addEventListener('click', () => {
     refreshWallet().catch(() => {});
+  });
+
+  for (const panel of ['chat', 'history'] as const) {
+    el(`tab-${panel}`).addEventListener('click', () => showTab(panel));
+  }
+  el('history-refresh-btn').addEventListener('click', () => {
+    refreshHistory().catch(() => {});
   });
 
   el('last-code-btn').addEventListener('click', async () => {
@@ -577,13 +869,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // 押し直しは効かない（画面から再開する手段が無い）ので、会話があるときは確認を挟む
     if (
       shouldConfirmNewConversation(messageCount) &&
-      !window.confirm('今の会話と購入一覧は画面から消えます。新しい会話を始めますか？')
+      !window.confirm('今の会話は画面から消えます（買ったページは「購入履歴」に残ります）。新しい会話を始めますか？')
     ) {
       return;
     }
     // 会話を捨てて新しい ID を採番させる（次の送信時に createConversation が走る）
     localStorage.removeItem(LAST_CONVERSATION_KEY);
     discardConversation();
+    // 捨てた会話の購入は履歴でしか辿れなくなる。開いていれば取り直す
+    markHistoryStale();
     appendEvent('新しい会話を始めます');
   });
 
