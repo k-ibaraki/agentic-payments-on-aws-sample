@@ -143,11 +143,12 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
 
   // 利用者の購入履歴（決定50）。会話が変わっても購入したページを開けるよう、所有する会話
   // （listConversations）を新しい順にたどって購入を集める。会話の履歴を丸ごと読むので、
-  // 購入のたびではなく履歴を開いたときと更新のときだけ呼ぶ
+  // 呼ぶのは履歴タブを開いたとき・「更新」のとき・会話の中の購入が増えたときに限る。
+  // 読む会話の数は purchaseHistory が有界にし、読み残しと読めなかった数を返す
   async listPurchaseHistory() {
     const user = await auth.requireAuth(context);
     const conversations = await buyerAgent.listConversations(user.userSub);
-    return { conversations: await purchaseHistory(conversations, (id) => buyerAgent.getConversation(id)) };
+    return await purchaseHistory(conversations, (id) => buyerAgent.getConversation(id));
   },
 
   // 購入済み HTML の取得（決定10・29: HTML 本体はエージェント経由でブラウザへ渡す）。

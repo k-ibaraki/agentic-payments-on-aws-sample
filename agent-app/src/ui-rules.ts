@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -38,9 +38,10 @@ export const BALANCE_WATCH_INTERVAL_MS = 3000;
 export const STRIP_EMPTY = '—';
 
 /**
- * 帯の 1 マス。`text` は画面に出す文字列、`value` は光らせる判定にだけ使う金額
- * （取れていなければ null）。文字列で判定すると、同じ金額でも添え書きの有無で
- * 「変わった」ことになってしまうため分けている（決定49）
+ * 帯の 1 マス。`text` は画面に出す文字列、`value` は光らせる判定にだけ使う金額。
+ * 取れていないとき、そしてまだ枠が無い（次に切る上限を出している）ときは null。
+ * 光るのは支払いによる増減の合図なので、枠の有無が変わっただけ・上限を変えただけでは光らせない。
+ * 文字列で判定すると、同じ金額でも添え書きの有無で「変わった」ことになってしまうため分けている（決定49）
  */
 export interface StripCell {
   text: string;
@@ -72,14 +73,14 @@ export function stripRemaining(status: {
     return available ? { text: `${available} USD`, value: available } : { text: STRIP_EMPTY, value: null };
   }
   if (status.sessionError) return { text: STRIP_EMPTY, value: null };
-  const limit = status.spendLimit.maxSpendUsd;
-  return { text: `${limit} USD${BEFORE_SESSION_NOTE}`, value: limit };
+  // 上限を出すだけで枠はまだ無い。支払いで動く値ではないので光らせる判定には乗せない
+  return { text: `${status.spendLimit.maxSpendUsd} USD${BEFORE_SESSION_NOTE}`, value: null };
 }
 
 /**
  * 値が変わったことを光らせて知らせてよいか。
- * 取れていない回（null）との出入りは支払いによる増減ではないので光らせない
- * （残高 API が失敗した回を「減った」と見せないため）。
+ * null（取れていない・まだ枠が無い）との出入りは支払いによる増減ではないので光らせない
+ * （残高 API が失敗した回を「減った」と見せない。上限を変えてセッションを破棄しただけでも光らせない）。
  * 判定は金額そのもので行うので、セッションが切られて添え書きが外れただけでは光らない
  */
 export function shouldFlashValue(prev: string | null, next: string | null): boolean {

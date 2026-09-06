@@ -1,5 +1,6 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44）。
-// 新規会話の確認の要否と、「内部情報」の折りたたみ状態の読み書き
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50）。
+// 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
+// 会話の中の購入カードの並び
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -76,10 +77,10 @@ describe('帯の表示文字列', () => {
     });
   });
 
-  it('セッションがまだ無ければ、次に切る上限を添え書き付きで出す（決定49）', () => {
+  it('セッションがまだ無ければ、次に切る上限を添え書き付きで出す（決定49）。光らせる判定には乗せない', () => {
     expect(stripRemaining({ session: null, sessionError: null, spendLimit })).toEqual({
       text: '1.00 USD（セッション開始前）',
-      value: '1.00',
+      value: null,
     });
   });
 
@@ -112,6 +113,15 @@ describe('光らせてよい変化か', () => {
     expect(shouldFlashValue('0.30', null)).toBe(false);
     expect(shouldFlashValue(null, '0.30')).toBe(false);
     expect(shouldFlashValue(null, null)).toBe(false);
+  });
+
+  // 上限を変えると今のセッションは破棄され、残枠は実値から「次に切る上限」に変わる。
+  // 支払いではないので光らせない（セッション開始前の残枠は value を持たない）
+  it('セッションの破棄（上限の変更）では光らせない', () => {
+    const spendLimit = { maxSpendUsd: '5.00' };
+    const before = stripRemaining({ session: { availableSpendUsd: '0.90' }, sessionError: null, spendLimit });
+    const after = stripRemaining({ session: null, sessionError: null, spendLimit });
+    expect(shouldFlashValue(before.value, after.value)).toBe(false);
   });
 });
 

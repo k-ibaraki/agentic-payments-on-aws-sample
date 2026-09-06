@@ -59,7 +59,8 @@ function appendEvent(text: string) {
 
 // ── チャット（useChat が購読の確立 → 履歴 → 送信の順序を担う。決定26） ──
 type Purchase = Awaited<ReturnType<typeof buyer.listPurchases>>['purchases'][number];
-type PurchaseGroup = Awaited<ReturnType<typeof buyer.listPurchaseHistory>>['conversations'][number];
+type PurchaseHistory = Awaited<ReturnType<typeof buyer.listPurchaseHistory>>;
+type PurchaseGroup = PurchaseHistory['conversations'][number];
 
 // 「購入履歴」タブのプレビュー（選んだ 1 件だけを載せる。会話の中のプレビューとは別）
 let previewHost: PreviewHost | null = null;
@@ -237,6 +238,7 @@ function discardConversation() {
   bubbles.clear();
   for (const card of purchaseCards.values()) card.host?.destroy();
   purchaseCards.clear();
+  purchasesLoaded = false;
   el('chat-log').replaceChildren();
   el('chat-status').replaceChildren();
   el('events').replaceChildren();
@@ -463,7 +465,8 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
   appendEvent(`interrupt ${interrupts.map((i) => i.name).join(', ')}（人の承認待ち）`);
 }
 
-// 直近の会話 ID をブラウザに覚えさせ、再読込後も購入一覧とプレビューへ戻れるようにする
+// 直近の会話 ID をブラウザに覚えさせ、再読込後も同じ会話（吹き出しと購入カード）へ戻れるようにする。
+// 買い置きのページは自動では載せない（「表示」で載せる）
 const LAST_CONVERSATION_KEY = 'agent-app:last-conversation';
 // 内部情報（開発者向け）の折りたたみを閉じたままにしたいかも覚える
 const INTERNALS_OPEN_KEY = 'agent-app:internals-open';
@@ -473,6 +476,9 @@ async function sendCurrentInput() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  // 再開した会話で買い置きを読めていなければ、購入が届く前に読み直す。読めないままだと
+  // 次の購入の取り直し（autoShow）で買い置きまで自動で載ってしまう。ここでも失敗したら諦める
+  if (chat.getConversationId() && !purchasesLoaded) await refreshPurchases(false).catch(() => {});
   try {
     await chat.sendMessage(text);
     const conversationId = chat.getConversationId();
@@ -485,27 +491,38 @@ async function sendCurrentInput() {
 
 // ── 購入物（決定50: 買えたページは会話の中に描き、履歴は会話をまたいで一覧する） ─────
 
+// この会話の購入を一度でも読めたか。再開した会話の買い置きは autoShow=false で読むが、
+// その読み込みが失敗したまま次の購入が届くと、買い置きまで「新規」として自動で載ってしまう。
+// 送信の前に読み直す（sendCurrentInput）ための印
+let purchasesLoaded = false;
+
 // 会話の購入をカードにして会話の中に描く。
 // autoShow: その場で買えた（ストリームで届いた）ものは自動で載せる。再開した会話の
 // 買い置きは、開くかどうかを利用者に委ねる（売り手への接続を、見たいものだけに絞る）
 async function refreshPurchases(autoShow: boolean) {
   const conversationId = chat.getConversationId();
   if (!conversationId) return;
-  // 購入一覧は「支払ったのに成果物が無い」ことを利用者に伝える唯一の経路なので、
+  // 応答を待つ間に会話が捨てられたら（新規会話・サインアウト）、前の会話の購入を新しい画面に
+  // 描かない。showCardPreview の世代の確認は呼ばれた時点の値を見るので、ここで先に止める
+  const generation = conversationGeneration;
+  // 会話の中の購入は「支払ったのに成果物が無い」ことをその場で伝える経路なので、
   // 取得に失敗したら黙って諦めず、必ず画面に出す
   let purchases: Purchase[];
   try {
     ({ purchases } = await buyer.listPurchases(conversationId));
   } catch (error) {
+    if (generation !== conversationGeneration) return;
     appendEvent(`購入一覧を取得できませんでした: ${describeError(error)}`);
     showError(el('chat-status'), '購入一覧を取得できませんでした（支払いは記録されている可能性があります）');
     throw error;
   }
+  if (generation !== conversationGeneration) return;
+  purchasesLoaded = true;
   el('chat-status').replaceChildren();
   let added = false;
   for (const purchase of purchases) added = addPurchaseCard(purchase, autoShow) || added;
   layoutChatLog(lastMessages.map((m) => m.id));
-  // 履歴が変わるのは購入が増えたときだけ。買っていない応答で 20 会話ぶんを読み直さない
+  // 履歴が変わるのは購入が増えたときだけ。買っていない応答で会話の履歴を読み直さない
   if (added) markHistoryStale();
 }
 
@@ -528,21 +545,29 @@ function addPurchaseCard(purchase: Purchase, autoShow: boolean): boolean {
   });
   if (!purchase.ok) return true;
   if (autoShow) {
-    void showCardPreview(purchase.resultId, node, status);
+    // 失敗したら「表示」を出してやり直せるようにする。カードは resultId ごとに 1 度しか作らないので、
+    // ここで手段を残さないと会話の中からは二度と開けない
+    void showCardPreview(purchase.resultId, node, status).then((shown) => {
+      if (!shown) attachShowButton(row, purchase.resultId, node, status);
+    });
     return true;
   }
   // 再開した会話の買い置きは自動で載せない。押されたときに載せる
   // （成果物は「購入履歴」からも開けるので、接続は見たいものにだけ開く）
+  attachShowButton(row, purchase.resultId, node, status);
+  return true;
+}
+
+// カードに「表示」を付ける。失敗したときはボタンを残す（一時的な不調でやり直せなくならないように）
+function attachShowButton(row: HTMLElement, resultId: string, node: HTMLElement, status: HTMLElement) {
   const button = document.createElement('button');
   button.textContent = '表示';
   button.addEventListener('click', async () => {
     button.disabled = true;
-    // 失敗したときはボタンを残す（一時的な不調でやり直せなくならないように）
-    if (await showCardPreview(purchase.resultId, node, status)) button.remove();
+    if (await showCardPreview(resultId, node, status)) button.remove();
     else button.disabled = false;
   });
   row.insertBefore(button, row.firstChild);
-  return true;
 }
 
 // 購入 1 件の見出し（resultId・支払いの状況・tx）。会話の中のカードと履歴の行で共用する
@@ -593,6 +618,8 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
   frame.title = `購入したページ（${resultId}）`;
   frame.setAttribute('sandbox', 'allow-scripts');
   node.insertBefore(frame, status);
+  // 載せた後に失敗したら閉じるために外で持つ。閉じ忘れると、やり直しのたびに売り手への接続が残る
+  let host: PreviewHost | null = null;
   try {
     const artifact = await buyer.getPurchasedHtml(resultId);
     if (!artifact?.html) {
@@ -602,7 +629,7 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
       return true;
     }
     sellerInfo ??= await buyer.getSellerInfo();
-    const host = await mountPreviewHost(frame, sellerInfo, { onDownload: downloadHtml });
+    host = await mountPreviewHost(frame, sellerInfo, { onDownload: downloadHtml });
     const card = purchaseCards.get(resultId);
     // 載せている間に会話が捨てられていたら、開いた接続を閉じて何も描かない
     if (generation !== conversationGeneration || !card) {
@@ -610,11 +637,12 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
       frame.remove();
       return false;
     }
-    card.host = host;
     await host.showHtml(artifact.html, artifact.filename);
+    card.host = host;
     status.replaceChildren();
     return true;
   } catch (error) {
+    host?.destroy();
     frame.remove();
     if (generation !== conversationGeneration) return false;
     showError(status, `表示に失敗: ${describeError(error)}`);
@@ -623,9 +651,14 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
 }
 
 // ── 購入履歴（決定50） ────────────────────────────────────────────────
-// 会話をまたいだ一覧。会話の履歴を丸ごと読む API なので、購入のたびではなく
-// タブを開いたときと「更新」のときだけ取る
+// 会話をまたいだ一覧。会話の履歴を丸ごと読む API なので、取るのはタブを開いたとき・「更新」のとき・
+// 会話の中の購入が増えたとき（markHistoryStale）に限る
 let historyStale = true;
+// 取得の通し番号（refreshWallet と同じ理由）。タブの切り替え・「更新」・購入の増加が並行し得るので、
+// 追い越されて遅れて返った古い一覧で新しい一覧を巻き戻さない。サインアウトでは番号を進めて
+// 飛行中の応答を捨て、前の利用者の履歴が描き戻らないようにする
+let historyRequestSeq = 0;
+let historyRenderedSeq = 0;
 
 function historyVisible(): boolean {
   return !el('panel-history').hasAttribute('hidden');
@@ -638,20 +671,44 @@ function markHistoryStale() {
 }
 
 async function refreshHistory() {
+  const seq = ++historyRequestSeq;
   const container = el('history');
-  let conversations: PurchaseGroup[];
+  let history: PurchaseHistory;
   try {
-    ({ conversations } = await buyer.listPurchaseHistory());
+    history = await buyer.listPurchaseHistory();
   } catch (error) {
-    showError(container, `購入履歴を取得できませんでした: ${describeError(error)}`);
+    if (seq < historyRenderedSeq) throw error;
+    // 例外文は ARN や ID を含み得るので画面には出さず、詳細は内部情報のログへ
+    appendEvent(`購入履歴を取得できませんでした: ${describeError(error)}`);
+    showError(container, '購入履歴を取得できませんでした');
     throw error;
   }
+  if (seq < historyRenderedSeq) return;
+  historyRenderedSeq = seq;
   historyStale = false;
-  if (conversations.length === 0) {
+  const nodes = history.conversations.map(renderHistoryGroup);
+  const note = historyNote(history);
+  if (note) {
+    const line = document.createElement('div');
+    line.className = 'hint';
+    line.textContent = note;
+    nodes.push(line);
+  }
+  if (nodes.length === 0) {
     showMessage(container, 'まだありません');
     return;
   }
-  container.replaceChildren(...conversations.map(renderHistoryGroup));
+  container.replaceChildren(...nodes);
+}
+
+// 読み残しと読めなかった会話を利用者に伝える（黙って欠けさせない）
+function historyNote(history: PurchaseHistory): string | null {
+  const parts: string[] = [];
+  if (history.scanned < history.total) {
+    parts.push(`新しい ${history.scanned} 会話まで読みました（それより古い ${history.total - history.scanned} 会話は読んでいません）`);
+  }
+  if (history.failed > 0) parts.push(`${history.failed} 会話は読めませんでした（「更新」でやり直せます）`);
+  return parts.length > 0 ? parts.join('。') : null;
 }
 
 function renderHistoryGroup(group: PurchaseGroup): HTMLElement {
@@ -719,6 +776,8 @@ function showTab(name: 'chat' | 'history') {
 // 同じブラウザで別の利用者がサインインしても前の購入が見えないよう、履歴も捨てる
 function discardHistory() {
   historyStale = true;
+  // 飛行中の取得の応答を捨てる（前の利用者の履歴が遅れて描き戻らないように）
+  historyRenderedSeq = ++historyRequestSeq;
   showMessage(el('history'), 'まだありません');
   discardPreview();
   showTab('chat');

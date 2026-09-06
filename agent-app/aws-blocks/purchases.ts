@@ -87,8 +87,15 @@ export function extractPurchases(messages: readonly MessageLike[]): PurchaseSumm
 
 // ── 利用者ごとの購入履歴（決定50） ──
 
-/** 履歴でたどる会話の数の上限。1 会話ぶんの履歴を丸ごと読むため、古い会話は読みに行かない */
+/** 履歴として返す会話（購入のあるもの）の数の上限 */
 export const PURCHASE_HISTORY_CONVERSATIONS = 20;
+/**
+ * 1 回の呼び出しで読む会話の数の天井。会話 1 件ぶんの履歴を丸ごと読むため、購入の無い会話が
+ * 続いても際限なく古い方へ読みに行かないよう、返す数とは別に読む数を有界にする
+ */
+export const PURCHASE_HISTORY_SCAN_LIMIT = 100;
+/** 同時に読む会話の数。Lambda が一度に抱える履歴の量を抑える */
+const PURCHASE_HISTORY_BATCH = 5;
 
 /** 会話 1 件ぶんの購入。並びは会話の中の順序を保つ */
 export interface ConversationPurchases {
@@ -97,23 +104,53 @@ export interface ConversationPurchases {
   purchases: PurchaseSummary[];
 }
 
+export interface PurchaseHistory {
+  /** 購入のある会話。新しい順 */
+  conversations: ConversationPurchases[];
+  /** 読んだ会話の数。`total` より少なければ、それより古い会話は読んでいない（画面で伝える） */
+  scanned: number;
+  /** 利用者の会話の総数 */
+  total: number;
+  /** 取得に失敗して飛ばした会話の数。読めた分だけを返す */
+  failed: number;
+}
+
 /**
- * 利用者の会話を新しい順にたどり、購入のある会話だけを集める（決定50）。
+ * 利用者の会話を新しい順にたどり、購入のある会話を集める（決定50）。
  * 会話の所有は呼び出し側（`listConversations(userSub)`）で解決済みであることを前提にする。
- * 購入物そのものは利用者ごとの KVStore にあるため、会話をまたいでも `getPurchasedHtml` で開ける
+ * 購入物そのものは利用者ごとの KVStore にあるため、会話をまたいでも `getPurchasedHtml` で開ける。
+ *
+ * 購入のある会話が `limit` 件そろうか、`scanLimit` 件読むか、会話が尽きるまで、
+ * `batch` 件ずつ読み進める。購入の無い会話は新規会話を押して 1 度送るたびに残るので、
+ * 読む数で切ると古い購入が黙って消える。1 会話の取得失敗は飛ばして数だけ伝える
+ * （この索引は支払い済みの成果物へ辿る唯一の経路なので、1 件の失敗で全体を落とさない）
  */
 export async function purchaseHistory(
   conversations: readonly { conversationId: string; updatedAt: number }[],
   getMessages: (conversationId: string) => Promise<readonly MessageLike[]>,
-  limit: number = PURCHASE_HISTORY_CONVERSATIONS,
-): Promise<ConversationPurchases[]> {
-  const recent = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
-  const collected = await Promise.all(
-    recent.map(async (conversation) => ({
-      conversationId: conversation.conversationId,
-      updatedAt: conversation.updatedAt,
-      purchases: extractPurchases(await getMessages(conversation.conversationId)),
-    })),
-  );
-  return collected.filter((entry) => entry.purchases.length > 0);
+  options: { limit?: number; scanLimit?: number; batch?: number } = {},
+): Promise<PurchaseHistory> {
+  const limit = options.limit ?? PURCHASE_HISTORY_CONVERSATIONS;
+  const scanLimit = options.scanLimit ?? PURCHASE_HISTORY_SCAN_LIMIT;
+  const batch = options.batch ?? PURCHASE_HISTORY_BATCH;
+  const recent = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, scanLimit);
+  const found: ConversationPurchases[] = [];
+  let scanned = 0;
+  let failed = 0;
+  while (scanned < recent.length && found.length < limit) {
+    const chunk = recent.slice(scanned, scanned + batch);
+    const results = await Promise.allSettled(chunk.map((c) => getMessages(c.conversationId)));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        failed += 1;
+        return;
+      }
+      const purchases = extractPurchases(result.value);
+      if (purchases.length > 0) {
+        found.push({ conversationId: chunk[i].conversationId, updatedAt: chunk[i].updatedAt, purchases });
+      }
+    });
+    scanned += chunk.length;
+  }
+  return { conversations: found.slice(0, limit), scanned, total: conversations.length, failed };
 }
