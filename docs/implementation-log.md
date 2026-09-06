@@ -2,6 +2,43 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-06: 未知のパスを 404 にする（決定45）
+
+### 発端
+
+- ユーザーの申し出「トップページ以外の適当なパスでもアプリが動く。購入した HTML に変なものを仕込まれたときに困るので 404 にしたい」
+- 調べた結果、コードではなく配信層の挙動だった。クラウドは Amplify コンソールがアプリ作成時に自動で付けた
+  `/<*> → /index.html (404-200)` の規則（`aws amplify list-apps` の `customRules` で実物を確認）、
+  ローカルは Vite 既定の `appType: 'spa'` のフォールバック（Blocks の開発サーバーは API 以外を Vite にそのまま流す）
+- 危険度の見立て: 購入 HTML は不透明オリジンの sandbox iframe に閉じているので、フォールバック自体が権限を増やすわけではない。
+  それでも任意 URL が本体を 200 で返すのは不要な露出で、この画面はクライアントルーティングを使わないため締めても失うものが無い
+
+### やったこと
+
+- `agent-app/vite.config.ts`: `appType: 'mpa'`。開発サーバー・preview とも存在しないパスは 404
+- `agent-app/public/404.html`: 体裁用の自己完結の一枚（外部 CSS・JS 無し）。Vite が `dist/` 直下へ写す
+- Amplify アプリ（ap-northeast-1、`dei96o54khd9a`）の規則を `/<*> → /404.html (404)` に差し替えた（`aws amplify update-app`）。
+  アプリ単位の設定でリポジトリでは管理できないため、README のクラウド deploy 節に手順を書いた
+- DESIGN.md に決定45
+
+### セルフレビューで見つかった誤り（同日）
+
+- **CDK 直 deploy の経路を「変更不要」と誤って結論していた。** 決定45 の初版は「`Hosting` は `spaFallback` 既定 false」と書いたが、
+  根拠にした `?? false` は CloudFront Function を組み立てる低層（`@aws-blocks/hosting` の `defaults.js`）の既定で、
+  実際にそこへ渡る値はアダプタが決めていた。`detectFramework` は next / nitro / astro / sveltekit 以外を全て `'spa'` に落とすため
+  （`adapters/index.js`）、この Vite プロジェクトは `'spa'` 判定 → `spaFallback: true`。`npm run deploy`（決定33 の退路）では
+  今も任意パスがアプリ本体を 200 で返す状態だった。既定値が多層のとき、低層の既定を見て早合点したのが原因
+- 直し方: `aws-blocks/index.cdk.ts` の `Hosting` に `framework: 'static'` を明示。あわせて SPA アダプタが `dist/404.html` を見て
+  `errorPages[404]` に自動配線するので（`adapters/spa.js`）、追加した `public/404.html` が CDK 経路でもそのまま効く
+- Amplify の規則がリポジトリ外の手動設定である件は、`amplify.yml` から `update-app` を流す案の副作用（サービスロールに
+  `amplify:UpdateApp` が要る・ビルドがアプリ設定を書き換える）を嫌って手動運用のままとし、残存リスクを決定45 に明記した
+
+### 検証・つまずき
+
+- クラウドの実応答は main ブランチにアクセス制御（Basic 認証）が掛かっており、curl では全パスが 401 だった。
+  規則の反映は `update-app` の応答で確認し、404 ページ自体は本ブランチが deploy されてから（`404.html` が `dist/` に入ってから）
+  ブラウザで確認する。規則の差し替えは deploy 前でも害はない（無いファイルは元から Amplify 既定の 404 になる）
+
 ## 2026-09-06: 買い手の画面の情報設計を組み直す（決定44）
 
 ### 発端（grill-me）

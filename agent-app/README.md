@@ -103,6 +103,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - Amplify Hosting のビルド設定はリポジトリ直下の `amplify.yml`（モノレポなので `appRoot: agent-app`）。
   Amplify コンソールでアプリを作るときは GitHub 連携でモノレポの `agent-app` を選び、
   バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
+- Amplify コンソールでアプリを作ると、SPA 用の書き換え規則 `/<*> → /index.html (404-200)` が自動で付き、
+  どんなパスでもアプリが返ってしまう。この画面はトップページだけで動くので、規則を `/<*> → /404.html (404)` に
+  差し替える（アプリ単位の設定でリポジトリでは管理できない。決定45）:
+  `aws amplify update-app --region ap-northeast-1 --app-id <appId> --custom-rules '[{"source":"/<*>","target":"/404.html","status":"404"}]'`
 - 名前の制約: S3 バケット名が `<Amplify のスタック名>-b-app-buyer-sn` になるため、ブランチ名は 7 文字以内
   （`main` / `develop` / `staging` は可）、sandbox の識別子（既定は OS ユーザー名。`--identifier` で指定）は 12 文字以内
 
