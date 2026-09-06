@@ -31,7 +31,8 @@ export interface PaymentSessionStore {
       ifValueEquals?: PaymentSessionRecord;
     },
   ): Promise<void>;
-  delete(key: string): Promise<void>;
+  /** 読んだ時点の記録と一致するときだけ消す（条件不一致は ConditionalCheckFailedException） */
+  delete(key: string, options?: { ifValueEquals?: PaymentSessionRecord }): Promise<void>;
 }
 
 export interface PaymentSessionConfig {
@@ -155,7 +156,8 @@ export function paymentSessionSource(
 /**
  * 支出上限や残高の不足による拒否かどうか。
  * これを作り直しで通すと、上限に当たった支払いがその場で成立してしまい
- * `PAYMENT_SESSION_MAX_USD` が上限として機能しなくなるため、再試行の対象から外す（決定37）。
+ * セッションの支出上限（既定は `PAYMENT_SESSION_MAX_USD`、利用者が画面で変えた値が優先。決定43）が
+ * 上限として機能しなくなるため、再試行の対象から外す（決定37）。
  *
  * 判定は業務ルールの拒否を表す例外（`ValidationException` / `ConflictException`）に限る。
  * 文言だけで見ると `ThrottlingException` の `Rate exceeded` なども拾ってしまい、
@@ -213,7 +215,9 @@ type SessionIdentity = Pick<PaymentSessionConfig, 'userId' | 'storeKey' | 'payme
  * AgentCore のセッションを DeletePaymentSession で消し、KVStore の記録も消す。次の購入で
  * 新しい上限のセッションが切られる。AgentCore 側で既に無い場合も記録は消して成功とする。
  * それ以外の失敗（スロットリング等）は記録を残したまま投げる。記録だけ消すと、
- * 旧上限のセッションが AgentCore 側に生き残ったまま新しいものが切られ、枠が二重に開くため
+ * 旧上限のセッションが AgentCore 側に生き残ったまま新しいものが切られ、枠が二重に開くため。
+ * 記録の削除は読んだ記録を条件にする。読んでから消すまでの間に同じ利用者の購入が作り直して
+ * 新しい記録を書いていたら、それを消すと有効なセッションが 2 本並ぶので相手を残す
  */
 export async function discardPaymentSession(
   client: AwsClientLike,
@@ -233,7 +237,14 @@ export async function discardPaymentSession(
   } catch (error) {
     if (!isSessionMissing(error)) throw error;
   }
-  await store.delete(config.storeKey);
+  try {
+    await store.delete(config.storeKey, { ifValueEquals: saved });
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== CONDITIONAL_CHECK_FAILED) throw error;
+    console.warn(
+      `[payment-session] 破棄の間に別の購入が記録を書き換えていたため、その記録は残す 利用者=${config.storeKey} 破棄した id=${saved.paymentSessionId}`,
+    );
+  }
   console.log(`[payment-session] PaymentSession を破棄 利用者=${config.storeKey} id=${saved.paymentSessionId}`);
   return { discarded: saved.paymentSessionId };
 }

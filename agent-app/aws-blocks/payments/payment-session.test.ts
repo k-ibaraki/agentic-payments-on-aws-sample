@@ -54,7 +54,13 @@ function memoryStore(initial?: PaymentSessionRecord): PaymentSessionStore & {
       }
       data.set(key, value);
     },
-    async delete(key) {
+    async delete(key, options) {
+      const current = data.get(key) ?? null;
+      if (options?.ifValueEquals !== undefined && JSON.stringify(current) !== JSON.stringify(options.ifValueEquals)) {
+        throw Object.assign(new Error('条件を満たしませんでした'), {
+          name: 'ConditionalCheckFailedException',
+        });
+      }
       data.delete(key);
     },
   };
@@ -338,6 +344,19 @@ describe('discardPaymentSession', () => {
     });
     await expect(discardPaymentSession({ send }, store, CONFIG)).resolves.toEqual({ discarded: 'session-old' });
     await expect(store.get(CONFIG.storeKey)).resolves.toBeNull();
+  });
+
+  it('読んでから消すまでに別の購入が記録を書き換えていたら、その記録は残す（有効なセッションを 2 本並べない）', async () => {
+    const store = memoryStore(record);
+    const newer = { paymentSessionId: 'session-new', createdAt: now, expiresAt: now + 60 * 60_000 };
+    const send = vi.fn(async (command: unknown) => {
+      if (!(command instanceof DeletePaymentSessionCommand)) throw new Error('想定外のコマンド');
+      // AgentCore の削除中に、別の購入が作り直して記録を書いた状況
+      await store.put(CONFIG.storeKey, newer);
+      return {};
+    });
+    await expect(discardPaymentSession({ send }, store, CONFIG)).resolves.toEqual({ discarded: 'session-old' });
+    await expect(store.get(CONFIG.storeKey)).resolves.toEqual(newer);
   });
 
   it('それ以外の失敗は記録を残したまま投げる（次の購入で旧上限のセッションに乗らないよう、握り潰さない）', async () => {

@@ -53,6 +53,12 @@
 - 見た目は `npm run dev`（偽 LLM）に Playwright を当て、サインアップ → 上限変更 → 書式エラーを広い画面と 390px で撮って確認。
   直した 2 件: ①上限変更の結果表示が直後の再取得で消えていた（再取得は失敗時だけ表示を触る形に）
   ②390px で環境変数名のような長い値が右にはみ出した（`dd` を `min-width: 0` + `overflow-wrap: anywhere`、狭い画面では 1 列に）
+- origin/main（決定41 のマージ）へリベースし、DESIGN.md の表の衝突（40 の直後に 41 と 42・43 が並ぶ）を解決した
+- セルフレビューで 4 件直した。①上限超過のエラー文とコメントが `PAYMENT_SESSION_MAX_USD` を指したままだった（画面での変更に改めた）
+  ②`discardPaymentSession` が記録を無条件に消しており、破棄の間に別の購入が作り直した記録まで消して有効なセッションが
+  2 本並び得た（`ifValueEquals` 付きの条件削除にし、不一致なら相手を残す）③`walletStatus` / `changeSpendLimit` の環境変数あり
+  の経路に単体テストが無かった（client を引数で差し替えられるようにし `wallet-status.test.ts` を追加）④ルート README の
+  ステータスに画面の機能を追記
 - つまずき: fresh な worktree では `aws-blocks/client.js`（生成物）が無く `npm run build` が落ちる。`npm run blocks:client`
   で生成してから。mise の shim が `python3` / `npm` を止めるので `mise trust` が要った
 

@@ -313,10 +313,23 @@ export interface WalletStatus {
   sessionMinutes: number;
 }
 
-type WalletStores = Pick<ReturnType<typeof createBuyerAgent>, 'paymentSessions' | 'spendLimits'>;
+/** KVStore の必要最小限（payments/ の Store 型と同じ）。テストではメモリ実装で代える */
+export interface WalletStores {
+  paymentSessions: Parameters<typeof describePaymentSession>[1];
+  spendLimits: Parameters<typeof spendLimitSource>[0];
+}
 
-// 画面の表示は決済の経路と違い、環境変数の欠落や API の失敗で全体を落とさず、理由を添えて返す
-export async function walletStatus(stores: WalletStores, userSub: string): Promise<WalletStatus> {
+interface AwsClientLike {
+  send(command: unknown): Promise<unknown>;
+}
+
+// 画面の表示は決済の経路と違い、環境変数の欠落や API の失敗で全体を落とさず、理由を添えて返す。
+// client はテストで差し替えるための引数（既定は共有の SDK クライアント）
+export async function walletStatus(
+  stores: WalletStores,
+  userSub: string,
+  client: AwsClientLike = paymentsClient,
+): Promise<WalletStatus> {
   const userId = process.env.PAYMENTS_USER_ID ?? 'sample-user-1';
   const sessionConfig = paymentSessionConfigFromEnv();
   const spendLimit = await spendLimitSource(stores.spendLimits, sessionConfig.maxSpendUsd).get(userSub);
@@ -343,7 +356,7 @@ export async function walletStatus(stores: WalletStores, userSub: string): Promi
     status.balanceError = 'PAYMENT_CONNECTOR_ID が未設定です（payments-setup.ts の出力を設定してください）';
   } else {
     try {
-      status.balance = await getWalletBalance(paymentsClient, {
+      status.balance = await getWalletBalance(client, {
         userId,
         paymentManagerArn,
         paymentConnectorId,
@@ -355,7 +368,7 @@ export async function walletStatus(stores: WalletStores, userSub: string): Promi
   }
 
   try {
-    status.session = await describePaymentSession(paymentsClient, stores.paymentSessions, {
+    status.session = await describePaymentSession(client, stores.paymentSessions, {
       userId,
       storeKey: userSub,
       paymentManagerArn,
@@ -374,12 +387,13 @@ export async function changeSpendLimit(
   stores: WalletStores,
   userSub: string,
   maxSpendUsd: string,
+  client: AwsClientLike = paymentsClient,
 ): Promise<{ spendLimit: SpendLimit; discardedSession: string | null }> {
   const sessionConfig = paymentSessionConfigFromEnv();
   const spendLimit = await spendLimitSource(stores.spendLimits, sessionConfig.maxSpendUsd).set(userSub, maxSpendUsd);
   const paymentManagerArn = process.env.PAYMENT_MANAGER_ARN;
   if (!paymentManagerArn) return { spendLimit, discardedSession: null };
-  const { discarded } = await discardPaymentSession(paymentsClient, stores.paymentSessions, {
+  const { discarded } = await discardPaymentSession(client, stores.paymentSessions, {
     userId: process.env.PAYMENTS_USER_ID ?? 'sample-user-1',
     storeKey: userSub,
     paymentManagerArn,
