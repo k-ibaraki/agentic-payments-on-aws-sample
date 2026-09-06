@@ -2,6 +2,9 @@
  * 買い手の画面の見た目。Pico.css（classless）を土台に、淡いブルー系のテーマと、
  * この画面だけの独自要素（吹き出し・購入一覧・イベントログ）を重ねる。
  *
+ * 構成（決定44）: ヘッダー → 未サインイン時のサインインカード → 二段組（依頼 / 購入したページ）→
+ * 内部情報の折りたたみ。区切りは Pico の article（カード）と余白で付け、タブ部品は使わない。
+ *
  * TypeScript から import せず index.html の <link> で読むのは、tsconfig に
  * vite/client の型が無く `import './style.css'` が `npm run build` の tsc で落ちるため。
  */
@@ -43,19 +46,22 @@
 }
 
 /*
- * Pico の .container は 1280px 以上で 1200px、1536px 以上で 1450px まで広がる。
- * 会話の一行が長くなりすぎるので、旧実装と同じ 960px で頭打ちにする。
- * セレクタに .container を含めるのは、要素セレクタ（body > main）だけでは
- * クラス（.container）に詳細度で負けて上限が効かないため
+ * Pico の .container は 1536px 以上で 1450px まで広がる。二段組でも一列の幅が
+ * 読みやすい範囲に収まるよう 1280px で頭打ちにする。
+ * セレクタに .container を含めるのは、要素セレクタだけではクラス（.container）に
+ * 詳細度で負けて上限が効かないため
  */
+body > .container {
+  max-width: 1280px;
+}
+
 body > main.container {
-  max-width: 960px;
-  padding-block: 2.5rem;
+  padding-block: 1.5rem 2.5rem;
 }
 
 /* Pico の既定は記事向けで大きい。画面の見出しとしては章題くらいの大きさに落とす */
 h1 {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
 }
 
 article > header h2 {
@@ -63,7 +69,7 @@ article > header h2 {
   font-size: 1.2rem;
 }
 
-article h3 {
+h3 {
   font-size: 1rem;
 }
 
@@ -81,10 +87,19 @@ article h3 {
   color: #b3261e;
 }
 
-/* ── サインイン ───────────────────────────────────────────── */
+/* ── ヘッダー ─────────────────────────────────────────────── */
+.app-header {
+  padding-block: 0.5rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.app-header nav ul {
+  align-items: center;
+}
+
 #auth-status {
-  margin-bottom: 0.75rem;
-  font-weight: bold;
+  color: var(--pico-muted-color);
+  font-size: 0.9em;
 }
 
 /*
@@ -99,6 +114,37 @@ article h3 {
 [data-testid='authenticator'] > div {
   padding: 0 !important;
   border: 0 !important;
+}
+
+/*
+ * サインイン後は同じ Authenticator をヘッダーへ移す（index.ts）。「Signed in as」の見出しは
+ * #auth-status が日本語で出すので隠し、サインアウトの操作だけを小さなボタンとして残す
+ */
+#auth-nav [data-testid='authenticator-signed-in'] {
+  display: none;
+}
+
+/*
+ * サインアウトの包み（renderInternalAction の div）は inline style で margin-bottom: 16px を持ち、
+ * nav の中央揃えからボタンが上にずれる。inline style が相手なので !important が要る
+ */
+#auth-nav [data-testid='authenticator-action-signOut'] {
+  margin-bottom: 0 !important;
+}
+
+/* サインアウトは主操作ではないので、枠線だけの控えめな見た目にする */
+#auth-nav button {
+  margin: 0;
+  padding: 0.3rem 0.9rem;
+  border-color: var(--pico-secondary);
+  background: transparent;
+  color: var(--pico-secondary);
+  font-size: 0.85em;
+}
+
+/* ── 未サインイン時 ───────────────────────────────────────── */
+.signin-card {
+  max-width: 560px;
 }
 
 .code-hint {
@@ -119,7 +165,7 @@ article h3 {
   font-size: 0.85em;
 }
 
-/* ── サインイン後にだけ見せる区画 ───────────────────────────── */
+/* ── サインインの前後で見せ分ける区画 ────────────────────────── */
 .signed-in-only {
   display: none;
 }
@@ -128,15 +174,67 @@ article h3 {
   display: block;
 }
 
+/* ヘッダーの右側の ul は block ではなく Pico の flex のまま見せる */
+.signed-in nav ul.signed-in-only {
+  display: flex;
+}
+
+.signed-in .signed-out-only {
+  display: none;
+}
+
+/* ── 二段組（依頼 / 購入したページ） ──────────────────────────── */
+.workspace {
+  gap: 1rem;
+}
+
+.signed-in .workspace {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 992px) {
+  .signed-in .workspace {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.panel {
+  margin-bottom: 0;
+}
+
+/* 左列はカードを縦に積む（依頼 → ウォレットと支払いの枠） */
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* 見出しの行に区画全体への操作（新規会話）を右寄せで置く */
+.panel-header {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-header button {
+  margin: 0;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.85em;
+}
+
 /* ── チャット ─────────────────────────────────────────────── */
-/* 空でも「ここが会話の場」と分かるよう、面として見せる */
+/* 空でも「ここが会話の場」と分かるよう、面として見せる。伸びすぎたら中でスクロール */
 #chat-log {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  min-height: 120px;
+  min-height: 320px;
+  max-height: 60vh;
   margin-bottom: 0.75rem;
   padding: 0.75rem;
+  overflow: auto;
   border-radius: var(--pico-border-radius);
   background: var(--app-surface);
 }
@@ -167,7 +265,7 @@ article h3 {
 }
 
 .chat-input {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
 }
 
 /* role=group は子を等分に伸ばす。入力欄に幅を寄せ、ボタンは内容幅に留める */
@@ -185,23 +283,6 @@ article h3 {
   border: 1px solid var(--app-warn-border);
   border-radius: var(--pico-border-radius);
   background: var(--app-warn);
-}
-
-#events {
-  min-height: 60px;
-  max-height: 180px;
-  padding: 0.5rem;
-  overflow: auto;
-  border: 1px solid var(--app-tint-border);
-  border-radius: var(--pico-border-radius);
-  background: var(--app-surface);
-  color: var(--pico-muted-color);
-  font-family: var(--pico-font-family-monospace);
-  font-size: 0.8em;
-}
-
-#events div {
-  padding: 1px 0;
 }
 
 /* ── ウォレットと支払いの枠 ─────────────────────────────────── */
@@ -307,17 +388,63 @@ article h3 {
   margin-top: 0.5rem;
 }
 
+#preview-frame {
+  width: 100%;
+  height: 520px;
+  margin-top: 0.75rem;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: #fff;
+}
+
+/* ── 内部情報（開発者向け。目立たせない） ───────────────────── */
+#internals {
+  margin-top: 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+  color: var(--pico-muted-color);
+}
+
+#internals summary {
+  font-size: 0.9em;
+}
+
+#internals h3 {
+  margin-bottom: 0.5rem;
+  font-size: 0.9em;
+}
+
+#events {
+  min-height: 60px;
+  max-height: 180px;
+  padding: 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: #fff;
+  color: var(--pico-muted-color);
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.8em;
+}
+
+#events div {
+  padding: 1px 0;
+}
+
 /* ── 狭い画面 ─────────────────────────────────────────────── */
 /* 横一列に並べている行は、収まらなければ折り返させる（ボタンが潰れるのを防ぐ） */
 .code-hint,
 .interrupt,
-.purchase {
+.purchase,
+.panel-header {
   flex-wrap: wrap;
 }
 
 /*
  * role=group は枠線を連結する前提で折り返さない。狭い画面では連結をやめ、
- * 入力欄を 1 行使い、ボタンをその下に並べる
+ * 入力欄を 1 行使い、ボタンをその下に置く
  */
 @media (max-width: 576px) {
   /* 見出しと値を縦に積む（横 2 列では値の幅が足りない） */
@@ -350,19 +477,6 @@ article h3 {
   .chat-input[role='group'] > button,
   .spend-limit-input[role='group'] > button {
     flex: 1 1 auto;
-  }
-
-  .chat-input[role='group'] > button:not(:first-child),
-  .spend-limit-input[role='group'] > button:not(:first-child) {
     margin-left: 0;
   }
-}
-
-#preview-frame {
-  width: 100%;
-  height: 520px;
-  margin-top: 0.75rem;
-  border: 1px solid var(--app-tint-border);
-  border-radius: var(--pico-border-radius);
-  background: #fff;
 }
