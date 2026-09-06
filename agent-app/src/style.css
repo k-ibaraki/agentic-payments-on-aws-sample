@@ -2,8 +2,8 @@
  * 買い手の画面の見た目。Pico.css（classless）を土台に、淡いブルー系のテーマと、
  * この画面だけの独自要素（吹き出し・会話の中の購入カード・購入履歴・イベントログ）を重ねる。
  *
- * 構成（決定44・50）: ヘッダー → 未サインイン時のサインインカード → タブ（依頼 / 購入履歴）→
- * 内部情報の折りたたみ。依頼タブは二段組（会話 / ウォレットと支払いの枠）。
+ * 構成（決定44・50・51）: ヘッダー → 未サインイン時のサインインカード →
+ * タブ（依頼 / ウォレット / 購入履歴）→ 内部情報の折りたたみ。面はそれぞれ一列。
  *
  * TypeScript から import せず index.html の <link> で読むのは、tsconfig に
  * vite/client の型が無く `import './style.css'` が `npm run build` の tsc で落ちるため。
@@ -46,8 +46,9 @@
 }
 
 /*
- * Pico の .container は 1536px 以上で 1450px まで広がる。二段組でも一列の幅が
- * 読みやすい範囲に収まるよう 1280px で頭打ちにする。
+ * Pico の .container は 1536px 以上で 1450px まで広がる。読みやすい範囲に収まるよう
+ * 1280px で頭打ちにする（決定51 で一列になった後も、会話の中に描く買えたページに
+ * 幅を回すため狭めていない）。
  * セレクタに .container を含めるのは、要素セレクタだけではクラス（.container）に
  * 詳細度で負けて上限が効かないため
  */
@@ -183,7 +184,7 @@ h3 {
   display: none;
 }
 
-/* ── タブ（決定50。依頼 / 購入履歴） ──────────────────────────── */
+/* ── タブ（決定50・51。依頼 / ウォレット / 購入履歴） ────────────── */
 .tabs {
   display: flex;
   gap: 0.25rem;
@@ -191,7 +192,16 @@ h3 {
   border-bottom: 1px solid var(--app-tint-border);
 }
 
+/* サインイン後に見せる規則（.signed-in .signed-in-only { display: block }）は詳細度 0,2,0 で、
+   .tabs（0,1,0）の flex に勝ってしまう。同じ詳細度で display だけ戻す */
+.signed-in .tabs {
+  display: flex;
+}
+
 .tab {
+  /* Pico は role="group" の子に flex: 1 を掛けて等幅に伸ばす（連結した入力群のため）。
+     タブは文字ぶんの幅で左に並べたいので、伸縮を止める */
+  flex: 0 0 auto;
   margin: 0;
   padding: 0.45rem 1.1rem;
   border: 1px solid transparent;
@@ -215,24 +225,9 @@ h3 {
   display: none;
 }
 
-/* ── 二段組（依頼 / ウォレットと支払いの枠） ────────────────────── */
-.workspace {
-  gap: 1rem;
-}
-
-.signed-in .workspace {
-  display: grid;
-  grid-template-columns: 1fr;
-}
-
-/* 会話の中に買えたページを描く（決定50）ので、左の列を広く取る */
-@media (min-width: 992px) {
-  .signed-in .workspace {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    align-items: start;
-  }
-}
-
+/* ── 面の中の区画 ──────────────────────────────────────────── */
+/* 決定51 でウォレットを別のタブへ移し、どの面も区画 1 枚になったので二段組は持たない。
+   会話（と、その中に描く買えたページ）はコンテナの幅いっぱいを使う */
 .panel {
   margin-bottom: 0;
 }

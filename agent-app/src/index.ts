@@ -776,10 +776,13 @@ function downloadHtml(filename: string, html: string) {
   URL.revokeObjectURL(url);
 }
 
-// ── 面の切り替え（決定50。決定44 の「タブ部品は使わない」を上書き） ──────────────
+// ── 面の切り替え（決定50。決定44 の「タブ部品は使わない」を上書き。3 枚目は決定51） ──
 // ARIA の tablist は名乗らず、押した状態を aria-pressed で表す素のボタンにしている（index.html 参照）
-function showTab(name: 'chat' | 'history') {
-  for (const panel of ['chat', 'history'] as const) {
+const TAB_NAMES = ['chat', 'wallet', 'history'] as const;
+type TabName = (typeof TAB_NAMES)[number];
+
+function showTab(name: TabName) {
+  for (const panel of TAB_NAMES) {
     const active = panel === name;
     el(`tab-${panel}`).setAttribute('aria-pressed', String(active));
     el(`panel-${panel}`).toggleAttribute('hidden', !active);
@@ -794,7 +797,6 @@ function discardHistory() {
   historyRenderedSeq = ++historyRequestSeq;
   showMessage(el('history'), 'まだありません');
   discardPreview();
-  showTab('chat');
 }
 
 async function resumeLastConversation() {
@@ -836,6 +838,8 @@ document.addEventListener('DOMContentLoaded', () => {
       discardConversation();
       discardWallet();
       discardHistory();
+      // 次にサインインする利用者は依頼の面から始める（どの面を開いていても引き継がない）
+      showTab('chat');
     }
   });
 
@@ -847,7 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshWallet().catch(() => {});
   });
 
-  for (const panel of ['chat', 'history'] as const) {
+  for (const panel of TAB_NAMES) {
     el(`tab-${panel}`).addEventListener('click', () => showTab(panel));
   }
   el('history-refresh-btn').addEventListener('click', () => {
