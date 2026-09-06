@@ -93,6 +93,7 @@ test('未認証では会話を作れない', async () => {
   await assert.rejects(buyer.createConversation());
   await assert.rejects(buyer.getWalletStatus());
   await assert.rejects(buyer.setSpendLimit('1.00'));
+  await assert.rejects(buyer.listPurchaseHistory());
 });
 
 test('サインインした利用者は会話を作り、依頼を送り、履歴・購入一覧・売り手情報を取れる', async () => {
@@ -110,6 +111,9 @@ test('サインインした利用者は会話を作り、依頼を送り、履�
 
   const { purchases } = await buyer.listPurchases(conversationA);
   assert.deepStrictEqual(purchases, []);
+
+  // 購入履歴は会話をまたいだ一覧（決定50）。購入が無ければ会話も並ばない
+  assert.deepStrictEqual((await buyer.listPurchaseHistory()).conversations, []);
 
   const seller = await buyer.getSellerInfo();
   assert.match(seller.mcpUrl, /\/mcp$/);
@@ -163,6 +167,9 @@ test('他人の会話には発注・閲覧・購読・購入一覧・承認の�
     buyer.resume(conversationA, [{ interruptId: 'no-such-interrupt', approved: true }]),
   );
   await assert.rejects(buyer.getPendingInterrupts(conversationA));
+
+  // 購入履歴は自分の会話だけを見る（A の会話は B の履歴に出ない）
+  assert.deepStrictEqual((await buyer.listPurchaseHistory()).conversations, []);
 
   // 自分の会話は問題なく作れる
   const { conversationId } = await buyer.createConversation();

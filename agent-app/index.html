@@ -9,10 +9,12 @@
 </head>
 <body>
   <!--
-    画面の構成（決定44・47）:
+    画面の構成（決定44・47・50）:
     ヘッダー（題名・サインイン中の利用者とサインアウト）
     → 未サインイン: 説明とサインインのカード
-    → サインイン後: 二段組（左: 依頼（残高と残枠の帯を含む）→ ウォレットと支払いの枠 / 右: 購入したページとプレビュー）
+    → サインイン後: タブ 2 枚（決定50 で決定44 の「タブ部品は使わない」を上書き）
+       ・依頼: 左に会話（残高と残枠の帯を含み、購入したページはこの中に描く）／右にウォレットと支払いの枠
+       ・購入履歴: 会話をまたいだ購入の一覧と、選んだ 1 件のプレビュー
     → 内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）
   -->
   <header class="container app-header">
@@ -50,63 +52,74 @@
       </article>
     </section>
 
-    <div class="workspace signed-in-only">
-      <div class="column">
-        <article class="panel" aria-labelledby="chat-heading">
-          <header class="panel-header">
-            <h2 id="chat-heading">エージェントへの依頼</h2>
-            <!-- 会話全体に対する操作なので、送信の隣ではなく見出しの行に置く -->
-            <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
-          </header>
-          <!-- 残高と残枠の帯（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
-               詳細（期限・ID・上限の変更・推移）は下の「ウォレットと支払いの枠」に -->
-          <div class="wallet-strip" role="status" aria-label="ウォレット残高と今のセッションの残枠">
-            <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
-            <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
-          </div>
-          <p class="hint">依頼を送ると、エージェントが有料ツールの利用を判断し、支払って呼び出します（実オンチェーン決済）。</p>
-          <div id="chat-log"></div>
-          <div id="interrupts"></div>
-          <div class="chat-input" role="group" aria-label="依頼の送信">
-            <input type="text" id="chat-text" aria-label="エージェントへの依頼" placeholder="例: 猫カフェの紹介ページを作って">
-            <button id="chat-send-btn">送信</button>
-          </div>
-        </article>
+    <!-- 画面内のタブ（決定50）。押した面だけを見せ、もう一方は hidden で隠す -->
+    <div class="tabs signed-in-only" role="tablist" aria-label="画面の切り替え">
+      <button type="button" id="tab-chat" class="tab" role="tab" aria-selected="true" aria-controls="panel-chat">依頼</button>
+      <button type="button" id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">購入履歴</button>
+    </div>
 
-        <article class="panel" aria-labelledby="wallet-heading">
-          <header class="panel-header">
-            <h2 id="wallet-heading">ウォレットと支払いの枠</h2>
-            <button id="wallet-refresh-btn" class="secondary outline" title="残高とセッションを取り直す">更新</button>
-          </header>
-          <p class="hint">
-            残高は全員で共有するウォレット（AgentCore Payments の PaymentInstrument）の値。
-            枠（PaymentSession の上限と残枠）はサインインした利用者ごとで、購入のたびにエージェントが切ります。
-          </p>
-          <dl class="wallet">
-            <div><dt>ウォレット残高</dt><dd id="wallet-balance">（未取得）</dd></div>
-            <div><dt>今のセッション</dt><dd id="session-status">（未取得）</dd></div>
-            <div><dt>次のセッションの上限</dt><dd id="spend-limit">（未取得）</dd></div>
-          </dl>
-          <div class="spend-limit-input" role="group" aria-label="支出上限の変更">
-            <input type="text" id="spend-limit-text" inputmode="decimal" aria-label="次のセッションの上限（USD）" placeholder="例: 2.00（USD）">
-            <button id="spend-limit-btn">上限を変更</button>
-          </div>
-          <p class="hint">
-            上限を変えると今のセッションは破棄され、次の購入で新しい上限のセッションが切られます
-            （AgentCore Payments にはセッションの上限を後から変える API が無いため）。
-          </p>
-          <div id="wallet-status" class="hint"></div>
-          <h3>残高の推移</h3>
-          <div id="balance-history"><span class="hint">まだありません</span></div>
-        </article>
-      </div>
+    <div id="panel-chat" class="workspace signed-in-only" role="tabpanel" aria-labelledby="tab-chat">
+      <article class="panel" aria-labelledby="chat-heading">
+        <header class="panel-header">
+          <h2 id="chat-heading">エージェントへの依頼</h2>
+          <!-- 会話全体に対する操作なので、送信の隣ではなく見出しの行に置く -->
+          <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
+        </header>
+        <!-- 残高と残枠の帯（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
+             詳細（期限・ID・上限の変更・推移）は右の「ウォレットと支払いの枠」に -->
+        <div class="wallet-strip" role="status" aria-label="ウォレット残高と支払いの残枠">
+          <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
+          <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
+        </div>
+        <p class="hint">依頼を送ると、エージェントが有料ツールの利用を判断し、支払って呼び出します（実オンチェーン決済）。買えたページは会話の中に表示します。</p>
+        <div id="chat-log"></div>
+        <div id="chat-status" class="hint"></div>
+        <div id="interrupts"></div>
+        <div class="chat-input" role="group" aria-label="依頼の送信">
+          <input type="text" id="chat-text" aria-label="エージェントへの依頼" placeholder="例: 猫カフェの紹介ページを作って">
+          <button id="chat-send-btn">送信</button>
+        </div>
+      </article>
 
-      <article class="panel" aria-labelledby="purchases-heading">
-        <header class="panel-header"><h2 id="purchases-heading">購入したページ</h2></header>
-        <p class="hint">エージェントが支払って受け取った成果物。「表示」を選ぶと下のプレビュー（売り手の MCP Apps UI）に描画します。</p>
-        <div id="purchases"><span class="hint">まだありません</span></div>
+      <article class="panel" aria-labelledby="wallet-heading">
+        <header class="panel-header">
+          <h2 id="wallet-heading">ウォレットと支払いの枠</h2>
+          <button id="wallet-refresh-btn" class="secondary outline" title="残高とセッションを取り直す">更新</button>
+        </header>
+        <p class="hint">
+          残高は全員で共有するウォレット（AgentCore Payments の PaymentInstrument）の値。
+          枠（PaymentSession の上限と残枠）はサインインした利用者ごとで、購入のたびにエージェントが切ります。
+        </p>
+        <dl class="wallet">
+          <div><dt>ウォレット残高</dt><dd id="wallet-balance">（未取得）</dd></div>
+          <div><dt>今のセッション</dt><dd id="session-status">（未取得）</dd></div>
+          <div><dt>次のセッションの上限</dt><dd id="spend-limit">（未取得）</dd></div>
+        </dl>
+        <div class="spend-limit-input" role="group" aria-label="支出上限の変更">
+          <input type="text" id="spend-limit-text" inputmode="decimal" aria-label="次のセッションの上限（USD）" placeholder="例: 2.00（USD）">
+          <button id="spend-limit-btn">上限を変更</button>
+        </div>
+        <p class="hint">
+          上限を変えると今のセッションは破棄され、次の購入で新しい上限のセッションが切られます
+          （AgentCore Payments にはセッションの上限を後から変える API が無いため）。
+          セッションが無い間、帯の残枠には次に切る上限を出します。
+        </p>
+        <div id="wallet-status" class="hint"></div>
+        <h3>残高の推移</h3>
+        <div id="balance-history"><span class="hint">まだありません</span></div>
+      </article>
+    </div>
+
+    <div id="panel-history" class="signed-in-only" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <article class="panel" aria-labelledby="history-heading">
+        <header class="panel-header">
+          <h2 id="history-heading">購入したページ</h2>
+          <button id="history-refresh-btn" class="secondary outline" title="購入履歴を取り直す">更新</button>
+        </header>
+        <p class="hint">これまでに買ったページを会話をまたいで並べます（新しい会話の順）。「表示」を選ぶと下のプレビュー（売り手の MCP Apps UI）に描画します。</p>
+        <div id="history"><span class="hint">まだありません</span></div>
         <div id="purchase-status" class="hint"></div>
-        <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts"></iframe>
+        <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts" hidden></iframe>
       </article>
     </div>
 

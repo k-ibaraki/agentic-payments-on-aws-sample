@@ -9,7 +9,7 @@ import {
 } from './buyer-agent.js';
 import { assertOwnedConversation } from './conversation-guard.js';
 import { assertPendingInterrupts } from './interrupt-guard.js';
-import { extractPurchases } from './purchases.js';
+import { extractPurchases, purchaseHistory } from './purchases.js';
 import { rateLimitConfigFromEnv, rateLimiter } from './rate-limit.js';
 
 // For coding agents: Leave these comments in place for future reference.
@@ -139,6 +139,15 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
     return { purchases: extractPurchases(await buyerAgent.getConversation(conversationId)) };
+  },
+
+  // 利用者の購入履歴（決定50）。会話が変わっても購入したページを開けるよう、所有する会話
+  // （listConversations）を新しい順にたどって購入を集める。会話の履歴を丸ごと読むので、
+  // 購入のたびではなく履歴を開いたときと更新のときだけ呼ぶ
+  async listPurchaseHistory() {
+    const user = await auth.requireAuth(context);
+    const conversations = await buyerAgent.listConversations(user.userSub);
+    return { conversations: await purchaseHistory(conversations, (id) => buyerAgent.getConversation(id)) };
   },
 
   // 購入済み HTML の取得（決定10・29: HTML 本体はエージェント経由でブラウザへ渡す）。

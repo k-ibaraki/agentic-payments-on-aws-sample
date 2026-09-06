@@ -2,7 +2,7 @@
 // Realtime の tool-result チャンクは toolName しか運ばないため、ブラウザは
 // 会話履歴の tool-result メッセージ（metadata.toolOutput）から resultId を知る
 import { describe, expect, it } from 'vitest';
-import { extractPurchases } from './purchases.js';
+import { PURCHASE_HISTORY_CONVERSATIONS, extractPurchases, purchaseHistory } from './purchases.js';
 
 const okSummary = { ok: true, resultId: 'r-1', paymentMade: true, htmlBytes: 3000, transaction: '0xabc' };
 const failedSummary = { ok: false, resultId: 'r-2', paymentMade: true, message: '生成に失敗', transaction: '0xdef' };
@@ -60,5 +60,48 @@ describe('extractPurchases', () => {
       toolResultMessage([{ json: { ...okSummary, resultId: 'second' } }]),
     ];
     expect(extractPurchases(messages).map((p) => p.resultId)).toEqual(['first', 'second']);
+  });
+});
+
+// ── 利用者ごとの購入履歴（決定50） ──
+describe('purchaseHistory', () => {
+  const conversations = [
+    { conversationId: 'c-old', updatedAt: 100 },
+    { conversationId: 'c-new', updatedAt: 300 },
+    { conversationId: 'c-empty', updatedAt: 200 },
+  ];
+
+  const messagesOf: Record<string, ReturnType<typeof toolResultMessage>[]> = {
+    'c-old': [toolResultMessage([{ json: failedSummary }])],
+    'c-new': [toolResultMessage([{ json: okSummary }])],
+    'c-empty': [],
+  };
+
+  const getMessages = async (conversationId: string) => messagesOf[conversationId] ?? [];
+
+  it('新しい会話から順に並べ、購入の無い会話は落とす', async () => {
+    const history = await purchaseHistory(conversations, getMessages, 10);
+    expect(history.map((h) => h.conversationId)).toEqual(['c-new', 'c-old']);
+    expect(history[0].purchases.map((p) => p.resultId)).toEqual(['r-1']);
+    expect(history[1].purchases.map((p) => p.resultId)).toEqual(['r-2']);
+    expect(history[0].updatedAt).toBe(300);
+  });
+
+  it('たどる会話の数は上限まで（古い会話は読みに行かない）', async () => {
+    const read: string[] = [];
+    const history = await purchaseHistory(conversations, async (id) => {
+      read.push(id);
+      return messagesOf[id] ?? [];
+    }, 1);
+    expect(read).toEqual(['c-new']);
+    expect(history.map((h) => h.conversationId)).toEqual(['c-new']);
+  });
+
+  it('会話が無ければ空', async () => {
+    expect(await purchaseHistory([], getMessages, 10)).toEqual([]);
+  });
+
+  it('たどる会話の数の既定は 20 件', () => {
+    expect(PURCHASE_HISTORY_CONVERSATIONS).toBe(20);
   });
 });

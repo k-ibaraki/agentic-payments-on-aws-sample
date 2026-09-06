@@ -84,3 +84,36 @@ export function extractPurchases(messages: readonly MessageLike[]): PurchaseSumm
   }
   return purchases;
 }
+
+// ── 利用者ごとの購入履歴（決定50） ──
+
+/** 履歴でたどる会話の数の上限。1 会話ぶんの履歴を丸ごと読むため、古い会話は読みに行かない */
+export const PURCHASE_HISTORY_CONVERSATIONS = 20;
+
+/** 会話 1 件ぶんの購入。並びは会話の中の順序を保つ */
+export interface ConversationPurchases {
+  conversationId: string;
+  updatedAt: number;
+  purchases: PurchaseSummary[];
+}
+
+/**
+ * 利用者の会話を新しい順にたどり、購入のある会話だけを集める（決定50）。
+ * 会話の所有は呼び出し側（`listConversations(userSub)`）で解決済みであることを前提にする。
+ * 購入物そのものは利用者ごとの KVStore にあるため、会話をまたいでも `getPurchasedHtml` で開ける
+ */
+export async function purchaseHistory(
+  conversations: readonly { conversationId: string; updatedAt: number }[],
+  getMessages: (conversationId: string) => Promise<readonly MessageLike[]>,
+  limit: number = PURCHASE_HISTORY_CONVERSATIONS,
+): Promise<ConversationPurchases[]> {
+  const recent = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+  const collected = await Promise.all(
+    recent.map(async (conversation) => ({
+      conversationId: conversation.conversationId,
+      updatedAt: conversation.updatedAt,
+      purchases: extractPurchases(await getMessages(conversation.conversationId)),
+    })),
+  );
+  return collected.filter((entry) => entry.purchases.length > 0);
+}
