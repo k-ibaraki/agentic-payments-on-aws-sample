@@ -93,17 +93,24 @@ describe('walletStatus', () => {
     expect(send).not.toHaveBeenCalledWith(expect.any(GetPaymentInstrumentBalanceCommand));
   });
 
-  it('残高 API の失敗は全体を落とさず理由に入れる', async () => {
+  it('残高 API の失敗は全体を落とさず、例外文は画面に出さずログに残す', async () => {
     stubEnv();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const send = vi.fn(async (command: unknown) => {
       if (command instanceof GetPaymentInstrumentBalanceCommand) {
-        throw Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+        throw Object.assign(new Error('not authorized to access arn:aws:iam::111122223333:role/x'), {
+          name: 'AccessDeniedException',
+        });
       }
       return {};
     });
     const status = await walletStatus(memoryStores(), 'user-a', { send });
     expect(status.balance).toBeNull();
-    expect(status.balanceError).toMatch(/not authorized/);
+    // 画面向けの理由は例外名までで、ARN を含む原文は含めない
+    expect(status.balanceError).toMatch(/AccessDeniedException/);
+    expect(status.balanceError).not.toMatch(/arn:aws/);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('arn:aws:iam::111122223333:role/x'));
+    consoleError.mockRestore();
   });
 });
 

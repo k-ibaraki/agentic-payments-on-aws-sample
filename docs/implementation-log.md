@@ -59,6 +59,10 @@
   2 本並び得た（`ifValueEquals` 付きの条件削除にし、不一致なら相手を残す）③`walletStatus` / `changeSpendLimit` の環境変数あり
   の経路に単体テストが無かった（client を引数で差し替えられるようにし `wallet-status.test.ts` を追加）④ルート README の
   ステータスに画面の機能を追記
+- PR #12 のレビュー（8 観点）で 1 件直した。`walletStatus` が AWS SDK の例外文をそのまま画面に返しており、
+  サインインのたびに走る取得で ARN や ID を含む文が全利用者に見え得た。原文はサーバーのログに残し、画面には例外名だけを
+  添えた一般化した文を返す形にした。もう 1 件の「Issue 未連携」は、本リポジトリでは DESIGN.md の決定番号が Issue の役割を
+  担っているため対応しない
 - つまずき: fresh な worktree では `aws-blocks/client.js`（生成物）が無く `npm run build` が落ちる。`npm run blocks:client`
   で生成してから。mise の shim が `python3` / `npm` を止めるので `mise trust` が要った
 

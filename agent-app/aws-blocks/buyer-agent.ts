@@ -324,7 +324,9 @@ interface AwsClientLike {
 }
 
 // 画面の表示は決済の経路と違い、環境変数の欠落や API の失敗で全体を落とさず、理由を添えて返す。
-// client はテストで差し替えるための引数（既定は共有の SDK クライアント）
+// client はテストで差し替えるための引数（既定は共有の SDK クライアント）。
+// API の例外文は ARN や ID を含み得るので画面には出さず、原文はログに残して一般化した理由を返す
+// （この取得はサインイン時・購入後・更新のたびに走り、全利用者の目に触れるため）
 export async function walletStatus(
   stores: WalletStores,
   userSub: string,
@@ -363,7 +365,7 @@ export async function walletStatus(
         paymentInstrumentId,
       });
     } catch (error) {
-      status.balanceError = error instanceof Error ? error.message : String(error);
+      status.balanceError = describeApiFailure('残高', 'GetPaymentInstrumentBalance', userSub, error);
     }
   }
 
@@ -374,9 +376,17 @@ export async function walletStatus(
       paymentManagerArn,
     });
   } catch (error) {
-    status.sessionError = error instanceof Error ? error.message : String(error);
+    status.sessionError = describeApiFailure('セッション', 'GetPaymentSession', userSub, error);
   }
   return status;
+}
+
+// 原文（例外名とメッセージ）はサーバーのログへ。画面には例外名だけを添えた一般化した文を返す
+function describeApiFailure(what: string, api: string, userSub: string, error: unknown): string {
+  const name = error instanceof Error ? error.name : 'Error';
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[buyer-agent] ${what}の取得に失敗 利用者=${userSub} api=${api} ${name}: ${message}`);
+  return `${what}を取得できませんでした（${name}。詳細はサーバーのログを参照）`;
 }
 
 /**
