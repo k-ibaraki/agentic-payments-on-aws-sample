@@ -530,6 +530,17 @@ h3 {
  * 入力欄を 1 行使い、ボタンをその下に置く
  */
 @media (max-width: 576px) {
+  /* 横並びのままだとラベルが 1 文字ずつ縦に割れ、値も途中で改行される（390px で実測）。2 行に積む */
+  .wallet-strip {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .strip-label,
+  .strip-value {
+    white-space: nowrap;
+  }
+
   /* 見出しと値を縦に積む（横 2 列では値の幅が足りない） */
   .wallet {
     grid-template-columns: 1fr;

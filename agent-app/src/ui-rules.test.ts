@@ -51,23 +51,42 @@ describe('findLastAssistant', () => {
 import {
   BALANCE_WATCH_INTERVAL_MS,
   BALANCE_WATCH_MAX_MS,
+  STRIP_EMPTY,
+  balanceKey,
+  didBalanceChange,
   formatStripBalance,
   formatStripRemaining,
   isPaidToolCall,
   shouldContinueBalanceWatch,
-  walletSnapshot,
+  shouldFlashValue,
 } from './ui-rules.js';
 
 describe('帯の表示文字列', () => {
   it('残高は値と通貨だけ。取れていなければ「—」', () => {
     expect(formatStripBalance({ display: '0.30', token: 'USDC' })).toBe('0.30 USDC');
-    expect(formatStripBalance(null)).toBe('—');
+    expect(formatStripBalance(null)).toBe(STRIP_EMPTY);
   });
 
   it('残枠は今のセッションの残枠。セッションが無い・値が無ければ「—」', () => {
     expect(formatStripRemaining({ availableSpendUsd: '1.90' })).toBe('1.90 USD');
-    expect(formatStripRemaining({ availableSpendUsd: null })).toBe('—');
-    expect(formatStripRemaining(null)).toBe('—');
+    expect(formatStripRemaining({ availableSpendUsd: null })).toBe(STRIP_EMPTY);
+    expect(formatStripRemaining(null)).toBe(STRIP_EMPTY);
+  });
+});
+
+describe('光らせてよい変化か', () => {
+  it('値どうしが変われば光らせる', () => {
+    expect(shouldFlashValue('0.30 USDC', '0.20 USDC')).toBe(true);
+  });
+
+  it('同じ値では光らせない', () => {
+    expect(shouldFlashValue('0.30 USDC', '0.30 USDC')).toBe(false);
+  });
+
+  it('取得できていない状態（—）との出入りでは光らせない（API の失敗を「減った」と見せない）', () => {
+    expect(shouldFlashValue('0.30 USDC', STRIP_EMPTY)).toBe(false);
+    expect(shouldFlashValue(STRIP_EMPTY, '0.30 USDC')).toBe(false);
+    expect(shouldFlashValue('', '0.30 USDC')).toBe(true);
   });
 });
 
@@ -83,19 +102,23 @@ describe('購入中の取り直し', () => {
     expect(BALANCE_WATCH_MAX_MS).toBe(600_000);
   });
 
-  it('値が変わるか、ツールが返るか、上限に達したら止める', () => {
-    expect(shouldContinueBalanceWatch({ changed: false, settled: false, elapsedMs: 0 })).toBe(true);
-    expect(shouldContinueBalanceWatch({ changed: true, settled: false, elapsedMs: 0 })).toBe(false);
-    expect(shouldContinueBalanceWatch({ changed: false, settled: true, elapsedMs: 0 })).toBe(false);
-    expect(shouldContinueBalanceWatch({ changed: false, settled: false, elapsedMs: 600_000 })).toBe(false);
+  it('残高が動くか、ツールが返るか、上限に達したら止める', () => {
+    expect(shouldContinueBalanceWatch({ balanceChanged: false, settled: false, elapsedMs: 0 })).toBe(true);
+    expect(shouldContinueBalanceWatch({ balanceChanged: true, settled: false, elapsedMs: 0 })).toBe(false);
+    expect(shouldContinueBalanceWatch({ balanceChanged: false, settled: true, elapsedMs: 0 })).toBe(false);
+    expect(shouldContinueBalanceWatch({ balanceChanged: false, settled: false, elapsedMs: 600_000 })).toBe(false);
   });
 
-  it('変化の判定は残高と残枠の組で行い、取れていない値は空として比べる', () => {
-    const a = walletSnapshot({ balance: { display: '0.30' }, session: { availableSpendUsd: '1.90' } });
-    const b = walletSnapshot({ balance: { display: '0.20' }, session: { availableSpendUsd: '1.90' } });
-    const c = walletSnapshot({ balance: { display: '0.30' }, session: null });
-    expect(a).not.toBe(b);
-    expect(a).not.toBe(c);
-    expect(walletSnapshot({ balance: null, session: null })).toBe(walletSnapshot({ balance: null, session: null }));
+  it('止める判定に使うのは残高だけ。残枠は署名の時点で先に減るので混ぜない', () => {
+    expect(balanceKey({ balance: { display: '0.30' } })).toBe('0.30');
+    expect(balanceKey({ balance: null })).toBe(null);
+  });
+
+  it('残高が取れていない回は「動いた」とみなさない（失敗で監視が終わらないように）', () => {
+    expect(didBalanceChange('0.30', '0.20')).toBe(true);
+    expect(didBalanceChange('0.30', '0.30')).toBe(false);
+    expect(didBalanceChange('0.30', null)).toBe(false);
+    expect(didBalanceChange(null, '0.20')).toBe(false);
+    expect(didBalanceChange(null, null)).toBe(false);
   });
 });
