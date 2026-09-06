@@ -124,13 +124,16 @@ h3 {
   display: none;
 }
 
-#auth-nav form {
-  margin: 0;
+/*
+ * サインアウトの包み（renderInternalAction の div）は inline style で margin-bottom: 16px を持ち、
+ * nav の中央揃えからボタンが上にずれる。inline style が相手なので !important が要る
+ */
+#auth-nav [data-testid='authenticator-action-signOut'] {
+  margin-bottom: 0 !important;
 }
 
 /* サインアウトは主操作ではないので、枠線だけの控えめな見た目にする */
 #auth-nav button {
-  width: auto;
   margin: 0;
   padding: 0.3rem 0.9rem;
   border-color: var(--pico-secondary);
@@ -216,7 +219,6 @@ h3 {
 }
 
 .panel-header button {
-  width: auto;
   margin: 0;
   padding: 0.3rem 0.9rem;
   font-size: 0.85em;

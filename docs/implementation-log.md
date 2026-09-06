@@ -35,6 +35,16 @@
   折りたたみの記憶は、クリック直後に再読込すると `toggle` イベントが落ちて記憶されないように見えるが、
   待ちを入れれば記憶される（計測上の問題）
 
+### PR #13 のレビュー対応
+
+- PR #12 が先にマージされ、GitHub 側で PR #13 は `main` ベースへ付け替え・rebase された（head が変わるので、ローカルは
+  `origin` に合わせて `reset --hard`）
+- レビュー指摘 2 件を直した。①`#auth-nav form { margin: 0 }` は当たる要素が無く（サインアウトの包みは `form` ではなく
+  `renderInternalAction` の `div` で inline の `margin-bottom: 16px` を持つ）、ヘッダーでボタンが上にずれていた。
+  `[data-testid='authenticator-action-signOut']` に `margin-bottom: 0 !important` を当てる形に直した。
+  ②`#auth-nav button` / `.panel-header button` の `width: auto` は効いていない（Pico が `width:100%` にするのは
+  `button[type=submit]` だけ。PR #11 のレビューで一度是正した誤解の再発）ので消した
+
 ## 2026-09-06: CDP 資格情報の所在の確認と、コンソールの支払い画面が白画面になる原因の特定
 
 ### 発端（grill-me）
