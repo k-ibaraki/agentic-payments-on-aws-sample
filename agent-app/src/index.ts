@@ -5,9 +5,11 @@ import { api, authApi, buyer } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb-agent/client';
 import { mountPreviewHost, type PreviewHost, type SellerInfo } from './mcp-apps-host.js';
-import { readInternalsOpen, shouldConfirmNewConversation, storeInternalsOpen } from './ui-rules.js';
+import { renderAssistantMarkdown } from './markdown.js';
+import { findLastAssistant, readInternalsOpen, shouldConfirmNewConversation, storeInternalsOpen } from './ui-rules.js';
 
-// ── DOM ヘルパー（文字列は必ず textContent で入れ、innerHTML は使わない） ──
+// ── DOM ヘルパー（文字列は必ず textContent で入れる。innerHTML は
+// Agent の応答の Markdown 描画だけが例外で、そこは DOMPurify を通す。決定46） ──
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`要素が見つかりません: #${id}`);
@@ -44,15 +46,39 @@ let previewHost: PreviewHost | null = null;
 let sellerInfo: SellerInfo | null = null;
 // 画面に出ている吹き出しの数。新規会話で確認を挟むかの判断に使う（決定44）
 let messageCount = 0;
+// 生成中は text-delta ごとに再描画が走る。組み立て途中の Markdown（閉じていない ``` など）を
+// 解釈すると後続が消えてしまうので、その間だけは素の文字列で出す（決定46）
+let streamingResponse = false;
+let lastMessages: ChatMessage[] = [];
+// 変換の結果を本文で覚える。再描画は delta のたびに走り、そのつど過去の応答まで変換し直すため
+const markdownCache = new Map<string, string>();
+
+function assistantHtml(content: string): string {
+  let html = markdownCache.get(content);
+  if (html === undefined) {
+    html = renderAssistantMarkdown(content);
+    markdownCache.set(content, html);
+  }
+  return html;
+}
 
 function renderMessages(messages: ChatMessage[]) {
+  lastMessages = messages;
   messageCount = messages.length;
+  // 生成中の応答は最後の assistant。承認へ応答すると末尾に approval が積まれ、
+  // 生成先はその手前の空プレースホルダになり得るので、位置の決め打ちにはしない
+  const streamingIndex = streamingResponse ? findLastAssistant(messages) : -1;
   const log = el('chat-log');
   log.replaceChildren(
-    ...messages.map((m) => {
+    ...messages.map((m, i) => {
       const div = document.createElement('div');
       div.className = `msg ${m.role}`;
-      div.textContent = m.content;
+      if (m.role === 'assistant' && i !== streamingIndex) {
+        div.classList.add('markdown');
+        div.innerHTML = assistantHtml(m.content);
+      } else {
+        div.textContent = m.content;
+      }
       return div;
     }),
   );
@@ -100,6 +126,10 @@ function createChat() {
     onMessagesChange: renderMessages,
     onLoadingChange: (loading) => {
       (el<HTMLButtonElement>('chat-send-btn')).disabled = loading;
+      // 生成が終わった時点で、素のまま出していた最後の応答を Markdown で描き直す。
+      // 送信時（loading が真になる側）に描き直すと、直前の応答が素の文字列に戻って点滅する
+      streamingResponse = loading;
+      if (!loading) renderMessages(lastMessages);
     },
     onChunk: (chunk) => {
       appendEvent(describeChunk(chunk));
@@ -123,6 +153,9 @@ function discardConversation() {
   chat.destroy();
   chat = createChat();
   messageCount = 0;
+  lastMessages = [];
+  streamingResponse = false;
+  markdownCache.clear();
   el('chat-log').replaceChildren();
   el('events').replaceChildren();
   el('interrupts').replaceChildren();

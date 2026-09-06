@@ -2,6 +2,58 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-06: チャット欄の Agent 応答を Markdown 表示にする（決定46）
+
+### やったこと
+
+- ユーザーの申し出「チャット欄の Agent の応答をマークダウン表示にして欲しい」を受けて実装
+- `agent-app` に marked 18.0.11 と DOMPurify 3.4.14 を依存追加（DOMPurify は型を同梱するので `@types/dompurify` は不要）。
+  テスト用に jsdom も devDependency に追加
+- `src/markdown.ts` を新設。marked（`gfm` / `breaks`）で HTML にし DOMPurify に通す関数 1 つだけを置く
+- `src/index.ts` の `renderMessages()` で `role === 'assistant'` のときだけ `.markdown` を付けて
+  サニタイズ済み HTML を `innerHTML` に入れる。生成中は素の文字列のまま出し、`onLoadingChange` で
+  生成の終わりを捉えて描き直す
+- `src/style.css` に `.msg.markdown` を追加（`white-space` を戻し、ブロック要素の余白と見出しの大きさを整える）
+- ブラウザで目視確認（Vite に一時ページを立て、確認後に削除）
+
+### 判断
+
+- 応答は LLM が組み立てる文字列で、売り手の応答も混ざる信頼できない入力。`src/index.ts` の
+  「innerHTML は使わない」方針を全部やめるのではなく、Agent の吹き出し 1 か所に例外を切り、
+  サニタイズを代わりの防護に据えた（冒頭のコメントもその通りに直した）
+- 単体テストは置かず、ブラウザ確認に委ねた。`src/mcp-apps-host.test.ts` が書いているとおり、
+  この repo は DOM を伴う組み立てを手動検証に回している。jsdom を足して `DOMPurify.sanitize()` を
+  試しても、確かめられるのは DOMPurify 自身で、自分の分岐 1 つではない
+  （→ この判断は同日のセルフレビューで覆した。下記）
+- 目視では見出し・箇条書き・コードブロック・表・引用・単独改行の `<br>` 化を確認し、あわせて
+  `<script>` / `onerror` / `javascript:` リンクが消えること、利用者の吹き出しが素のままであることも見た
+
+### セルフレビューでの是正（同日）
+
+- 生成中の吹き出しを「配列の末尾」で判定していたのが誤り。`useChat` の `respondToInterrupt` は
+  承認の吹き出しを末尾に積んだうえで、既存の空 assistant プレースホルダがあればそれを生成先に
+  再利用する（`index.hooks.js`）。テキストを返さずに終わったターンがあると空のまま履歴に残るので、
+  決定31 の承認経路で判定が外れ、避けたかった点滅がそのまま起きる状態だった。
+  最後の assistant を指す `findLastAssistant`（`ui-rules.ts`）に改め、テストで固定した
+- 再描画は delta のたびに走るため、過去の応答まで毎回変換し直していた。本文をキーにした
+  キャッシュを挟み、会話を捨てるときに消す
+- 「単体テストは置かない」判断（jsdom を足しても確かめられるのは DOMPurify 自身、という理由）は
+  TDD の規約に対して弱いと判断し直し、jsdom を足して `markdown.test.ts` を書いた。
+  このファイルだけ `@vitest-environment jsdom` で動かし、通るもの（見出し・箇条書き・表・`<br>`・
+  通常のリンク）と落ちるもの（`<script>`・イベントハンドラ属性・`javascript:` の href）を固定した
+- `breaks: true` の理由を「今の pre-wrap 表示に合わせる」と書いていたが、同じ変更で pre-wrap を
+  外しているので矛盾して読める。「pre-wrap をやめても改行が改行として見える状態を保つため」に直した
+
+### つまずき
+
+- `npm install` が package-lock.json の同梱依存（`inBundle` の `@opentelemetry/core` 4 件）の記述を消し、
+  bundled zod のバージョンを巻き戻した。CLAUDE.md が警告している現象そのもの。追加分（30 行）だけが
+  残るよう、npm が書いた lock を土台に消された記述と巻き戻された値を HEAD から戻し、
+  クリーンな `node_modules` で `npm ci` が通ることまで確認した
+- `bb-agent` の `useChat` は `text-delta` ごとに `onMessagesChange` を呼ぶ（`index.hooks.js`）。
+  素直に Markdown 化すると生成中に閉じていない ``` で後続が消えては戻るので、生成中は素の文字列で出す形にした
+- `npm run build` が `Failed to resolve entry for package "aws-blocks"` で落ちるのは、生成物
+  `aws-blocks/client.js` が未作成だったため（`npm run blocks:client` で解消）。今回の変更とは無関係
 ## 2026-09-06: 構成図に「Lambda が何者か」の注記を足す（決定32 の追記）
 
 ### 発端

@@ -264,6 +264,45 @@ h3 {
   font-size: 0.85em;
 }
 
+/* Agent の応答は Markdown として描く（決定46）。改行は marked の breaks が <br> にするので
+   pre-wrap は外す。吹き出しの上下端に余白が二重に付かないよう、先頭と末尾の margin を潰す */
+.msg.markdown {
+  white-space: normal;
+}
+
+.msg.markdown > :first-child {
+  margin-top: 0;
+}
+
+.msg.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.msg.markdown p,
+.msg.markdown ul,
+.msg.markdown ol,
+.msg.markdown pre,
+.msg.markdown blockquote,
+.msg.markdown table {
+  margin-bottom: 0.5rem;
+}
+
+.msg.markdown ul,
+.msg.markdown ol {
+  padding-left: 1.25rem;
+}
+
+.msg.markdown pre {
+  padding: 0.5rem;
+  overflow-x: auto;
+}
+
+/* 見出しは吹き出しの中では過剰に大きくなるので、本文に近い大きさへ寄せる */
+.msg.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin-bottom: 0.5rem;
+  font-size: 1em;
+}
+
 .chat-input {
   margin-bottom: 0;
 }
