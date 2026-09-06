@@ -154,7 +154,11 @@ function createChat() {
         refreshWallet().catch(() => {});
       }
     },
-    onError: (error) => appendEvent(`エラー: ${error}`),
+    onError: (error) => {
+      // ストリームが落ちるとチャンクは以後届かない。取り直しもここで止める（決定47）
+      appendEvent(`エラー: ${error}`);
+      stopBalanceWatch();
+    },
     onInterrupt: renderInterrupts,
   });
 }
@@ -186,8 +190,13 @@ type WalletStatus = Awaited<ReturnType<typeof buyer.getWalletStatus>>;
 const balanceHistory: Array<{ at: Date; display: string }> = [];
 // 帯に最後に出した組。変わったときだけ光らせ、購入中の取り直しを止める判定にも使う（決定47）
 let lastSnapshot: string | null = null;
+// 取得の通し番号。更新ボタン・購入中の取り直し・購入後の再取得は互いを知らずに並行するため、
+// 追い越されて遅れて返った古い応答で帯を巻き戻さないよう、最新の応答だけを画面に反映する
+let walletRequestSeq = 0;
+let walletRenderedSeq = 0;
 
-// 帯の数字を書き換え、前回と違えば一瞬光らせる（クラスを外して付け直すとアニメーションが再生する）
+// 帯の数字を書き換え、前回と違えば一瞬光らせる（クラスを外して付け直すとアニメーションが再生する）。
+// 値が同じなら書き込まない（aria-live の領域なので、同じ文字列の読み上げを繰り返させない）
 function renderStrip(status: WalletStatus): boolean {
   const snapshot = walletSnapshot(status);
   const changed = lastSnapshot !== null && lastSnapshot !== snapshot;
@@ -197,6 +206,7 @@ function renderStrip(status: WalletStatus): boolean {
     ['strip-remaining', formatStripRemaining(status.session)],
   ] as const) {
     const node = el(id);
+    if (node.textContent === text) continue;
     node.textContent = text;
     if (changed) {
       node.classList.remove('flash');
@@ -254,14 +264,20 @@ function recordBalance(status: WalletStatus) {
 
 // 取得の失敗だけを #wallet-status に出す。成功時は触らない（上限変更の結果表示を消さないため）
 async function refreshWallet(): Promise<boolean> {
+  const seq = ++walletRequestSeq;
   try {
     const status = await buyer.getWalletStatus();
+    // 新しい応答を既に描いていれば、この応答は古い。画面も残高の推移も触らない
+    if (seq < walletRenderedSeq) return false;
+    walletRenderedSeq = seq;
     const changed = renderStrip(status);
     renderWallet(status);
     recordBalance(status);
     return changed;
   } catch (error) {
-    showError(el('wallet-status'), `ウォレットの状態を取得できませんでした: ${describeError(error)}`);
+    if (seq >= walletRenderedSeq) {
+      showError(el('wallet-status'), `ウォレットの状態を取得できませんでした: ${describeError(error)}`);
+    }
     throw error;
   }
 }
@@ -277,15 +293,18 @@ function startBalanceWatch() {
   watch.timer = setInterval(() => {
     if (inflight) return;
     inflight = true;
+    let changed = false;
     refreshWallet()
-      .then((changed) => {
-        if (!shouldContinueBalanceWatch({ changed, settled: watch.settled, elapsedMs: Date.now() - watch.startedAt })) {
-          if (balanceWatch === watch) stopBalanceWatch();
-        }
+      .then((result) => {
+        changed = result;
       })
+      // 取得の失敗はその回を飛ばすだけ。上限に達したかの判定は成否によらず必ず通す
       .catch(() => {})
       .finally(() => {
         inflight = false;
+        if (!shouldContinueBalanceWatch({ changed, settled: watch.settled, elapsedMs: Date.now() - watch.startedAt })) {
+          if (balanceWatch === watch) stopBalanceWatch();
+        }
       });
   }, BALANCE_WATCH_INTERVAL_MS);
   balanceWatch = watch;

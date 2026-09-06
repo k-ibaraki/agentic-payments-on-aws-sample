@@ -254,7 +254,11 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* 値が変わった瞬間に背景を一瞬光らせて戻す。クラスを付け直すたびに再生する */
+/*
+ * 値が変わった瞬間に背景を一瞬光らせて戻す。クラスを付け直すたびに再生する。
+ * prefers-reduced-motion でも止めない。位置の移動を伴わない色の変化であり、
+ * ここで消すと「減った」合図がその利用者にだけ何も残らないため
+ */
 .strip-value.flash {
   animation: strip-flash 2.4s ease-out;
 }
@@ -262,10 +266,6 @@ h3 {
 @keyframes strip-flash {
   0% { background: var(--app-warn-border); }
   100% { background: transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .strip-value.flash { animation: none; }
 }
 
 /* ── チャット ─────────────────────────────────────────────── */
