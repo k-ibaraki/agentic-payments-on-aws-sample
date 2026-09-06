@@ -57,6 +57,18 @@ DOMPurify・ポーリングの停止条件はいずれも決定どおり）。�
 - worktree の初回だったため `npm ci` と `npm run blocks:client`（`aws-blocks/client.js` は gitignore）が要った。
   これを踏まないと `npm run build` が `Failed to resolve entry for package "aws-blocks"` で落ちる
 
+### セルフレビューでの是正（同日）
+
+4 件。①`agent-app/README.md` の防護の説明が「同じ会話に未解決の支払いがあれば」のままで、
+今回広げた範囲と食い違っていた（成否不明の購入にも触れていなかった）②DESIGN.md の決定31 に
+決定48 への追記が無く、決定31 だけを読むと「防護は会話単位」が現行仕様に見えた（覆した側にだけ
+書いて、覆された側に書いていなかった）③`buyer-agent.ts` と `aws-blocks/index.ts` の
+「防護に使うのは conversationId」というコメントが、`userId` を記録キーに使うようになった後も
+残っていた ④失敗の記録を投げないことを固定するテストが無かった。`recordFailedPurchase` として
+切り出し（`failed-purchase.test.ts` 6 件）、書き込みの順序と「両方が落ちても投げない」を固定した。
+④は将来「例外の握りつぶしは良くない」と `try`/`catch` を外されると、テストは緑のまま本番でだけ
+防護が二層とも消える箇所なので、テストで意図を残す価値が高い
+
 ### 残っていること
 
 - **実決済での確認は未実施**。とくに②は、タイムアウトを実際に起こして成否不明の記録が残ることと、

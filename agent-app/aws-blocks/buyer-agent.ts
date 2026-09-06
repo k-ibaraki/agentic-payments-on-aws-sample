@@ -133,6 +133,73 @@ export function purchasedHtmlKey(userId: string, resultId: string): string {
   return `${userId}/${resultId}`;
 }
 
+/** 購入のレシートの保存先。KVStore の必要最小限（テストではメモリ実装で代える） */
+export interface PurchaseArtifactStore {
+  put(
+    key: string,
+    value: {
+      purchasedAt: number;
+      error?: string;
+      transaction?: string;
+      authorizationNonce?: string;
+      paymentUncertain?: boolean;
+    },
+  ): Promise<void>;
+}
+
+export interface FailedPurchaseStores {
+  artifacts: PurchaseArtifactStore;
+  unresolvedPurchases: Parameters<typeof recordUnresolved>[0];
+}
+
+/**
+ * 金が動いた、または動いたかもしれない失敗を記録する（決定31・48）。
+ *
+ * **例外を外に出さない**。ここで投げるとツールが要約を返せず、tool-result が会話に残らない。
+ * すると利用者単位の記録（KVStore）と会話単位の判定（会話履歴）が同時に失われ、
+ * 次の購入が承認を求められないまま通ってしまう。書けなかったことはログに残す。
+ *
+ * 書く順は防護の記録が先、レシートが後。レシートは後から辿るための証跡なので、
+ * 片方しか残らないなら残すべきは次の支払いを止める側
+ */
+export async function recordFailedPurchase(
+  stores: FailedPurchaseStores,
+  purchase: {
+    userId: string;
+    resultId: string;
+    message: string;
+    paymentUncertain?: boolean;
+    transaction?: string;
+    authorizationNonce?: string;
+  },
+): Promise<void> {
+  const { userId, resultId, message, paymentUncertain, transaction, authorizationNonce } = purchase;
+  console.error(
+    paymentUncertain
+      ? `[buyer-agent] 支払いの成否を確認できなかった resultId=${resultId}（ProcessPayment の clientToken と同じ値。Payments 側の記録と突き合わせること）`
+      : `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'} nonce=${authorizationNonce ?? '(なし)'}`,
+  );
+  try {
+    await recordUnresolved(stores.unresolvedPurchases, userId, resultId);
+  } catch (error) {
+    console.error(
+      `[buyer-agent] 未解決の記録に失敗した resultId=${resultId}（会話単位の防護に委ねる）`,
+      error,
+    );
+  }
+  try {
+    await stores.artifacts.put(purchasedHtmlKey(userId, resultId), {
+      purchasedAt: Date.now(),
+      error: message,
+      ...(transaction ? { transaction } : {}),
+      ...(authorizationNonce ? { authorizationNonce } : {}),
+      ...(paymentUncertain ? { paymentUncertain: true } : {}),
+    });
+  } catch (error) {
+    console.error(`[buyer-agent] レシートの保存に失敗した resultId=${resultId}`, error);
+  }
+}
+
 export function createBuyerAgent(scope: Scope) {
   // 購入の記録。成功時は HTML 本体を、決済後に成果物を得られなかった場合も
   // レシート（tx）を残す。決定21 の upfront は「決済後の失敗リスクを買い手が負う」ため、
@@ -200,8 +267,8 @@ export function createBuyerAgent(scope: Scope) {
       '失敗の内容（paymentMade・paymentUncertain と resultId）をユーザーに報告し、指示を待ってください。',
       'paymentUncertain が真の場合は、支払われたかどうか自体が分かっていません。',
     ].join('\n'),
-    // 購入物を購入者に紐づけるため userId を、二重支払いの防護（決定31）のため
-    // conversationId を、呼び出しごとに必須で受け取る
+    // 購入物の紐づけと利用者ごとの防護の記録に userId を、会話単位の防護に
+    // conversationId を、呼び出しごとに必須で受け取る（決定31・48）
     toolContextSchema: z.object({ userId: z.string(), conversationId: z.string() }),
     tools: (tool) => ({
       generateHtml: tool({
@@ -282,40 +349,26 @@ export function createBuyerAgent(scope: Scope) {
               paymentMade: outcome.paymentMade,
               message,
             };
-            // 金が動いた、または動いたかもしれない失敗（決定31・48）。
-            // 記録に失敗しても summary は必ず返す。ここで投げると tool-result が会話に残らず、
-            // 会話単位の防護（決定31）まで同時に失われ、次の購入が何の抵抗もなく通ってしまう
+            // 金が動いた、または動いたかもしれない失敗（決定31・48）。記録は投げない
+            // （recordFailedPurchase 参照）ので、summary は必ず返る
             if (outcome.paymentMade || outcome.paymentUncertain) {
               summary.resultId = resultId;
               if (outcome.paymentUncertain) summary.paymentUncertain = true;
               if (transaction) summary.transaction = transaction;
               if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
-              console.error(
-                outcome.paymentUncertain
-                  ? `[buyer-agent] 支払いの成否を確認できなかった resultId=${resultId}（ProcessPayment の clientToken と同じ値。Payments 側の記録と突き合わせること）`
-                  : `[buyer-agent] 支払い済みだが成果物を得られなかった resultId=${resultId} tx=${transaction ?? '(なし)'} nonce=${outcome.authorizationNonce ?? '(なし)'}`,
-              );
-              // 防護の記録を先に書く。レシート（artifacts）は後から辿るための証跡なので、
-              // どちらか一方しか残らないなら、残すべきは次の支払いを止める側
-              try {
-                await recordUnresolved(unresolvedPurchases, context.userId, resultId);
-              } catch (error) {
-                console.error(
-                  `[buyer-agent] 未解決の記録に失敗した resultId=${resultId}（会話単位の防護に委ねる）`,
-                  error,
-                );
-              }
-              try {
-                await artifacts.put(purchasedHtmlKey(context.userId, resultId), {
-                  purchasedAt: Date.now(),
-                  error: message,
-                  ...(transaction ? { transaction } : {}),
-                  ...(outcome.authorizationNonce ? { authorizationNonce: outcome.authorizationNonce } : {}),
+              await recordFailedPurchase(
+                { artifacts, unresolvedPurchases },
+                {
+                  userId: context.userId,
+                  resultId,
+                  message,
                   ...(outcome.paymentUncertain ? { paymentUncertain: true } : {}),
-                });
-              } catch (error) {
-                console.error(`[buyer-agent] レシートの保存に失敗した resultId=${resultId}`, error);
-              }
+                  ...(transaction ? { transaction } : {}),
+                  ...(outcome.authorizationNonce
+                    ? { authorizationNonce: outcome.authorizationNonce }
+                    : {}),
+                },
+              );
             }
             return summary;
           }

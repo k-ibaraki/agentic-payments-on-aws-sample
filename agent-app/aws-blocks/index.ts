@@ -88,7 +88,7 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
       conversationId,
       channelId: conversationId,
       userId: user.userSub,
-      // 購入物を購入者に紐づける userId と、二重支払いの防護（決定31）に使う conversationId
+      // 購入物の紐づけと利用者ごとの防護の記録に使う userId と、会話単位の防護に使う conversationId（決定31・48）
       context: { userId: user.userSub, conversationId },
     });
     return { accepted: true, channelId: conversationId };
