@@ -13,3 +13,15 @@ export function readInternalsOpen(stored: string | null): boolean {
 export function storeInternalsOpen(open: boolean): 'open' | 'closed' {
   return open ? 'open' : 'closed';
 }
+
+/**
+ * 生成中の応答が入る吹き出しの位置（無ければ -1）。最後の assistant を指す。
+ * 承認へ応答すると末尾に approval が積まれ、生成先はその手前の空プレースホルダになり得るため、
+ * 「末尾」の決め打ちでは外れる（決定46）
+ */
+export function findLastAssistant(messages: Array<{ role: string }>): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') return i;
+  }
+  return -1;
+}
