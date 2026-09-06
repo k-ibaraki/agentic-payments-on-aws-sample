@@ -11,6 +11,12 @@ export interface PurchaseSummary {
   resultId: string;
   ok: boolean;
   paymentMade: boolean;
+  /**
+   * 支払いの成否が確認できなかった（決定48）。ProcessPayment がタイムアウト等で応答を
+   * 返さず、支払いが成立したかどうか買い手からは判別できない状態。paymentMade とは
+   * 別に持ち、未解決の購入として承認の要求に数える
+   */
+  paymentUncertain?: boolean;
   transaction?: string;
   htmlBytes?: number;
   error?: string;
@@ -59,6 +65,7 @@ function toPurchase(summary: Record<string, unknown>): PurchaseSummary | undefin
     resultId: summary.resultId,
     ok: summary.ok === true,
     paymentMade: summary.paymentMade === true,
+    ...(summary.paymentUncertain === true ? { paymentUncertain: true } : {}),
     ...(typeof summary.transaction === 'string' ? { transaction: summary.transaction } : {}),
     ...(typeof summary.htmlBytes === 'number' ? { htmlBytes: summary.htmlBytes } : {}),
     ...(summary.ok !== true && typeof summary.message === 'string' ? { error: summary.message } : {}),

@@ -3,11 +3,17 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { type CallOptions, callPaidTool, PaidToolError } from './paid-tool-caller.js';
-import type { X402Payer } from './x402-payer.js';
+import { UncertainPaymentError, type X402Payer } from './x402-payer.js';
 import type { SettleResponse } from './x402-types.js';
 
 export interface BuyHtmlOutcome {
   paymentMade: boolean;
+  /**
+   * 支払いの成否を確認できなかった（決定48）。ProcessPayment がタイムアウト等で応答を返さず、
+   * 支払いが成立したかどうか買い手からは判別できない。paymentMade とは別に持ち、
+   * 呼び出し側は「支払い済み」と同じく未解決の購入として扱う
+   */
+  paymentUncertain?: boolean;
   paymentResponse?: SettleResponse;
   html?: string;
   filename?: string;
@@ -16,6 +22,33 @@ export interface BuyHtmlOutcome {
   isError: boolean;
   /** 支払い後に応答を得られなかった場合の EIP-3009 nonce（清算をオンチェーンで辿る手がかり） */
   authorizationNonce?: string;
+}
+
+/**
+ * 金が動いた（かもしれない）失敗を、例外ではなく結果に変える。
+ * 呼び出し側がレシートを残し、次の購入で人の承認を要求できるようにするため（決定31・48）。
+ * 支払いに至っていない失敗は undefined を返し、そのまま投げ直させる
+ */
+export function outcomeFromError(error: unknown): BuyHtmlOutcome | undefined {
+  if (error instanceof PaidToolError) {
+    // 支払い済みで応答が無い。呼び出し側がレシートを残せるよう、失敗の結果として返す
+    return {
+      paymentMade: true,
+      isError: true,
+      message: error.message,
+      ...(error.authorizationNonce ? { authorizationNonce: error.authorizationNonce } : {}),
+    };
+  }
+  if (error instanceof UncertainPaymentError) {
+    // 支払われたかどうか分からない。paymentMade は立てず、成否不明の印だけを残す
+    return {
+      paymentMade: false,
+      paymentUncertain: true,
+      isError: true,
+      message: error.message,
+    };
+  }
+  return undefined;
 }
 
 export function extractHtml(
@@ -59,15 +92,8 @@ export async function buyHtml(
         options,
       );
     } catch (error) {
-      if (error instanceof PaidToolError) {
-        // 支払い済みで応答が無い。呼び出し側がレシートを残せるよう、失敗の結果として返す
-        return {
-          paymentMade: true,
-          isError: true,
-          message: error.message,
-          ...(error.authorizationNonce ? { authorizationNonce: error.authorizationNonce } : {}),
-        };
-      }
+      const failure = outcomeFromError(error);
+      if (failure) return failure;
       throw error;
     }
     const artifact = extractHtml(outcome.result);

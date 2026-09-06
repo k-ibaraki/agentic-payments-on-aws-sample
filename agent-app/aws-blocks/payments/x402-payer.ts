@@ -23,6 +23,53 @@ export interface X402Payer {
   pay(required: PaymentRequired): Promise<PaymentPayload>;
 }
 
+/**
+ * ProcessPayment を呼んだが、支払いが成立したかどうかを買い手から判別できない（決定48）。
+ * タイムアウト・接続断・5xx が該当する。呼び出し側はこれを「未払いの失敗」と扱わず、
+ * レシートを残して次の購入で人の承認を要求すること（自動再試行は別の冪等キーでの二重払いになる）
+ */
+export class UncertainPaymentError extends Error {
+  readonly paymentUncertain = true as const;
+  /** ProcessPayment に渡した冪等キー（= 購入の resultId）。Payments 側の記録と突き合わせる手がかり */
+  readonly clientToken: string;
+
+  constructor(message: string, clientToken: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'UncertainPaymentError';
+    this.clientToken = clientToken;
+  }
+}
+
+/**
+ * ProcessPayment の失敗で「支払いは成立していない」と言い切れるかどうか（決定48）。
+ *
+ * 言い切れるのは、サービスが 4xx で入力を拒んだ場合（AWS SDK の $fault は client）。
+ * リクエストは届いたが処理されずに終わっている。上限超過・セッション失効もここに入る。
+ *
+ * 言い切れないのは、タイムアウトや接続断（$metadata が付かない）と 5xx。
+ * 応答が届かなかっただけで AgentCore 側では支払いが済んでいた、という筋を否定できない。
+ * SDK の既定の再試行（maxAttempts 3）は同じ clientToken で行われるため二重にはならないが、
+ * それを使い切った後の失敗がここへ来る
+ */
+function isPaymentCertainlyNotMade(error: unknown): boolean {
+  if (isSpendLimitRejection(error) || isSessionRejection(error)) return true;
+  const e = error as { $fault?: string; $metadata?: { httpStatusCode?: number } } | null | undefined;
+  const status = e?.$metadata?.httpStatusCode;
+  if (typeof status === 'number') return status >= 400 && status < 500;
+  return e?.$fault === 'client';
+}
+
+/** ProcessPayment の失敗を、成否が確定するものと不明なものに振り分ける（決定48） */
+function paymentFailure(error: unknown, clientToken: string): unknown {
+  if (isPaymentCertainlyNotMade(error)) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new UncertainPaymentError(
+    `ProcessPayment の結果を確認できませんでした（支払いが成立した可能性があります）: ${message}`,
+    clientToken,
+    { cause: error },
+  );
+}
+
 export interface AgentCorePayerContext {
   userId: string;
   paymentManagerArn: string;
@@ -138,19 +185,27 @@ export function createAgentCorePayer(
             { cause: error },
           );
         }
-        // セッションの失効・削除なら作り直して一度だけ再試行する。ProcessPayment の失敗は
-        // 署名前なので、再試行しても支払いが二重になることはない（決定35）
-        if (!isSessionRejection(error)) throw error;
+        // セッションの失効・削除なら作り直して一度だけ再試行する。この拒否はサービスが
+        // 明示的に返したもので、支払いは処理されていない（決定35）
+        if (!isSessionRejection(error)) throw paymentFailure(error, clientToken);
         console.warn(
           `[x402-payer] PaymentSession が拒否されたため作り直します: ${(error as Error).name}: ${(error as Error).message}`,
         );
-        response = await process(await context.paymentSession.renew(sessionId));
+        // 作り直しそのものの失敗は ProcessPayment を呼ぶ前なので、成否不明にはしない
+        const renewedSessionId = await context.paymentSession.renew(sessionId);
+        try {
+          response = await process(renewedSessionId);
+        } catch (retryError) {
+          throw paymentFailure(retryError, clientToken);
+        }
       }
 
       const output = response.paymentOutput?.cryptoX402;
       if (!output?.payload || typeof output.payload !== 'object') {
-        throw new Error(
+        // 呼び出し自体は通っているので、支払いが立っていないとは言い切れない（決定48）
+        throw new UncertainPaymentError(
           `ProcessPayment が支払い証明を返しませんでした（status: ${response.status ?? '不明'}）`,
+          clientToken,
         );
       }
 

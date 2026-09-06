@@ -2,6 +2,70 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-06: 全体レビューで見つけた二重支払い防護の穴を塞ぐ（決定48）
+
+### 発端
+
+ユーザーの依頼「一度全体を見直して、致命的な実装の不具合がないかチェックして」。売り手（billing-mcp）、
+買い手の決済コア（`aws-blocks/payments/` ほか）、フロントと Amplify 配線の 3 系統に分けて調べた。
+売り手とフロントには致命的な指摘は出なかった（`upfront` の順序・CORS・添付の制限・sandbox 属性・
+DOMPurify・ポーリングの停止条件はいずれも決定どおり）。決済コアで 2 件見つかり、コードを読んで裏を取った。
+
+### 見つけた 2 件
+
+1. **会話を変えると承認ゲートが素通りする**。`buyer-agent.ts` の防護（決定31③）は
+   `getConversation(context.conversationId)` の履歴だけを見ていた。一方でウォレット・PaymentSession・
+   支出上限は利用者（sub）ごとで会話をまたぐ（決定39・43）。`createConversation` は制限なく呼べるので、
+   「支払い済み・成果物なし」が残る会話を離れて新しい会話で同じ依頼をすれば、interrupt を経ずに
+   もう一度支払えた。画面の「新規会話」を押すだけで防護が外れる
+2. **`ProcessPayment` 自体の失敗が記録も承認要求もされない**。`x402-payer.ts` は
+   `isSpendLimitRejection` / `isSessionRejection` のどちらでもない例外をそのまま投げ、
+   `paid-tool-caller.ts` も `buy-html.ts` も `buyer-agent.ts` も捕まえていなかった。
+   コードの注記は「ProcessPayment の失敗は署名前なので二重にならない」としていたが、
+   クライアント側のタイムアウトでは AgentCore 側で処理が済んでいた筋を否定できない。
+   決定30 の冪等キーは購入ごとに採番し直されるため、LLM の買い直しは別の `clientToken` になり
+   Payments 側の冪等性も効かない
+
+### やったこと（TDD、赤 → 緑）
+
+- `repurchase-guard.ts`（+ テスト 15 件）: 利用者ごとの未解決記録を追加。純粋関数
+  （`withUnresolved` / `pendingApprovals`）と KVStore 操作（`loadUnresolved` / `recordUnresolved` /
+  `clearUnresolved`）に分け、承認の要否を「会話履歴 ∪ 利用者の記録」で決める。書き込みは
+  読んだ値を条件にした CAS で、競合したら相手を残す（記録は空にならないので防護は働く）。
+  `ifNotExists` は使わない（決定35 改訂・決定40 と同じ罠）
+- `x402-payer.ts`（+ テスト 7 件）: `UncertainPaymentError` を追加。`ProcessPayment` の失敗を
+  4xx（`$fault: client`）かどうかで振り分ける。作り直し後の呼び出しは `try`/`catch` の外にあり
+  同じ穴が開いていたので囲み、セッション作成そのものの失敗は成否不明に混ぜないよう外へ出した。
+  応答に支払い証明が無い場合も成否不明に含めた（呼び出しは通っているため）
+- `buy-html.ts`（+ テスト 3 件）: 失敗を結果に変える `outcomeFromError` を切り出し、
+  `paymentUncertain` を `BuyHtmlOutcome` に追加
+- `buyer-agent.ts`: KVStore `unresolved-payment`（TTL 無し）を追加。失敗時は
+  `paymentMade || paymentUncertain` でレシートを残して未解決に記録し、成功時に記録を消す。
+  systemPrompt にも `paymentUncertain` を書いた
+- 同（セルフレビューでの是正）: 書き込みの失敗でツールが投げると、tool-result が会話に残らず
+  **KVStore の記録と会話単位の防護が同時に消える**（`toPurchase` は `resultId` の無い要約を捨てる）。
+  「利用者単位が書けなければ会話単位が拾う」という二重化が、一段目が成功した経路にしか無かった。
+  要約の組み立てを先に済ませ、記録とレシートの書き込みは個別に `try`/`catch` して必ず要約を返す形に直した。
+  順序も入れ替え、次の支払いを止める記録を先、証跡のレシートを後にした
+- `purchases.ts` / `src/ui-rules.ts`（+ テスト 3 件）/ `src/index.ts`: 購入一覧に
+  「支払いの成否不明・」を出せるようにした（`purchaseFailurePrefix`）
+
+### 検証
+
+- `npm run typecheck` / `npm run test`（175 件）緑
+- `npx cdk synth` 緑。新しい表 `agent-app-…-app-unresolved-payment` だけが増え、既存の資源は変わらない
+- worktree の初回だったため `npm ci` と `npm run blocks:client`（`aws-blocks/client.js` は gitignore）が要った。
+  これを踏まないと `npm run build` が `Failed to resolve entry for package "aws-blocks"` で落ちる
+
+### 残っていること
+
+- **実決済での確認は未実施**。とくに②は、タイムアウトを実際に起こして成否不明の記録が残ることと、
+  その後の購入で承認を求められることを見たい
+- KVStore の書き込みが実際に失敗した経路も通していない。上の是正が効くのはまさにそこなので、
+  記録が書けなかったときに会話単位の防護へ落ちることは机上の確認にとどまる
+- 承認（`trust`）で「以後は聞かない」に相当する扱いは無いまま。記録は成功でしか消えないので、
+  タイムアウトが続くと承認を求め続ける
+
 ## 2026-09-06: 依頼の枠に残高と残枠の帯を出し、購入中に取り直す（決定47）
 
 ### 発端（grill-me）

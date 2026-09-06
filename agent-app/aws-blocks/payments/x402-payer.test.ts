@@ -4,7 +4,7 @@
 // 「提示された条件を無条件に払わない」ための支払いポリシーの検証を固定する
 import { describe, expect, it, vi } from 'vitest';
 import { fixedPaymentSession } from './payment-session.js';
-import { createAgentCorePayer } from './x402-payer.js';
+import { createAgentCorePayer, UncertainPaymentError } from './x402-payer.js';
 
 const REQUIREMENT = {
   scheme: 'exact',
@@ -44,6 +44,20 @@ function fakeClient(paymentOutput: unknown, status = 'PROOF_GENERATED') {
   const send = vi.fn().mockResolvedValue({ status, paymentOutput });
   return { client: { send }, send };
 }
+
+// AWS SDK のサービス例外に相当する形。4xx（$fault: client）はサービスが入力を拒んだ＝
+// 支払いは処理されていない。5xx や $metadata の無い失敗（タイムアウト・接続断）は、
+// AgentCore 側で支払いが進んでいた可能性を否定できない（決定48）
+const named = (name: string, message: string, httpStatusCode = 400) =>
+  Object.assign(new Error(message), {
+    name,
+    $fault: httpStatusCode >= 500 ? 'server' : 'client',
+    $metadata: { httpStatusCode },
+  });
+
+/** クライアント側で起きた失敗（タイムアウト・接続断）。$metadata を持たない */
+const clientSideFailure = (name: string, message: string) =>
+  Object.assign(new Error(message), { name });
 
 describe('createAgentCorePayer', () => {
   it('accepts から exact スキームを選び ProcessPayment に渡す', async () => {
@@ -101,16 +115,17 @@ describe('createAgentCorePayer', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('ProcessPayment が支払い証明を返さなければ失敗させる', async () => {
+  // 呼び出しそのものは成功している以上、支払いが立っている可能性を否定できない（決定48）
+  it('ProcessPayment が支払い証明を返さなければ、成否不明として失敗させる', async () => {
     const { client } = fakeClient(undefined, 'PROOF_GENERATED');
     const payer = createAgentCorePayer(client, CONTEXT, POLICY);
 
     await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/支払い証明/);
+    await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toBeInstanceOf(UncertainPaymentError);
   });
 
   // ── 支払いポリシー（売り手の提示を無条件に払わない）──────────────────
   describe('セッションの作り直し（決定35）', () => {
-    const named = (name: string, message: string) => Object.assign(new Error(message), { name });
     const sessionSource = () => ({
       acquire: vi.fn().mockResolvedValue('session-old'),
       renew: vi.fn().mockResolvedValue('session-new'),
@@ -160,13 +175,99 @@ describe('createAgentCorePayer', () => {
     });
 
     it('セッション以外の失敗（権限など）は作り直さない', async () => {
-      const send = vi.fn().mockRejectedValue(named('AccessDeniedException', 'not authorized'));
+      const send = vi.fn().mockRejectedValue(named('AccessDeniedException', 'not authorized', 403));
       const session = sessionSource();
       const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
 
       await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toThrow(/not authorized/);
       expect(send).toHaveBeenCalledTimes(1);
       expect(session.renew).not.toHaveBeenCalled();
+    });
+  });
+
+  // 決定48: ProcessPayment の失敗のうち「支払いが立っていないと言い切れない」ものを
+  // 区別する。言い切れるのはサービスが 4xx で拒んだ場合だけで、タイムアウト・接続断・5xx は
+  // AgentCore 側で支払いが進んでいた可能性が残る。ここを普通の失敗として扱うと、
+  // 記録も承認要求も無いまま LLM が別の resultId（＝別の冪等キー）で買い直し、二重に払う
+  describe('支払いの成否が確認できない失敗（決定48）', () => {
+    const sessionSource = () => ({
+      acquire: vi.fn().mockResolvedValue('session-old'),
+      renew: vi.fn().mockResolvedValue('session-new'),
+    });
+
+    it('タイムアウトは成否不明として扱う', async () => {
+      const send = vi.fn().mockRejectedValue(clientSideFailure('TimeoutError', 'socket timed out'));
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, purchaseId: 'result-1' }, POLICY);
+
+      const error = await payer.pay(PAYMENT_REQUIRED).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UncertainPaymentError);
+      expect((error as UncertainPaymentError).paymentUncertain).toBe(true);
+      // 冪等キー（= 購入の resultId）を持たせ、Payments 側の記録と突き合わせられるようにする
+      expect((error as UncertainPaymentError).clientToken).toBe('result-1');
+      expect((error as UncertainPaymentError).message).toMatch(/socket timed out/);
+    });
+
+    it('サーバー側の失敗（5xx）も成否不明として扱う', async () => {
+      const send = vi.fn().mockRejectedValue(named('InternalServerException', 'internal error', 500));
+      const payer = createAgentCorePayer({ send }, CONTEXT, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toBeInstanceOf(UncertainPaymentError);
+    });
+
+    it('サービスが 4xx で拒んだ失敗は成否不明にしない（支払いは立っていない）', async () => {
+      const send = vi.fn().mockRejectedValue(named('AccessDeniedException', 'not authorized', 403));
+      const payer = createAgentCorePayer({ send }, CONTEXT, POLICY);
+
+      const error = await payer.pay(PAYMENT_REQUIRED).catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(UncertainPaymentError);
+      expect((error as Error).message).toMatch(/not authorized/);
+    });
+
+    it('支出上限の超過は成否不明にしない', async () => {
+      const send = vi.fn().mockRejectedValue(named('ConflictException', 'Session limit exceeded', 409));
+      const payer = createAgentCorePayer({ send }, CONTEXT, POLICY);
+
+      const error = await payer.pay(PAYMENT_REQUIRED).catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(UncertainPaymentError);
+      expect((error as Error).message).toMatch(/支出上限/);
+    });
+
+    // 作り直した後の呼び出しは try/catch の外にあり、同じ穴が開いていた
+    it('作り直した後のタイムアウトも成否不明として扱う', async () => {
+      const send = vi
+        .fn()
+        .mockRejectedValueOnce(named('ResourceNotFoundException', 'session not found', 404))
+        .mockRejectedValueOnce(clientSideFailure('TimeoutError', 'socket timed out'));
+      const session = sessionSource();
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      await expect(payer.pay(PAYMENT_REQUIRED)).rejects.toBeInstanceOf(UncertainPaymentError);
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    // セッションを切れなかっただけなら、まだ ProcessPayment を呼んでいない
+    it('セッションの作成に失敗しただけなら成否不明にしない', async () => {
+      const send = vi.fn().mockRejectedValue(named('ResourceNotFoundException', 'session not found', 404));
+      const session = {
+        acquire: vi.fn().mockResolvedValue('session-old'),
+        renew: vi.fn().mockRejectedValue(clientSideFailure('TimeoutError', 'create timed out')),
+      };
+      const payer = createAgentCorePayer({ send }, { ...CONTEXT, paymentSession: session }, POLICY);
+
+      const error = await payer.pay(PAYMENT_REQUIRED).catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(UncertainPaymentError);
+      expect((error as Error).message).toMatch(/create timed out/);
+    });
+
+    it('支払い要求がポリシーに合わない場合は成否不明にしない（呼ぶ前に止まる）', async () => {
+      const send = vi.fn();
+      const payer = createAgentCorePayer({ send }, CONTEXT, POLICY);
+
+      const error = await payer
+        .pay({ ...PAYMENT_REQUIRED, accepts: [{ ...REQUIREMENT, network: 'eip155:8453' }] })
+        .catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(UncertainPaymentError);
+      expect(send).not.toHaveBeenCalled();
     });
   });
 

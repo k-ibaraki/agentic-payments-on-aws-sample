@@ -122,3 +122,25 @@ describe('購入中の取り直し', () => {
     expect(didBalanceChange(null, null)).toBe(false);
   });
 });
+
+// ── 失敗した購入の見え方（決定48） ──
+import { purchaseFailurePrefix } from './ui-rules.js';
+
+describe('purchaseFailurePrefix', () => {
+  it('支払い済みの失敗はそう見せる', () => {
+    expect(purchaseFailurePrefix({ paymentMade: true })).toBe('支払い済み・');
+  });
+
+  // ProcessPayment の応答が確認できなかった購入。支払われた可能性が残るので
+  // 「失敗」とだけ見せると、利用者は減った残高の理由に辿り着けない
+  it('成否不明の失敗は「支払いの成否不明」と見せる', () => {
+    expect(purchaseFailurePrefix({ paymentMade: false, paymentUncertain: true })).toBe(
+      '支払いの成否不明・',
+    );
+  });
+
+  it('支払いに至っていない失敗には何も添えない', () => {
+    expect(purchaseFailurePrefix({ paymentMade: false })).toBe('');
+    expect(purchaseFailurePrefix({ paymentMade: false, paymentUncertain: false })).toBe('');
+  });
+});
