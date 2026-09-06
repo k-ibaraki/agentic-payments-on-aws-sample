@@ -5,6 +5,7 @@ import { api, authApi, buyer } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb-agent/client';
 import { mountPreviewHost, type PreviewHost, type SellerInfo } from './mcp-apps-host.js';
+import { readInternalsOpen, shouldConfirmNewConversation, storeInternalsOpen } from './ui-rules.js';
 
 // ── DOM ヘルパー（文字列は必ず textContent で入れ、innerHTML は使わない） ──
 function el<T extends HTMLElement>(id: string): T {
@@ -41,8 +42,11 @@ type Purchase = Awaited<ReturnType<typeof buyer.listPurchases>>['purchases'][num
 
 let previewHost: PreviewHost | null = null;
 let sellerInfo: SellerInfo | null = null;
+// 画面に出ている吹き出しの数。新規会話で確認を挟むかの判断に使う（決定44）
+let messageCount = 0;
 
 function renderMessages(messages: ChatMessage[]) {
+  messageCount = messages.length;
   const log = el('chat-log');
   log.replaceChildren(
     ...messages.map((m) => {
@@ -118,6 +122,7 @@ let chat = createChat();
 function discardConversation() {
   chat.destroy();
   chat = createChat();
+  messageCount = 0;
   el('chat-log').replaceChildren();
   el('events').replaceChildren();
   el('interrupts').replaceChildren();
@@ -258,6 +263,8 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
 
 // 直近の会話 ID をブラウザに覚えさせ、再読込後も購入一覧とプレビューへ戻れるようにする
 const LAST_CONVERSATION_KEY = 'agent-app:last-conversation';
+// 内部情報（開発者向け）の折りたたみを閉じたままにしたいかも覚える
+const INTERNALS_OPEN_KEY = 'agent-app:internals-open';
 
 async function sendCurrentInput() {
   const input = el<HTMLInputElement>('chat-text');
@@ -385,11 +392,15 @@ async function resumeLastConversation() {
 
 // ── 起動 ──────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  el('auth-container').appendChild(Authenticator(authApi));
+  // Authenticator はサインインのフォームとサインアウトの操作を同じ要素で描く。
+  // 未サインイン時は中央のカード、サインイン後はヘッダーへ、要素ごと移して使い回す（決定44）
+  const authenticator = Authenticator(authApi);
+  el('auth-container').appendChild(authenticator);
 
   onAuthChange(authApi, (user) => {
     el('auth-status').textContent = user ? `サインイン中: ${user.username}` : '未サインイン';
     document.body.classList.toggle('signed-in', !!user);
+    el(user ? 'auth-nav' : 'auth-container').appendChild(authenticator);
     if (user) {
       void resumeLastConversation();
       refreshWallet().catch(() => {});
@@ -420,9 +431,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ev.key === 'Enter' && !ev.isComposing) void sendCurrentInput();
   });
   el('chat-new-btn').addEventListener('click', () => {
+    // 押し直しは効かない（画面から再開する手段が無い）ので、会話があるときは確認を挟む
+    if (
+      shouldConfirmNewConversation(messageCount) &&
+      !window.confirm('今の会話と購入一覧は画面から消えます。新しい会話を始めますか？')
+    ) {
+      return;
+    }
     // 会話を捨てて新しい ID を採番させる（次の送信時に createConversation が走る）
     localStorage.removeItem(LAST_CONVERSATION_KEY);
     discardConversation();
     appendEvent('新しい会話を始めます');
+  });
+
+  // 内部情報の折りたたみは既定で開き、閉じた状態だけをブラウザに覚えさせる
+  const internals = el<HTMLDetailsElement>('internals');
+  internals.open = readInternalsOpen(localStorage.getItem(INTERNALS_OPEN_KEY));
+  internals.addEventListener('toggle', () => {
+    localStorage.setItem(INTERNALS_OPEN_KEY, storeInternalsOpen(internals.open));
   });
 });
