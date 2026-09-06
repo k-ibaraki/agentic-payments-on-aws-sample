@@ -2,6 +2,34 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-06: 依頼の枠に残高と残枠の帯を出し、購入中に取り直す（決定47）
+
+### 発端（grill-me）
+
+- ユーザーの申し出「エージェントへの依頼と同じ枠に残高とセッションの残枠を出したい。使った瞬間にリアルタイムで減るのが
+  分かるようにしたい。細かい説明は不要」。実決済で今の画面を見た上での要望で、支払いの時点では残高が減らず、
+  成果物が届いた時点で減って見えた（`tool-result` / `done` の取り直しの通り）
+- 問いを重ねて決めた点: 帯は見出し行の直下に常時表示、中身は残高と残枠の 2 つだけ、変わった瞬間は一瞬光らせる、
+  支払った瞬間に減らせたいので有料ツールの呼び出し中に取り直す、既存の「ウォレットと支払いの枠」は残す
+
+### やったこと
+
+- `src/ui-rules.ts`（+ テスト 6 件、赤 → 緑）: 帯の文字列（`formatStripBalance` / `formatStripRemaining`）、
+  取り直しの開始条件（`isPaidToolCall`。`PURCHASE_TOOL_NAME` を `aws-blocks/purchases.ts` から import）、
+  継続判定（`shouldContinueBalanceWatch`。間隔 3 秒・上限 600 秒）、変化の判定（`walletSnapshot`）
+- `index.html`: 依頼の枠の見出し行の直下に `.wallet-strip`（`#strip-balance` / `#strip-remaining`、`role="status"`）
+- `src/style.css`: 帯（淡いブルーの面に大きめの tabular-nums）と `strip-flash` のアニメーション。`prefers-reduced-motion` では止める
+- `src/index.ts`: `renderStrip` が帯を書き換えて前回と違えば `flash` を付け直す。`refreshWallet` は変わったかを返す。
+  `startBalanceWatch` / `stopBalanceWatch` が `tool-call`（有料ツール）で始め、`tool-result` / `done` / `error`・
+  新規会話・サインアウトで止める。取得中は次の回を飛ばす（多重呼び出しの防止）
+
+### 検証
+
+- `npm run typecheck` / `npm run test`（133 件）/ `npm run build` 緑。fresh な node_modules に `@aws-amplify/backend` が無く
+  `npm ci` を先に回した
+- 見た目は `BUYER_LOCAL_MODEL=canned` の `npm run dev` に Playwright を当てて確認（下記）。減った瞬間の光り方と
+  呼び出し中の取り直しは実決済でしか確かめられないため、次の実決済で確認する（API のスロットリングも同時に見る）
+
 ## 2026-09-06: チャット欄の Agent 応答を Markdown 表示にする（決定46）
 
 ### やったこと

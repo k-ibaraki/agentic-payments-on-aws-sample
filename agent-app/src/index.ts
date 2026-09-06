@@ -6,7 +6,18 @@ import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb-agent/client';
 import { mountPreviewHost, type PreviewHost, type SellerInfo } from './mcp-apps-host.js';
 import { renderAssistantMarkdown } from './markdown.js';
-import { findLastAssistant, readInternalsOpen, shouldConfirmNewConversation, storeInternalsOpen } from './ui-rules.js';
+import {
+  BALANCE_WATCH_INTERVAL_MS,
+  findLastAssistant,
+  formatStripBalance,
+  formatStripRemaining,
+  isPaidToolCall,
+  readInternalsOpen,
+  shouldConfirmNewConversation,
+  shouldContinueBalanceWatch,
+  storeInternalsOpen,
+  walletSnapshot,
+} from './ui-rules.js';
 
 // ── DOM ヘルパー（文字列は必ず textContent で入れる。innerHTML は
 // Agent の応答の Markdown 描画だけが例外で、そこは DOMPurify を通す。決定46） ──
@@ -133,6 +144,9 @@ function createChat() {
     },
     onChunk: (chunk) => {
       appendEvent(describeChunk(chunk));
+      // 支払いは有料ツールの呼び出しの中で起きる。返るまで数秒おきに取り直し、減った瞬間を帯に出す（決定47）
+      if (chunk.type === 'tool-call' && isPaidToolCall(chunk.toolName)) startBalanceWatch();
+      if (chunk.type === 'tool-result' || chunk.type === 'done' || chunk.type === 'error') stopBalanceWatch();
       if (chunk.type === 'tool-result' || chunk.type === 'done') {
         // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
         refreshPurchases().catch(() => {});
@@ -150,6 +164,7 @@ let chat = createChat();
 // 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない。
 // プレビューの iframe には前の利用者が買ったページが残るため、ここで必ず外す
 function discardConversation() {
+  stopBalanceWatch();
   chat.destroy();
   chat = createChat();
   messageCount = 0;
@@ -169,6 +184,28 @@ type WalletStatus = Awaited<ReturnType<typeof buyer.getWalletStatus>>;
 
 // 残高の推移はブラウザの中だけで持つ（取り直すたびに、値が変わっていれば行を足す）
 const balanceHistory: Array<{ at: Date; display: string }> = [];
+// 帯に最後に出した組。変わったときだけ光らせ、購入中の取り直しを止める判定にも使う（決定47）
+let lastSnapshot: string | null = null;
+
+// 帯の数字を書き換え、前回と違えば一瞬光らせる（クラスを外して付け直すとアニメーションが再生する）
+function renderStrip(status: WalletStatus): boolean {
+  const snapshot = walletSnapshot(status);
+  const changed = lastSnapshot !== null && lastSnapshot !== snapshot;
+  lastSnapshot = snapshot;
+  for (const [id, text] of [
+    ['strip-balance', formatStripBalance(status.balance)],
+    ['strip-remaining', formatStripRemaining(status.session)],
+  ] as const) {
+    const node = el(id);
+    node.textContent = text;
+    if (changed) {
+      node.classList.remove('flash');
+      void node.offsetWidth;
+      node.classList.add('flash');
+    }
+  }
+  return changed;
+}
 
 function renderWallet(status: WalletStatus) {
   const balance = el('wallet-balance');
@@ -216,15 +253,49 @@ function recordBalance(status: WalletStatus) {
 }
 
 // 取得の失敗だけを #wallet-status に出す。成功時は触らない（上限変更の結果表示を消さないため）
-async function refreshWallet() {
+async function refreshWallet(): Promise<boolean> {
   try {
     const status = await buyer.getWalletStatus();
+    const changed = renderStrip(status);
     renderWallet(status);
     recordBalance(status);
+    return changed;
   } catch (error) {
     showError(el('wallet-status'), `ウォレットの状態を取得できませんでした: ${describeError(error)}`);
     throw error;
   }
+}
+
+// 購入中の取り直し（決定47）。有料ツールの tool-call から、値が変わるかツールが返るか上限に達するまで続ける。
+// 取得の失敗はその回を飛ばすだけで続ける（次の回で取れれば減った値を掴める）
+let balanceWatch: { timer: ReturnType<typeof setInterval>; startedAt: number; settled: boolean } | null = null;
+
+function startBalanceWatch() {
+  stopBalanceWatch();
+  const watch = { timer: 0 as unknown as ReturnType<typeof setInterval>, startedAt: Date.now(), settled: false };
+  let inflight = false;
+  watch.timer = setInterval(() => {
+    if (inflight) return;
+    inflight = true;
+    refreshWallet()
+      .then((changed) => {
+        if (!shouldContinueBalanceWatch({ changed, settled: watch.settled, elapsedMs: Date.now() - watch.startedAt })) {
+          if (balanceWatch === watch) stopBalanceWatch();
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        inflight = false;
+      });
+  }, BALANCE_WATCH_INTERVAL_MS);
+  balanceWatch = watch;
+}
+
+function stopBalanceWatch() {
+  if (!balanceWatch) return;
+  balanceWatch.settled = true;
+  clearInterval(balanceWatch.timer);
+  balanceWatch = null;
 }
 
 async function submitSpendLimit() {
@@ -253,7 +324,13 @@ async function submitSpendLimit() {
 }
 
 function discardWallet() {
+  stopBalanceWatch();
   balanceHistory.length = 0;
+  lastSnapshot = null;
+  for (const id of ['strip-balance', 'strip-remaining']) {
+    el(id).textContent = '—';
+    el(id).classList.remove('flash');
+  }
   for (const id of ['wallet-balance', 'session-status', 'spend-limit']) el(id).textContent = '（未取得）';
   el('wallet-status').replaceChildren();
   showMessage(el('balance-history'), 'まだありません');

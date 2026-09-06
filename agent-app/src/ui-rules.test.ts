@@ -46,3 +46,56 @@ describe('findLastAssistant', () => {
     expect(findLastAssistant([])).toBe(-1);
   });
 });
+
+// ── 依頼の枠の帯（残高と残枠）と、購入中の取り直し（決定47） ──
+import {
+  BALANCE_WATCH_INTERVAL_MS,
+  BALANCE_WATCH_MAX_MS,
+  formatStripBalance,
+  formatStripRemaining,
+  isPaidToolCall,
+  shouldContinueBalanceWatch,
+  walletSnapshot,
+} from './ui-rules.js';
+
+describe('帯の表示文字列', () => {
+  it('残高は値と通貨だけ。取れていなければ「—」', () => {
+    expect(formatStripBalance({ display: '0.30', token: 'USDC' })).toBe('0.30 USDC');
+    expect(formatStripBalance(null)).toBe('—');
+  });
+
+  it('残枠は今のセッションの残枠。セッションが無い・値が無ければ「—」', () => {
+    expect(formatStripRemaining({ availableSpendUsd: '1.90' })).toBe('1.90 USD');
+    expect(formatStripRemaining({ availableSpendUsd: null })).toBe('—');
+    expect(formatStripRemaining(null)).toBe('—');
+  });
+});
+
+describe('購入中の取り直し', () => {
+  it('取り直しを始めるのは有料ツール（generateHtml）の tool-call だけ', () => {
+    expect(isPaidToolCall('generateHtml')).toBe(true);
+    expect(isPaidToolCall('listTools')).toBe(false);
+    expect(isPaidToolCall(undefined)).toBe(false);
+  });
+
+  it('間隔は 3 秒、上限は有料ツールの待ち時間の既定（決定31）と同じ 600 秒', () => {
+    expect(BALANCE_WATCH_INTERVAL_MS).toBe(3000);
+    expect(BALANCE_WATCH_MAX_MS).toBe(600_000);
+  });
+
+  it('値が変わるか、ツールが返るか、上限に達したら止める', () => {
+    expect(shouldContinueBalanceWatch({ changed: false, settled: false, elapsedMs: 0 })).toBe(true);
+    expect(shouldContinueBalanceWatch({ changed: true, settled: false, elapsedMs: 0 })).toBe(false);
+    expect(shouldContinueBalanceWatch({ changed: false, settled: true, elapsedMs: 0 })).toBe(false);
+    expect(shouldContinueBalanceWatch({ changed: false, settled: false, elapsedMs: 600_000 })).toBe(false);
+  });
+
+  it('変化の判定は残高と残枠の組で行い、取れていない値は空として比べる', () => {
+    const a = walletSnapshot({ balance: { display: '0.30' }, session: { availableSpendUsd: '1.90' } });
+    const b = walletSnapshot({ balance: { display: '0.20' }, session: { availableSpendUsd: '1.90' } });
+    const c = walletSnapshot({ balance: { display: '0.30' }, session: null });
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+    expect(walletSnapshot({ balance: null, session: null })).toBe(walletSnapshot({ balance: null, session: null }));
+  });
+});

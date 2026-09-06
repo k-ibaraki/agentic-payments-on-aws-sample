@@ -9,10 +9,10 @@
 </head>
 <body>
   <!--
-    画面の構成（決定44）:
+    画面の構成（決定44・45）:
     ヘッダー（題名・サインイン中の利用者とサインアウト）
     → 未サインイン: 説明とサインインのカード
-    → サインイン後: 二段組（左: 依頼 → ウォレットと支払いの枠 / 右: 購入したページとプレビュー）
+    → サインイン後: 二段組（左: 依頼（残高と残枠の帯を含む）→ ウォレットと支払いの枠 / 右: 購入したページとプレビュー）
     → 内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）
   -->
   <header class="container app-header">
@@ -58,6 +58,12 @@
             <!-- 会話全体に対する操作なので、送信の隣ではなく見出しの行に置く -->
             <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
           </header>
+          <!-- 残高と残枠の帯（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
+               詳細（期限・ID・上限の変更・推移）は下の「ウォレットと支払いの枠」に -->
+          <div class="wallet-strip" role="status" aria-label="ウォレット残高と今のセッションの残枠">
+            <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
+            <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
+          </div>
           <p class="hint">依頼を送ると、エージェントが有料ツールの利用を判断し、支払って呼び出します（実オンチェーン決済）。</p>
           <div id="chat-log"></div>
           <div id="interrupts"></div>

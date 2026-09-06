@@ -224,6 +224,50 @@ h3 {
   font-size: 0.85em;
 }
 
+/* ── 残高と残枠の帯（決定47） ───────────────────────────────── */
+/* 依頼の枠の中で、購入で減るのがひと目で分かるよう数字を大きく出す */
+.wallet-strip {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 0.5rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-tint);
+}
+
+.wallet-strip > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.strip-label {
+  color: var(--pico-muted-color);
+  font-size: 0.85em;
+}
+
+.strip-value {
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 値が変わった瞬間に背景を一瞬光らせて戻す。クラスを付け直すたびに再生する */
+.strip-value.flash {
+  animation: strip-flash 2.4s ease-out;
+}
+
+@keyframes strip-flash {
+  0% { background: var(--app-warn-border); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strip-value.flash { animation: none; }
+}
+
 /* ── チャット ─────────────────────────────────────────────── */
 /* 空でも「ここが会話の場」と分かるよう、面として見せる。伸びすぎたら中でスクロール */
 #chat-log {
