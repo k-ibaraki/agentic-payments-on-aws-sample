@@ -185,15 +185,18 @@ h3 {
 }
 
 /* ── タブ（決定50・51。依頼 / ウォレット / 購入履歴） ────────────── */
+/*
+ * display はここでは指定しない。.signed-in-only（display: none）と詳細度が並び、
+ * 後に書いたこちらが勝って未サインインでもタブが見えてしまうため。
+ * 見せるのはサインイン後だけなので、下の .signed-in .tabs（0,2,0）で flex にする
+ * （そちらは .signed-in .signed-in-only { display: block } と同じ詳細度で、後勝ちする）
+ */
 .tabs {
-  display: flex;
   gap: 0.25rem;
   margin-bottom: 1rem;
   border-bottom: 1px solid var(--app-tint-border);
 }
 
-/* サインイン後に見せる規則（.signed-in .signed-in-only { display: block }）は詳細度 0,2,0 で、
-   .tabs（0,1,0）の flex に勝ってしまう。同じ詳細度で display だけ戻す */
 .signed-in .tabs {
   display: flex;
 }
