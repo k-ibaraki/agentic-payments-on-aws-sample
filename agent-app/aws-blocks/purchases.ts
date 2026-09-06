@@ -2,7 +2,9 @@
 // Agent ブロックの tool-result チャンクは toolName しか運ばないため、ブラウザが
 // resultId を知る経路として、会話履歴の tool-result メッセージ（metadata.toolOutput）を読む。
 // toolOutput は Strands のツール結果 content（JsonBlock は { json }、TextBlock は { text }）が
-// JSON 化されたもの。形は上流の都合で変わり得るので、いずれの形でも拾い、壊れていれば無視する
+// JSON 化されたもの。形は上流の都合で変わり得るので、いずれの形でも拾い、壊れていれば無視する。
+// このファイルは src/ui-rules.ts（ブラウザ）からも PURCHASE_TOOL_NAME を読む。
+// import を足すとブラウザの束にサーバー用の依存が入るので、依存を増やさないこと
 
 /** ブラウザへ返す購入 1 件分。HTML 本体は含めない（getPurchasedHtml で取る） */
 export interface PurchaseSummary {
