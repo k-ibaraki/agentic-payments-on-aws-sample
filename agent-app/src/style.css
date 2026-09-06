@@ -202,7 +202,7 @@ h3 {
   font-size: 0.95em;
 }
 
-.tab[aria-selected='true'] {
+.tab[aria-pressed='true'] {
   border-color: var(--app-tint-border);
   background: var(--app-tint);
   /* button の中では --pico-color がボタン自身の文字色（primary の上の白）に解決されるので使わない */

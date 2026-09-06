@@ -463,6 +463,10 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
     }),
   );
   appendEvent(`interrupt ${interrupts.map((i) => i.name).join(', ')}（人の承認待ち）`);
+  // 承認の操作は依頼タブの中にある（決定50 のタブ化）。購入履歴タブを開いたまま承認待ちになると、
+  // 中断中は done も tool-result も届かず帯の取り直しも止まるため、画面は静止したままになる。
+  // 支払いを続けるかどうかの判断（決定31）を待たせないよう、依頼タブへ引き戻す
+  if (interrupts.length > 0) showTab('chat');
 }
 
 // 直近の会話 ID をブラウザに覚えさせ、再読込後も同じ会話（吹き出しと購入カード）へ戻れるようにする。
@@ -638,6 +642,13 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
       return false;
     }
     await host.showHtml(artifact.html, artifact.filename);
+    // showHtml を待つ間に会話が捨てられると、discardConversation の後始末は card.host がまだ
+    // null なのでこのホストを見逃す。カードはマップから外れているため、ここで閉じないと誰も閉じない
+    if (generation !== conversationGeneration || purchaseCards.get(resultId) !== card) {
+      host.destroy();
+      frame.remove();
+      return false;
+    }
     card.host = host;
     status.replaceChildren();
     return true;
@@ -645,7 +656,9 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
     host?.destroy();
     frame.remove();
     if (generation !== conversationGeneration) return false;
-    showError(status, `表示に失敗: ${describeError(error)}`);
+    // 例外文は ARN や ID を含み得るので画面には出さず、詳細は内部情報のログへ（refreshHistory と同じ扱い）
+    appendEvent(`ページを表示できませんでした: ${describeError(error)}`);
+    showError(status, '表示に失敗しました（「表示」でやり直せます）');
     return false;
   }
 }
@@ -763,11 +776,12 @@ function downloadHtml(filename: string, html: string) {
   URL.revokeObjectURL(url);
 }
 
-// ── タブ（決定50。決定44 の「タブ部品は使わない」を上書き） ──────────────
+// ── 面の切り替え（決定50。決定44 の「タブ部品は使わない」を上書き） ──────────────
+// ARIA の tablist は名乗らず、押した状態を aria-pressed で表す素のボタンにしている（index.html 参照）
 function showTab(name: 'chat' | 'history') {
   for (const panel of ['chat', 'history'] as const) {
     const active = panel === name;
-    el(`tab-${panel}`).setAttribute('aria-selected', String(active));
+    el(`tab-${panel}`).setAttribute('aria-pressed', String(active));
     el(`panel-${panel}`).toggleAttribute('hidden', !active);
   }
   if (name === 'history' && historyStale) refreshHistory().catch(() => {});

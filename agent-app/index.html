@@ -52,13 +52,19 @@
       </article>
     </section>
 
-    <!-- 画面内のタブ（決定50）。押した面だけを見せ、もう一方は hidden で隠す -->
-    <div class="tabs signed-in-only" role="tablist" aria-label="画面の切り替え">
-      <button type="button" id="tab-chat" class="tab" role="tab" aria-selected="true" aria-controls="panel-chat">依頼</button>
-      <button type="button" id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">購入履歴</button>
+    <!--
+      画面内の面の切り替え（決定50）。押した面だけを見せ、もう一方は hidden で隠す。
+      role="tablist" / role="tab" は名乗らない。ARIA のタブは矢印キーでの移動と roving tabindex が
+      あるものとして支援技術が案内するので、名乗る以上は自前で持つ必要があり、それは決定44 が
+      details を選んだ理由（キー操作と aria を自分で面倒見なくてよい）に反する。
+      押した状態を aria-pressed で表す素のボタンにして、button の既定（Tab で移動、Enter / Space で押す）だけで済ませる
+    -->
+    <div class="tabs signed-in-only" role="group" aria-label="画面の切り替え">
+      <button type="button" id="tab-chat" class="tab" aria-pressed="true" aria-controls="panel-chat">依頼</button>
+      <button type="button" id="tab-history" class="tab" aria-pressed="false" aria-controls="panel-history">購入履歴</button>
     </div>
 
-    <div id="panel-chat" class="workspace signed-in-only" role="tabpanel" aria-labelledby="tab-chat">
+    <div id="panel-chat" class="workspace signed-in-only" role="region" aria-labelledby="tab-chat">
       <article class="panel" aria-labelledby="chat-heading">
         <header class="panel-header">
           <h2 id="chat-heading">エージェントへの依頼</h2>
@@ -110,7 +116,7 @@
       </article>
     </div>
 
-    <div id="panel-history" class="signed-in-only" role="tabpanel" aria-labelledby="tab-history" hidden>
+    <div id="panel-history" class="signed-in-only" role="region" aria-labelledby="tab-history" hidden>
       <article class="panel" aria-labelledby="history-heading">
         <header class="panel-header">
           <h2 id="history-heading">購入したページ</h2>
