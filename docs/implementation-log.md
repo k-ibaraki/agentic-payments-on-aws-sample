@@ -21,6 +21,18 @@
   アプリ単位の設定でリポジトリでは管理できないため、README のクラウド deploy 節に手順を書いた
 - DESIGN.md に決定45
 
+### セルフレビューで見つかった誤り（同日）
+
+- **CDK 直 deploy の経路を「変更不要」と誤って結論していた。** 決定45 の初版は「`Hosting` は `spaFallback` 既定 false」と書いたが、
+  根拠にした `?? false` は CloudFront Function を組み立てる低層（`@aws-blocks/hosting` の `defaults.js`）の既定で、
+  実際にそこへ渡る値はアダプタが決めていた。`detectFramework` は next / nitro / astro / sveltekit 以外を全て `'spa'` に落とすため
+  （`adapters/index.js`）、この Vite プロジェクトは `'spa'` 判定 → `spaFallback: true`。`npm run deploy`（決定33 の退路）では
+  今も任意パスがアプリ本体を 200 で返す状態だった。既定値が多層のとき、低層の既定を見て早合点したのが原因
+- 直し方: `aws-blocks/index.cdk.ts` の `Hosting` に `framework: 'static'` を明示。あわせて SPA アダプタが `dist/404.html` を見て
+  `errorPages[404]` に自動配線するので（`adapters/spa.js`）、追加した `public/404.html` が CDK 経路でもそのまま効く
+- Amplify の規則がリポジトリ外の手動設定である件は、`amplify.yml` から `update-app` を流す案の副作用（サービスロールに
+  `amplify:UpdateApp` が要る・ビルドがアプリ設定を書き換える）を嫌って手動運用のままとし、残存リスクを決定45 に明記した
+
 ### 検証・つまずき
 
 - クラウドの実応答は main ブランチにアクセス制御（Basic 認証）が掛かっており、curl では全パスが 401 だった。

@@ -29,6 +29,11 @@ if (!sandboxMode) {
   new Hosting(blocksStack, 'Hosting', {
     root: join(__dirname, '..'),
     buildCommand: 'npm run build',
+    // 自動判定は next / nitro / astro / sveltekit 以外を全て 'spa' に落とし、CloudFront Function が
+    // 拡張子の無い全パスを /index.html に書き換える（どんな URL でもアプリが 200 で返る）。
+    // この画面はクライアントルーティングを使わないので 'static' を明示する。'static' にすると
+    // アダプタが dist/404.html を 404 のエラーページへ自動で配線する（決定45）
+    framework: 'static',
     buildOutputDir: 'dist',
     api: blocksStack
   });
