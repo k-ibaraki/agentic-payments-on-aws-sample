@@ -100,9 +100,11 @@ function createChat() {
     onChunk: (chunk) => {
       appendEvent(describeChunk(chunk));
       if (chunk.type === 'tool-result' || chunk.type === 'done') {
-      // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
-      refreshPurchases().catch(() => {});
-    }
+        // 失敗は refreshPurchases が画面に出すので、ここでは再送出だけ抑える
+        refreshPurchases().catch(() => {});
+        // 支払いの後の残高と残枠を取り直す（残高の推移はここで積み上がる。決定42）
+        refreshWallet().catch(() => {});
+      }
     },
     onError: (error) => appendEvent(`エラー: ${error}`),
     onInterrupt: renderInterrupts,
@@ -122,6 +124,101 @@ function discardConversation() {
   el('conversation-id').textContent = '（未作成）';
   showMessage(el('purchases'), 'まだありません');
   discardPreview();
+}
+
+// ── ウォレットと支払いの枠（決定42・43） ─────────────────────────
+type WalletStatus = Awaited<ReturnType<typeof buyer.getWalletStatus>>;
+
+// 残高の推移はブラウザの中だけで持つ（取り直すたびに、値が変わっていれば行を足す）
+const balanceHistory: Array<{ at: Date; display: string }> = [];
+
+function renderWallet(status: WalletStatus) {
+  const balance = el('wallet-balance');
+  if (status.balance) {
+    balance.textContent = `${status.balance.display} ${status.balance.token}（Base Sepolia）`;
+  } else {
+    showError(balance, status.balanceError ?? '取得できませんでした');
+  }
+
+  const session = el('session-status');
+  if (status.session) {
+    const s = status.session;
+    session.textContent =
+      `残枠 ${s.availableSpendUsd ?? '?'} / 上限 ${s.maxSpendUsd ?? '?'} USD` +
+      `（期限 ${new Date(s.expiresAt).toLocaleTimeString()}、ID ${s.paymentSessionId}）`;
+  } else if (status.sessionError) {
+    showError(session, status.sessionError);
+  } else {
+    showMessage(session, `なし（次の購入で ${status.sessionMinutes} 分のセッションを切ります）`);
+  }
+
+  el('spend-limit').textContent =
+    `${status.spendLimit.maxSpendUsd} USD / セッション` +
+    `（${status.spendLimit.source === 'user' ? 'この画面で設定' : '既定'}）`;
+}
+
+function recordBalance(status: WalletStatus) {
+  if (!status.balance) return;
+  const last = balanceHistory[balanceHistory.length - 1];
+  if (last && last.display === status.balance.display) return;
+  balanceHistory.push({ at: new Date(), display: status.balance.display });
+  const box = el('balance-history');
+  box.replaceChildren(
+    ...balanceHistory.map((entry, i) => {
+      const line = document.createElement('div');
+      const prev = balanceHistory[i - 1];
+      const delta = prev ? (Number(entry.display) - Number(prev.display)).toFixed(6).replace(/0+$/, '').replace(/\.$/, '') : null;
+      line.textContent =
+        `${entry.at.toLocaleTimeString()} ${entry.display} USDC` +
+        (delta !== null ? `（${Number(delta) >= 0 ? '+' : ''}${delta}）` : '');
+      return line;
+    }),
+  );
+  box.scrollTop = box.scrollHeight;
+}
+
+// 取得の失敗だけを #wallet-status に出す。成功時は触らない（上限変更の結果表示を消さないため）
+async function refreshWallet() {
+  try {
+    const status = await buyer.getWalletStatus();
+    renderWallet(status);
+    recordBalance(status);
+  } catch (error) {
+    showError(el('wallet-status'), `ウォレットの状態を取得できませんでした: ${describeError(error)}`);
+    throw error;
+  }
+}
+
+async function submitSpendLimit() {
+  const input = el<HTMLInputElement>('spend-limit-text');
+  const value = input.value.trim();
+  if (!value) return;
+  const note = el('wallet-status');
+  const button = el<HTMLButtonElement>('spend-limit-btn');
+  button.disabled = true;
+  try {
+    const result = await buyer.setSpendLimit(value);
+    input.value = '';
+    showMessage(
+      note,
+      `上限を ${result.spendLimit.maxSpendUsd} USD にしました` +
+        (result.discardedSession ? `（セッション ${result.discardedSession} を破棄）` : '（破棄するセッションはありません）'),
+      'success',
+    );
+    appendEvent(`支出上限を変更: ${result.spendLimit.maxSpendUsd} USD`);
+    await refreshWallet();
+  } catch (error) {
+    showError(note, `上限を変更できませんでした: ${describeError(error)}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function discardWallet() {
+  balanceHistory.length = 0;
+  for (const id of ['wallet-balance', 'session-status', 'spend-limit']) el(id).textContent = '（未取得）';
+  el('wallet-status').replaceChildren();
+  showMessage(el('balance-history'), 'まだありません');
 }
 
 // 購入したページの表示を消す。MCP Apps の View は次の表示でまた載せ直す
@@ -295,10 +392,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('signed-in', !!user);
     if (user) {
       void resumeLastConversation();
+      refreshWallet().catch(() => {});
     } else {
       // 同じブラウザで別の利用者がサインインしても前の会話とページが見えないよう、画面ごと捨てる
       discardConversation();
+      discardWallet();
     }
+  });
+
+  el('spend-limit-btn').addEventListener('click', () => void submitSpendLimit());
+  el<HTMLInputElement>('spend-limit-text').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.isComposing) void submitSpendLimit();
+  });
+  el('wallet-refresh-btn').addEventListener('click', () => {
+    refreshWallet().catch(() => {});
   });
 
   el('last-code-btn').addEventListener('click', async () => {

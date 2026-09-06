@@ -204,6 +204,57 @@ article h3 {
   padding: 1px 0;
 }
 
+/* ── ウォレットと支払いの枠 ─────────────────────────────────── */
+.wallet {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+/* dl の各行を div で包んでいるので、grid の子として展開する */
+.wallet > div {
+  display: contents;
+}
+
+.wallet dt {
+  color: var(--pico-muted-color);
+  font-size: 0.85em;
+}
+
+.wallet dd {
+  /* grid の子は min-width:auto で内容幅まで広がるので、はみ出さないよう 0 にして折り返す */
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-limit-input {
+  margin-bottom: 0.5rem;
+}
+
+.spend-limit-input button {
+  flex: 0 0 auto;
+}
+
+#balance-history {
+  min-height: 40px;
+  max-height: 150px;
+  padding: 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.85em;
+}
+
+#balance-history > span {
+  color: var(--pico-muted-color);
+  font-family: var(--pico-font-family);
+}
+
 /* ── 購入したページ ───────────────────────────────────────── */
 #purchases {
   display: flex;
@@ -269,25 +320,40 @@ article h3 {
  * 入力欄を 1 行使い、ボタンをその下に並べる
  */
 @media (max-width: 576px) {
-  .chat-input[role='group'] {
+  /* 見出しと値を縦に積む（横 2 列では値の幅が足りない） */
+  .wallet {
+    grid-template-columns: 1fr;
+    gap: 0.15rem 0;
+  }
+
+  .wallet dd {
+    margin-bottom: 0.5rem;
+  }
+
+  .chat-input[role='group'],
+  .spend-limit-input[role='group'] {
     flex-wrap: wrap;
     box-shadow: none;
   }
 
-  .chat-input[role='group'] > * {
+  .chat-input[role='group'] > *,
+  .spend-limit-input[role='group'] > * {
     border-radius: var(--pico-border-radius);
   }
 
-  .chat-input[role='group'] > #chat-text {
+  .chat-input[role='group'] > #chat-text,
+  .spend-limit-input[role='group'] > #spend-limit-text {
     flex: 1 0 100%;
     margin-bottom: 0.5rem;
   }
 
-  .chat-input[role='group'] > button {
+  .chat-input[role='group'] > button,
+  .spend-limit-input[role='group'] > button {
     flex: 1 1 auto;
   }
 
-  .chat-input[role='group'] > button:not(:first-child) {
+  .chat-input[role='group'] > button:not(:first-child),
+  .spend-limit-input[role='group'] > button:not(:first-child) {
     margin-left: 0;
   }
 }

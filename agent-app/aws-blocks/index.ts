@@ -1,6 +1,12 @@
 import { ApiNamespace, AuthCognito, KVStore, Scope } from '@aws-blocks/blocks';
 import { z } from 'zod';
-import { createBuyerAgent, purchasedHtmlKey, sellerInfoFromEnv } from './buyer-agent.js';
+import {
+  changeSpendLimit,
+  createBuyerAgent,
+  purchasedHtmlKey,
+  sellerInfoFromEnv,
+  walletStatus,
+} from './buyer-agent.js';
 import { assertOwnedConversation } from './conversation-guard.js';
 import { assertPendingInterrupts } from './interrupt-guard.js';
 import { extractPurchases } from './purchases.js';
@@ -43,7 +49,8 @@ const auth = new AuthCognito(scope, 'auth', {
 // ── 買い手エージェント（決定26・27・28） ────────────────────────────────
 // billing-mcp の有料ツールを AgentCore Payments で支払いながら使う。
 // 構成と配線は buyer-agent.ts 参照
-const { agent: buyerAgent, artifacts: purchasedHtml } = createBuyerAgent(scope);
+const { agent: buyerAgent, artifacts: purchasedHtml, paymentSessions, spendLimits } = createBuyerAgent(scope);
+const walletStores = { paymentSessions, spendLimits };
 
 // 利用者ごとの依頼回数の記録（決定40）。キーは「利用者/時間窓の開始」で、窓が過ぎた記録は TTL で消える。
 // 支払いに至らない依頼でも Bedrock の費用は掛かるため、支出上限（決定37・@39@）とは別に数える
@@ -146,6 +153,21 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   async getSellerInfo() {
     await auth.requireAuth(context);
     return sellerInfoFromEnv();
+  },
+
+  // ウォレット残高と、この利用者の支払いの枠（決定42・43）。ウォレットは全員で共有なので
+  // 残高は同じ値が見えるが、枠（セッション・上限）は利用者ごと
+  async getWalletStatus() {
+    const user = await auth.requireAuth(context);
+    return await walletStatus(walletStores, user.userSub);
+  },
+
+  // 自分の支出上限を変える（決定43）。天井は設けず、現在のセッションを破棄して即時に効かせる。
+  // 利用者は管理者が作る（決定36）ため、自分の枠を自分で上げられることは受け入れている。
+  // 累積の上限は引き続きウォレット残高（決定35・39）
+  async setSpendLimit(maxSpendUsd: string) {
+    const user = await auth.requireAuth(context);
+    return await changeSpendLimit(walletStores, user.userSub, maxSpendUsd);
   },
 }));
 
