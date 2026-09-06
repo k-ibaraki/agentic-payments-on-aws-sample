@@ -76,6 +76,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   失敗して支払いだけが残る。DESIGN.md 決定31）
 - ブラウザからの依頼は**実オンチェーン決済（テスト USDC）が発生する**。検証で送る前に確認を取ること
 - `npm run test` / `npm run typecheck` — コミット前に必ず全て通すこと（unit は vitest、`aws-blocks/` `src/` `amplify/` `scripts/` 配下）
+- 依存を足したら `package-lock.json` の差分が足したパッケージだけかを確認し、`npm ci` が通ることまで見る
+  （手元の npm は同梱依存の記述を削ることがあり、そのまま出すと CI の `npm ci` が落ちる）
 - `npm run amplify:sandbox -- --once` / `npm run amplify:sandbox:delete` — Amplify の sandbox へ deploy・削除。
   **AWS 上に資源を作り課金が発生する。実行前に必ず確認を取ること**。ローカルのフロントを繋ぐには
   `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`

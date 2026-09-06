@@ -44,9 +44,11 @@
 
 /*
  * Pico の .container は 1280px 以上で 1200px、1536px 以上で 1450px まで広がる。
- * 会話の一行が長くなりすぎるので、旧実装と同じ 960px で頭打ちにする
+ * 会話の一行が長くなりすぎるので、旧実装と同じ 960px で頭打ちにする。
+ * セレクタに .container を含めるのは、要素セレクタ（body > main）だけでは
+ * クラス（.container）に詳細度で負けて上限が効かないため
  */
-body > main {
+body > main.container {
   max-width: 960px;
   padding-block: 2.5rem;
 }
@@ -110,15 +112,6 @@ article h3 {
 
 #last-code-result {
   font-family: var(--pico-font-family-monospace);
-}
-
-/* Pico の button は既定で width:100%。行の中に並べるボタンは幅を内容に戻す */
-#auth-container button,
-.code-hint button,
-.interrupt button,
-.purchase button {
-  width: auto;
-  margin-bottom: 0;
 }
 
 .code-hint button {
@@ -219,11 +212,12 @@ article h3 {
 }
 
 /*
- * 一覧が空・取得失敗のときは JS が class の無い span を差し込む（`showMessage`）。
- * 初期表示の `<span class="hint">` と見た目が変わらないよう、ここで揃える
- * （`.error` の赤は class 側が勝つので、失敗の表示は赤のまま）
+ * 一覧が空のときは JS が class の無い span を差し込む（`showMessage`）。初期表示の
+ * `<span class="hint">` と見た目が変わらないよう、ここで揃える。
+ * `:not([class])` が要るのは、ID を含むセレクタは `.error` に詳細度で必ず勝ってしまい、
+ * 取得失敗の警告（`showError` が差し込む `span.error`）まで灰色にしてしまうため
  */
-#purchases > span {
+#purchases > span:not([class]) {
   color: var(--pico-muted-color);
   font-size: 0.85em;
 }
@@ -237,6 +231,18 @@ article h3 {
 
 .purchase code {
   font-size: 0.85em;
+}
+
+/*
+ * 支払い済みで成果物の無い行（決定31）の「失敗」。Pico の既定は primary を薄めるだけで、
+ * 白抜き文字とのコントラストが 2.09:1 まで落ち、「表示」と濃さでしか区別が付かない。
+ * 色と形で区別が付くよう、枠線だけの控えめな見た目に置き換える
+ */
+.purchase button:disabled {
+  border-color: var(--pico-muted-border-color);
+  background: transparent;
+  color: var(--pico-muted-color);
+  opacity: 1;
 }
 
 /* 一覧の行なので、ボタンは主役にならない大きさに。幅を揃えて「表示 / 失敗」を縦に整列させる */
