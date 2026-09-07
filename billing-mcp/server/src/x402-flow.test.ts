@@ -167,6 +167,45 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
     expect(body).toContain("支払いを受け付けられません");
   });
 
+  // 門番の限界を実行可能な形で残す（2026-09-07 のセルフレビュー）。
+  // 一度も支払わない攻撃者でも、無支払いの応答から accepts をタダで手に入れて転記し、
+  // authorization を条件どおりに手書きし、署名欄に任意の 130 桁 16 進数を入れれば、
+  // 門番を通過して settle まで届く。upfront では上流が /verify を呼ばないため、署名が
+  // 実際に検証されるのは facilitator の /settle だけになる。
+  // 塞ぐには EIP-712 署名のローカル復元（U9）が要る。塞いだときはこのテストが落ちるので、
+  // そこで期待値を「settle まで届かない」へ書き換えること
+  it("【未対応・U9】一度も支払わずに捏造したペイロードは門番を通過して settle まで届く", async () => {
+    // 1) 無支払いで叩き、公開されている accepts をタダで手に入れる
+    const probe = await callToolWithPayment(undefined);
+    const accepts = JSON.parse(await probe.text()).result.structuredContent
+      .accepts as Array<Record<string, string>>;
+    expect(accepts[0].payTo).toBe(PAY_TO);
+
+    // 2) ウォレットも資金も正規購入も無しに、形だけ整えて捏造する
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const forged = {
+      x402Version: 2,
+      accepted: accepts[0],
+      payload: {
+        authorization: {
+          from: "0x9999999999999999999999999999999999999999",
+          to: accepts[0].payTo,
+          value: accepts[0].amount,
+          validAfter: "0",
+          validBefore: String(nowSeconds + 300),
+          nonce: `0x${"77".repeat(32)}`,
+        },
+        signature: `0x${"11".repeat(65)}`, // 署名として無効な出鱈目
+      },
+    };
+
+    converse.mockClear();
+    const settleCountBefore = facilitator.log.settle.length;
+    await callToolWithPayment(forged);
+
+    expect(facilitator.log.settle.length).toBe(settleCountBefore + 1);
+  });
+
   it("決済が失敗したら成果物を受け取れない（upfront では生成も走らない）", async () => {
     const client = await connectBuyer();
     converse.mockClear();
