@@ -112,9 +112,10 @@ export function createMcpFetchHandler(
       return response;
     }
 
-    let paid: Awaited<ReturnType<typeof createPaidWrapper>>;
+    // 支払いラッパーと、それが提示する accepts の組
+    let payment: Awaited<ReturnType<typeof createPaidWrapper>>;
     try {
-      paid = await getPaid();
+      payment = await getPaid();
     } catch (error) {
       // facilitator に到達できないと価格を広告できない。落ちた理由を残す
       console.error("支払いラッパーの初期化に失敗しました", error);
@@ -125,7 +126,7 @@ export function createMcpFetchHandler(
 
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに
     // サーバーとトランスポートを立て、応答を読み切ってから閉じる
-    const server = await createBillingMcpServer(resolvedOptions, paid);
+    const server = await createBillingMcpServer(resolvedOptions, payment);
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });

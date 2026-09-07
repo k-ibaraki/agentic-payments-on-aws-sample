@@ -20,7 +20,20 @@ function buildPayment(accepted: Record<string, unknown>) {
     scheme: accepted.scheme,
     network: accepted.network,
     accepted,
-    payload: { signature: "0xsig", authorization: {} },
+    // settle 前の門番（payment-guard.ts）が authorization の中身を見るため、
+    // 実クライアントが作るのと同じ形に揃える。署名そのものの検証はしない（U9）ので
+    // 中身は問わないが、65 バイトという形だけは満たす必要がある
+    payload: {
+      signature: `0x${"ab".repeat(65)}`,
+      authorization: {
+        from: "0x1111111111111111111111111111111111111111",
+        to: accepted.payTo,
+        value: accepted.amount,
+        validAfter: "0",
+        validBefore: String(Math.floor(Date.now() / 1000) + 300),
+        nonce: `0x${"cd".repeat(32)}`,
+      },
+    },
   };
 }
 
