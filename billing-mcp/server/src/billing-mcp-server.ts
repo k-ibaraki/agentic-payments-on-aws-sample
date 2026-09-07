@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { createPaymentWrapper, x402ResourceServer } from "@x402/mcp";
+import { guardPayment } from "./payment-guard.js";
 import {
   type ConverseFn,
   createGenerateHtmlHandler,
@@ -59,7 +60,9 @@ function defaultLoadUiHtml(): string {
   return fs.readFileSync(resolveUiHtmlPath(), "utf-8");
 }
 
-// 支払いラッパー（有料ツール用）を作る。facilitator への /supported 照会を伴う
+// 支払いラッパー（有料ツール用）を作る。facilitator への /supported 照会を伴う。
+// 組み立てた accepts も返す。settle 前の門番（payment-guard）が、買い手の支払いを
+// 売り手側の条件と突き合わせるのに要る
 export async function createPaidWrapper(options: {
   facilitatorUrl: string;
   payTo: `0x${string}`;
@@ -82,7 +85,7 @@ export async function createPaidWrapper(options: {
     extra: { name: "USDC", version: "2", paymentFlow: PAYMENT_FLOW },
   });
 
-  return createPaymentWrapper(resourceServer, {
+  const paid = createPaymentWrapper(resourceServer, {
     accepts,
     resource: {
       url: "mcp://tool/generate-html",
@@ -90,13 +93,15 @@ export async function createPaidWrapper(options: {
       mimeType: "application/json",
     },
   });
+
+  return { paid, accepts };
 }
 
 export async function createBillingMcpServer(
   options: BillingMcpServerOptions,
   sharedPaid?: Awaited<ReturnType<typeof createPaidWrapper>>,
 ): Promise<McpServer> {
-  const paid =
+  const { paid, accepts } =
     sharedPaid ??
     (await createPaidWrapper({
       facilitatorUrl: options.facilitatorUrl,
@@ -106,9 +111,11 @@ export async function createBillingMcpServer(
 
   const server = new McpServer({ name: "billing-mcp", version: "0.1.0" });
 
+  // 支払いラッパーの外側を門番で包む。上流は authorization の中身を見ずに settle へ
+  // 渡すため、明らかに要求に合わない支払いをここで止める（payment-guard.ts、U9）
   registerGenerateHtmlTool(
     server,
-    paid(createGenerateHtmlHandler(options.converse)),
+    guardPayment(paid(createGenerateHtmlHandler(options.converse)), accepts),
   );
 
   const loadUiHtml = options.loadUiHtml ?? defaultLoadUiHtml;
