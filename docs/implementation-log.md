@@ -36,6 +36,10 @@ PR #23 に 9 観点の機械レビューを掛け、10 件の指摘を得た（�
   ラベル左端が base と同じ x=799 に戻ったことを確認してから確定した
 - 除外した指摘が 1 件ある。「sandbox の CDK 直経路にも決済権限が付くのは過剰」は、本プロジェクトの
   sandbox が決定35 で実オンチェーン決済の実測に使われている以上、権限は必要なので誤検知とした
+- 図の「ネストスタック「b」」は 3 箇所あり、最初は買い手の囲みしか直していなかった（「現況」の箱と
+  Amplify ビルドの箱に残っていた）。埋め込み XML を文字列で検索してゼロになることを確かめてから確定した
+- 合成時のログは stdout ではなく stderr に出す。CDK CLI はアプリの stdout をそのまま流すため、
+  stdout だと `cdk synth > template.yaml` の中身にこの行が混ざる
 - 是正の確認中に、CDK 直経路の非 sandbox 合成にはもう一つ関門があると分かった。`Hosting` が
   `npm run build` を走らせるが、`aws-blocks/client.js`（gitignore。`npm run blocks:client` が生成）が
   無いと vite が `Failed to resolve entry for package "aws-blocks"` で落ちる。これは本 PR とは無関係の

@@ -42,9 +42,11 @@ export function wireRuntime(
 
   // 何を載せたのかを合成の記録に残す（決定34 の改訂）。取得元が対話シェルにもなったため、
   // 検証用に export したままの値が黙って焼き込まれるのを気づけるようにする。値は出さない
-  // （秘密ではないが、ログを読む人が確かめたいのは「どのキーが載ったか」なので）
+  // （秘密ではないが、ログを読む人が確かめたいのは「どのキーが載ったか」なので）。
+  // stderr に出すのは、CDK CLI がアプリの stdout をそのまま流すため——stdout だと
+  // `cdk synth > template.yaml` の中身にこの行が混ざる
   const keys = Object.keys(applied);
-  console.log(
+  console.error(
     keys.length > 0
       ? `[wireRuntime] 共有 Lambda に載せた実行時設定: ${keys.join(', ')}`
       : '[wireRuntime] 共有 Lambda に載せた実行時設定: なし',
