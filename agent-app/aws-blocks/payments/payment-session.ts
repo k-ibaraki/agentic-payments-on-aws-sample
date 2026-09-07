@@ -67,7 +67,7 @@ interface AwsClientLike {
 /**
  * CreatePaymentSession の expiryTimeInMinutes の下限。
  * 2026-09-05 に 5 分で ValidationException が返ることを実測して確かめた。
- * 合成時の検証（amplify/runtime-env.ts）と実行時の既定への差し戻し（buyer-agent.ts）が
+ * 合成時の検証（runtime-env.ts）と実行時の既定への差し戻し（buyer-agent.ts）が
  * 同じ値を見るよう、API の制約を持つこのモジュールに置く
  */
 export const MIN_SESSION_MINUTES = 15;

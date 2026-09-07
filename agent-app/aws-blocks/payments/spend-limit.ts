@@ -28,7 +28,7 @@ export interface SpendLimitSource {
   set(userSub: string, maxSpendUsd: string): Promise<SpendLimit>;
 }
 
-/** 正の金額。小数は 2 桁まで、桁区切りは不可（amplify/runtime-env.ts の書式検証と同じ制約に 0 の除外を足したもの） */
+/** 正の金額。小数は 2 桁まで、桁区切りは不可（runtime-env.ts の書式検証と同じ制約に 0 の除外を足したもの） */
 const USD_PATTERN = /^\d+(\.\d{1,2})?$/;
 
 export function isUsdAmount(value: string): boolean {

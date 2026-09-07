@@ -3,7 +3,7 @@
 // HTML 本体は LLM のコンテキストに流さず KVStore に置き、ID だけを会話に返す
 // （決定10 の最終形＝ブラウザへは Realtime/取得系 API で渡す、を見据えた形）。
 //
-// 接続設定は環境変数で受ける（ローカルはシェル、クラウドは amplify/runtime-env.ts が Lambda に写す。決定34）:
+// 接続設定は環境変数で受ける（ローカルはシェル、クラウドは aws-blocks/runtime-env.ts が Lambda に写す。決定34）:
 //   BILLING_MCP_URL       … 既定 http://localhost:8000/mcp
 //   BUYER_LOCAL_MODEL     … ローカル実行時の LLM。既定 bedrock（決定28）。canned で決定的な偽 LLM
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力
@@ -92,7 +92,7 @@ export function sellerInfoFromEnv(): { mcpUrl: string; resourceUri: string } {
 }
 
 // アプリが切る PaymentSession の期限と支出上限（決定35）。
-// 書式は amplify/runtime-env.ts が合成の時点で落とすので、ここへ不正な値が来るのは
+// 書式は runtime-env.ts が合成の時点で落とすので、ここへ不正な値が来るのは
 // ローカル実行だけのはず。既定に戻して動かし続けるが、金額に直結するので黙って戻さない（決定37）
 export function paymentSessionConfigFromEnv(): { expiryMinutes: number; maxSpendUsd: string } {
   const rawMinutes = process.env.PAYMENT_SESSION_MINUTES;

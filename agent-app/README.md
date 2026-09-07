@@ -65,7 +65,15 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 運用上の注意
 
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（下記「クラウド deploy」）。
-  CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している
+  CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している。
+  退路として使う前に次の 2 点を承知しておくこと（いずれも 2026-09-07 に実測）:
+  - `npm run destroy` / `cdk diff` / `cdk synth` は、`aws-blocks/client.js` が無いと `Hosting` の
+    フロントビルド（`npm run build`）が `Failed to resolve entry for package "aws-blocks"` で落ちる。
+    `client.js` は gitignore で `npm run blocks:client` が作るので、**撤収の前に生成しておくこと**。
+    「deploy はできたのに畳めない」の原因になりやすい
+  - `@aws-blocks/core` の `destroy()` は `cdk destroy` を sandbox 扱いせず `.env.production` も読まない
+    （`deploy()` は読む）。合成時のガードを足すときは、撤収の経路も塞いでいないか確かめること。
+    実行時設定の必須チェックはこの理由で deploy のときだけに絞ってある（決定34 の改訂）
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名になる。
   Amplify のスタック名が長く、Agent 内蔵の S3 バケット名を 63 文字に収めるために短い。deploy 後は変えないこと
 
@@ -122,10 +130,14 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 実行時設定と検証
 
 - 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
-  （Amplify コンソールのアプリまたはブランチの環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
-  共有 Lambda の環境変数に写す（AppSetting 化はしない）。ブランチ deploy では
-  `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
-  欠けても通る（認証と API の疎通だけを見る用途）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける
+  （Amplify 経路はコンソールのアプリまたはブランチの環境変数、CDK 直経路はシェルと `.env.production`、sandbox はシェル）から
+  `aws-blocks/runtime-env.ts` の許可リストで拾い、
+  共有 Lambda の環境変数に写す（AppSetting 化はしない）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける。
+  写す処理は `aws-blocks/runtime.cdk.ts` の `wireRuntime` にまとめてあり、Amplify 経路（`amplify/blocks.ts`）と
+  CDK 直経路（`aws-blocks/index.cdk.ts`）の両方が呼ぶ。deploy のときは
+  `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox と、
+  deploy を伴わない合成（`npm run destroy` / `cdk diff`）では欠けても通る——値が手元に無いと
+  スタックを畳めない、という状態を作らないため
 - クラウドの buyer API を認証込みで UI なしに通す縦串検証は `scripts/buy-via-cloud.ts`
   （`BLOCKS_API_URL=<custom.blocks_api_url> BUYER_EMAIL=<Cognito の利用者> npx tsx -C browser scripts/buy-via-cloud.ts "指示"`。
   OTP はプロンプトか `BUYER_OTP_FILE`、セッション Cookie は `BUYER_COOKIE_FILE` で持ち回る。実オンチェーン決済が発生する）

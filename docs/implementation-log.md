@@ -2,6 +2,125 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-07: PR #23 のセルフレビューでの是正（決定32・34）
+
+### 発端
+
+PR #23 に 9 観点の機械レビューを掛け、10 件の指摘を得た（投稿はせず、この場で全件を直した）。
+うち 5 体が独立に挙げたのが「必須値の検証が `cdk destroy` まで塞ぐ」で、これが最も重い。
+
+### やったこと
+
+- **必須値を落とす条件を deploy に限った**（指摘 1）。`@aws-blocks/core` の `destroy()` は
+  `cdk destroy` を `sandboxMode` 無し・`.env.production` も読まずに起動する（`deploy()` は
+  `loadProductionEnv()` を呼ぶ）。`cdk destroy` もアプリを合成するため、「sandbox 以外なら落とす」だと
+  値が手元に無い限りスタックを畳めなくなっていた。`runtimeEnvironment` の引数を `sandboxMode` から
+  `requireAll` に替え、deploy の意思は `scripts/deploy.ts` が `BUYER_CDK_DEPLOY` で子プロセスへ渡す
+- **両経路が `wireRuntime` を呼ぶことを固定した**（指摘 2）。`aws-blocks/wiring.test.ts` を新設し、
+  2 つの入口のソースを読んで import と呼び出しの存在を確かめる。入口の合成をテストから走らせるのは
+  現実的でない（`index.cdk.ts` は読み込むだけで App を作りバンドルし、`--conditions=cdk` も要る）
+- **載せたキー名を合成時に 1 行出す**ようにした（指摘 10）。取得元に対話シェルが加わったため、
+  検証用に export したままの値が黙って焼き込まれるのを気づけるように。値そのものは出さない
+- 構成図（指摘 4・5・7）: 出典の日付、「ネストスタック「b」」、Handler のラベル幅。詳細は決定32 の是正
+- 文言（指摘 3・6・8・9）: 決定34 の決定欄のポインタ、`index.cdk.ts` のコメントの範囲、
+  README と CLAUDE.md の取得元の列挙、`runtime-env.ts` の「ブランチ deploy」表現
+
+### 判断・つまずき
+
+- `sandboxMode` を `requireAll` に改名したのは、CDK 直経路の条件が「sandbox でない」だけでなくなり、
+  引数名が実態を指さなくなったため。`sandboxMode: sandboxMode || !isDeploy` のように呼び出し側で
+  嘘をつく形は採らなかった
+- 検証を「`npx cdk deploy` を直に叩く人」まで守れてはいない。ただしその経路は `.env.production` の
+  読み込みも通らないので、元から値が揃わない。守るべきは `npm run deploy`と判断した
+- 図のラベルは、直したつもりで実測するまで気づけなかった。base と head の PNG を画素で比べ、
+  ラベル左端が base と同じ x=799 に戻ったことを確認してから確定した
+- 除外した指摘が 1 件ある。「sandbox の CDK 直経路にも決済権限が付くのは過剰」は、本プロジェクトの
+  sandbox が決定35 で実オンチェーン決済の実測に使われている以上、権限は必要なので誤検知とした
+- 図の「ネストスタック「b」」は 3 箇所あり、最初は買い手の囲みしか直していなかった（「現況」の箱と
+  Amplify ビルドの箱に残っていた）。埋め込み XML を文字列で検索してゼロになることを確かめてから確定した
+- 合成時のログは stdout ではなく stderr に出す。CDK CLI はアプリの stdout をそのまま流すため、
+  stdout だと `cdk synth > template.yaml` の中身にこの行が混ざる
+- 是正の確認中に、CDK 直経路の非 sandbox 合成にはもう一つ関門があると分かった。`Hosting` が
+  `npm run build` を走らせるが、`aws-blocks/client.js`（gitignore。`npm run blocks:client` が生成）が
+  無いと vite が `Failed to resolve entry for package "aws-blocks"` で落ちる。これは本 PR とは無関係の
+  既存の性質で、`npm run destroy` も client.js を先に作らないと通らない。今回の範囲外として直していないが、
+  「必須値の件を直せば destroy がそのまま通る」わけではない点は記録しておく
+- 上の 2 つ（`client.js` の不在と、`destroy()` が sandbox 扱いも `.env.production` の読み込みもしないこと）は、
+  ユーザーの申し出で README の「運用上の注意」にも注意喚起として残した。どちらも `node_modules` を読んで
+  初めて分かる挙動で、退路（決定33）を実際に使う人が同じところで詰まるため
+
+## 2026-09-07: 共有 Lambda への配線を aws-blocks/ に集約（決定33・34）
+
+### 発端
+
+「agent-app の Lambda が AWS Blocks 製でないせいで `amplify/` にもコードが要り、ややこしくなっていないか。
+Blocks で関数単体は作れないのか」というユーザーの問い。調べた結果、前提が食い違っていた。
+
+- 共有 Lambda と API Gateway は Blocks 製。`@aws-blocks/core` の `setupBlocksInfra` が
+  `BlocksBackend.create` / `BlocksStack.create` の中で作っている
+- Blocks に「関数単体」の Building Block は無い。`@aws-blocks/bb-lambda-compute` は存在するが
+  README に「Internal / not yet customer-facing。公開 API に再輸出しておらず、直接依存しないこと」と明記があり、
+  Building Blocks のカタログにも `blocks/docs/` にも載っていない。アプリのコードは 1 本の共有 Lambda で動く
+- `amplify/` にコードがあるのは Amplify Gen2 が `amplify/backend.ts` を入口として要求するため（決定33）
+- 実行時設定と IAM を CDK 層に書くのは回避策ではなく構造上の下限。`Scope` は条件付き exports で二重に解決され、
+  実行時側（`core/dist/common/index.js`）の `Scope` は `handler` も `executionRole` も持たない。
+  `handler.addEnvironment` は core の README が CORS の例で示す公式の手順
+
+### やったこと
+
+- `amplify/runtime-env.ts` → `aws-blocks/runtime-env.ts`（テストも同時に移動。`payment-session.js` の
+  import が相対の上向きから同ディレクトリ配下になった）
+- `aws-blocks/runtime.cdk.ts` を新設し、環境変数の書き写しと AgentCore Payments の `PolicyStatement` を
+  `wireRuntime` 1 つにまとめた。`amplify/blocks.ts` と `aws-blocks/index.cdk.ts` の両方から呼ぶ
+- `aws-blocks/runtime.cdk.test.ts` を追加。素の `lambda.Function` に対して合成し、`Template` で
+  環境変数（許可リスト外は写らないこと込み）とポリシーの両方を見る。配線を外すと落ちることを確認してから通した
+- `amplify/` に残ったのは Amplify 固有のものだけ: `backend.ts`（入口）、`cors-origins.ts`、
+  クロスドメイン Cookie の `BLOCKS_CROSS_DOMAIN`。CORS は CDK 直経路では `Hosting` construct が
+  CloudFront のドメインを自動で足すため、Amplify 経路にしか要らない
+- コメントとドキュメントの `amplify/runtime-env.ts` という参照を新しい場所へ更新（過去の記録は書き換えない）
+
+### 構成図の是正（同日、ユーザー指摘）
+
+「Lambda が Blocks 製なら構成図が違うのでは」という指摘。図を切り出して確かめたところ、
+Handler Lambda の描き方（どの Block の囲みにも入れず、ネストスタックの直下に置く）は正しく、
+`実行は Handler Lambda` `買い手のコードが動くのは Handler Lambda 1 か所だけ` の注記も既に入っていた。
+
+誤っていたのは API Gateway（REST）の所属だった。REST API を作るのは `BlocksBackend` の
+`setupBlocksInfra` で、`ApiNamespace` は CDK 構造物を一つも作らない（`core/dist/api.js` の実装は
+ハンドラにマークを付けて返すだけ）。凡例が 「中の箱は Block が作る AWS 資源」 と宣言している以上、
+API Gateway を `ApiNamespace` の囲みに入れているのは図が自分の凡例と矛盾していた。
+
+修正案は 2 つ出し、ユーザーが「API Gateway と Handler をまとめて囲む」方を選んだ。詳細は決定32 の追記。
+作業の要点は次のとおり。
+
+- アイコンの座標は 1 つも動かしていない。Handler と API Gateway には 12 本の結線が付いており、
+  そのほとんどが明示の折れ点を持つため、動かすと経路を引き直すことになる
+- 囲みを広げるだけだと Handler のラベル（`全 Block 共有・900 秒 / 2048 MB` など）が破線を跨いだので、
+  囲みを左へ 17 広げた（`x=797 w=196` → `x=780 w=228`）
+- 囲みのタイトルが ① の矢印（ブラウザ → API Gateway）と重なったので、タイトルだけ 10pt にした
+- 出力のたびに切り出して目視した。破線の見本を足した凡例が枠に収まることも確認している
+- 破線を持ち込んだが、これは囲みの区別であって経路（線）ではない。決定32 の⑥「無課金経路は実線にし
+  色だけで区別する」は変えていない
+- 「現況」の箱の日付は 2026-09-05 のまま。deploy の状態を今日確かめたわけではないので、出典の日付
+  （図の記載内容が何時点のコードか）だけを 2026-09-07 に進めた
+- 囲みを左へ広げた結果、`AuthCognito「auth」` の右端（775）との隙間が 5 になった。今の描画では問題ないが、
+  隣の囲みを広げるときはここが先に詰まる
+
+### 判断・つまずき
+
+- CDK 直経路（決定33 の退路）には配線が丸ごと無かった。`npm run deploy` / `npm run sandbox` は
+  決済のできない Lambda を作る状態で、退路が退路になっていなかった。集約の副産物として塞がった
+- 集約の副作用で、CDK 直の非 sandbox 合成は `PAYMENT_MANAGER_ARN` などが無いと落ちるようになった。
+  黙って壊れたものを deploy するより良いと判断して受け入れる。`npm run sandbox` は従来どおり欠けても通る
+- `runtime-env.ts` の必須値エラーの文面が Amplify 前提だったので、両経路を指す文言に直した
+- `wireRuntime` の引数の型は `NodejsFunction` ではなく `lambda.Function`（その基底）にした。
+  テストで bundling を走らせずに済ませるため。共有 Lambda は `NodejsFunction` なのでそのまま渡せる
+- 合成で実地確認: sandbox モードの `cdk synth` で、ポリシーが共有ロール（`BlocksRole`）に
+  `BlocksRoleOverflowPolicy1` として付くこと、必須値の欠落と `BUYER_TOOL_TIMEOUT_MS` の超過が
+  それぞれ意図した文面で落ちることを見た
+- Amplify をやめて CDK 直に一本化すれば `amplify/` は消えるが、決定33 はコンソール一元管理という
+  ユーザー要件を受けた決定で、物理名も deploy 済み。今回の範囲外とした
+
 ## 2026-09-07: ウォレットと支払いの枠を 3 枚目のタブへ（決定51）
 
 ### 発端
