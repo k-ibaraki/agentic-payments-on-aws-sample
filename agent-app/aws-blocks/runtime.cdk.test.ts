@@ -1,5 +1,5 @@
 // 共有 Lambda への実行時設定と IAM の配線のテスト（決定34）。
-// Amplify 経路（amplify/blocks.ts）と CDK 直経路（index.cdk.ts）が同じ配線を共有していることの
+// Amplify 経路（amplify/blocks.ts）と cdk deploy 経路（index.cdk.ts）が同じ配線を共有していることの
 // 土台になるので、合成後のテンプレートで環境変数とポリシーの両方を見る
 import { App, NestedStack, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';

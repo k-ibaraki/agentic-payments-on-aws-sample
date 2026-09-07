@@ -249,7 +249,7 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  // id は物理名の一部。内蔵 S3 バケットは CDK 直経路では <スタック名>-app-buyer-sn、Amplify 経路では
+  // id は物理名の一部。内蔵 S3 バケットは cdk deploy 経路では <スタック名>-app-buyer-sn、Amplify 経路では
   // <Amplify のルートスタック名>-b-app-buyer-sn になる。Amplify のスタック名の長さに合わせて
   // 短くしている（決定33）。一度 deploy したら変えないこと
   const agent = new Agent(scope, 'buyer', {

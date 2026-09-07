@@ -2,6 +2,61 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-07: 公開前の点検（決定52）
+
+### 発端
+
+ユーザーの依頼「いずれ公開したいので、今の時点で公開するとまずい記載が無いか確認したい」。
+
+### やったこと
+
+- 追跡ファイル・git の全履歴（差分と author）・PR / Issue / コメント本文・Actions の有無・構成図 PNG を、
+  メールアドレス・12 桁の数字・ARN・秘密鍵・0x アドレス・Function URL・Amplify / Cognito の ID・
+  ホームパス・OS ユーザー名の観点で走査した
+- 秘密情報の類は見つからなかった。`.env` / `parameter.ts` / `amplify_outputs.json` がコミットされた履歴も無い
+- 残ったのは 3 点。①コミット author の勤務先メールアドレス（origin/main の 118 件中 96 件）②売り手の
+  古い Function URL とロググループ名（本ファイルの 2026-08-31 の節）③Base Sepolia の
+  トランザクションハッシュ（同節に 2 件、PR #1 に 2 件、PR #2 に 3 件）
+- ユーザー判断: ①は許容（秘匿情報ではない。履歴の書き換えもしない）。②③は消す。git 履歴に残るのは許容
+- ②はホスト部分と末尾の識別子を `<省略>` に伏せ、③はハッシュとリンクを削って「削除した」旨の 1 行に
+  置き換えた。PR #1・#2 の本文も同じ形で編集した（編集履歴は GitHub 上に残る）
+- `agent-app/.blocks/config.json` は gitignore しない。`@aws-blocks/core` の `getStackName` がここから
+  `stackId` を読んで `cdk deploy` 経路のスタック名を決めるため（無いと `npm run deploy` / `sandbox` / `destroy` が
+  合成前に落ちる）。公式スキャフォールドの gitignore も除外していない
+- 追加の問い「`.blocks/` を残すと他人の環境で困らないか」に対し、`@aws-blocks/core` の `stack-id.js` と
+  `blocks-backend.js` の `fullId` を読んで確かめた。CDK 単独 deploy の本番だけ `<stackId>-prod` に固定で、
+  Agent 内蔵の S3 バケット名（全アカウントで一意）がそこから決まるため、fork 先が同じ `stackId` で deploy すると
+  衝突する。sandbox は `.blocks-sandbox/sandbox-id.txt` の乱数付き、Amplify 経路はこのファイルを読まない。
+  fork 時に `stackId` を書き換える注意を `agent-app/README.md` の「運用上の注意」に足した
+- 「CDK 直」という内部語彙を、README と CLAUDE.md では「Amplify を介さず AWS CDK だけで deploy する経路
+  （CDK 単独 deploy）」に言い換えた。ユーザーが Bedrock の機能と読み違えたため。記録とコードコメントは据え置き
+
+### 判断・つまずき
+
+- git grep の `-E` で `\b` が効かず、初回の 0x アドレス走査が空振りした。`\b` 無しで取り直して
+  ハッシュを見つけた。走査は境界指定に頼らず、後段で長さで絞る方が確実
+- 旧 Function URL は GET で 403 を返した。Function URL は消えた URL に対して 403 を返すので、
+  死んでいることの確認になる（生きていれば売り手の実装どおり GET は 405）
+- Zed 名義の「WIP staged / unstaged」コミットが手元に 26 件あるが、Claude Code の退避用 ref
+  （`refs/archived-worktrees/*`）からしか辿れず、GitHub には無い
+
+### 訂正（同日、セルフレビューとユーザー指摘）
+
+- セルフレビューで、用語を直したのに `runtime-env.ts` が投げるエラーメッセージだけ古い言い回しのままなのを見つけた。
+  これは deploy した人の画面に出る文言で、コードコメントとは読み手が違う。ここで手を止めたのが幸いした
+- ユーザー指摘により、そもそも言い換えそのものが誤りだったと判明した。2 点ある。
+  ①決定52 に理由として書いた「ユーザーが Bedrock の機能と読み違えたため」は、ユーザーが「こういう意味か」と
+  挙げた候補を、担当（Claude）が確定した理由として決定録に書き込んだもの。CDK と Bedrock は無関係で、
+  決定録に残ると意味を成さない。決定38 の訂正1（推論をユーザーの回答として混ぜた）と同型
+  ②「直」を「単独」に替えただけで、読者の疑問には何も答えていない。ユーザーの言葉では
+  「AWS Blocks を使っているのに CDK 直だと分からない」で、欠けていたのは語ではなく説明だった
+- 直した内容: AWS Blocks は Block の宣言から CDK の構成を生成するので、AWS へ載せる作業はどの経路でも
+  `cdk` の合成と deploy になり、違うのは誰が走らせるかだけ——この説明を `agent-app/README.md` の
+  「アーキテクチャ」と「クラウド deploy」の頭に足した。呼び名は既存の「Amplify 経路」と対になる
+  「`cdk deploy` 経路」に統一し、README・CLAUDE.md・エラーメッセージ・コードコメント（8 ファイル）まで揃えた
+- 教訓: ユーザーが投げた推測（「〜ということですかね」）は問いであって答えではない。
+  決定録に理由として書くなら、推測そのものではなく「何が分からなかったのか」を確かめてから書く
+
 ## 2026-09-07: AgentCore Payments の使い道の考察を文書化
 
 ### 発端
@@ -1768,14 +1823,14 @@ CI の agent-app ジョブ有効化。push はユーザー指示があるまで�
 - 価格を 0.01 → **0.1 テスト USDC / 呼び出し**へ引き上げ（決定18 更新）。記録と実物が
   ずれないよう DEFAULT_PRICE・parameter.sample.ts・.env.example・テスト期待額を揃えた
 - `cdk deploy` を実行し、無認証の Function URL を公開
-  - エンドポイント: `https://aadgxm2l6a6n77igxsqrdeelja0ivxmo.lambda-url.ap-northeast-1.on.aws/mcp`
+  - エンドポイント: `https://<省略>.lambda-url.ap-northeast-1.on.aws/mcp`
     - **追記（2026-09-05）**: この URL は 2026-09-04 の再 deploy で変わっている。Function URL は
       Lambda を作り直すたびに変わるので、当時の記録としてそのまま残す。現行値は
       `BillingMcpStack-dev` の `McpEndpointUrl` 出力（`aws cloudformation describe-stacks`）で確かめること
-  - ロググループ: `BillingMcpStack-dev-McpFunctionLogsDE22E4A3-qqKrCgVjY6cX`
+    - **追記（2026-09-07）**: 公開前の点検でホスト部分を伏せた（決定52）。当時の URL は既に応答しない
+  - ロググループ: `BillingMcpStack-dev-McpFunctionLogs<省略>`（同じ点検で末尾の識別子を伏せた）
 - **実オンチェーン決済を 2 回成功**（Base Sepolia、各 0.1 テスト USDC）
-  - 1回目: [0x1f05b837…39221](https://sepolia.basescan.org/tx/0x1f05b837dd19da8a8c10928766afeaf05146a0efc9f313b2de958a8479939221)
-  - 2回目: [0xbe8f1bdf…90f4](https://sepolia.basescan.org/tx/0xbe8f1bdfa1040c9998a81d8b91e0ed010f8ae08e86f2557800c4a2ac795590f4)
+  - トランザクションハッシュ 2 件は公開前の点検で削除した（2026-09-07、決定52）
   - 売り手 0.02 → 0.12 → 0.22 USDC（1回あたり +0.1）／買い手 19.98 → 19.88 USDC
 - これでフェーズ②（billing-mcp 単独での動作確認）は完了
 

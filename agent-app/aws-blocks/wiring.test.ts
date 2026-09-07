@@ -14,7 +14,7 @@ const awsBlocksDir = dirname(fileURLToPath(import.meta.url));
 const agentAppDir = join(awsBlocksDir, '..');
 
 const ENTRY_POINTS = [
-  { name: 'CDK 直経路', path: join(awsBlocksDir, 'index.cdk.ts') },
+  { name: 'cdk deploy 経路', path: join(awsBlocksDir, 'index.cdk.ts') },
   { name: 'Amplify 経路', path: join(agentAppDir, 'amplify', 'blocks.ts') },
 ];
 

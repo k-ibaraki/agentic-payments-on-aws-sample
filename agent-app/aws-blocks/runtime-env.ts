@@ -4,7 +4,7 @@ import { MIN_SESSION_MINUTES } from './payments/payment-session.js';
  * 合成時の環境変数から、共有 Lambda に写す実行時設定を決める（決定34）。
  *
  * 取得元は合成を走らせたプロセスの環境変数で、Amplify 経路ではコンソールのアプリ／ブランチの
- * 環境変数（ビルドにしか届かないため合成時に拾うしかない）、CDK 直経路ではシェルと
+ * 環境変数（ビルドにしか届かないため合成時に拾うしかない）、cdk deploy 経路ではシェルと
  * .env.production になる。許可リストの変数だけを拾い、runtime.cdk.ts の wireRuntime が
  * handler.addEnvironment で Lambda に写す。値はいずれも識別子や URL で秘密ではない。
  */
@@ -56,7 +56,7 @@ export function runtimeEnvironment(
       throw new Error(
         `実決済に必要な環境変数が未設定です: ${missing.join(', ')}。` +
           '合成時の環境変数に設定してください（Amplify はコンソールのアプリ／ブランチ環境変数、' +
-          'CDK 直の deploy はシェル。値は scripts/payments-setup.ts の出力と売り手の Function URL）',
+          'cdk deploy 経路はシェル。値は scripts/payments-setup.ts の出力と売り手の Function URL）',
       );
     }
   }
