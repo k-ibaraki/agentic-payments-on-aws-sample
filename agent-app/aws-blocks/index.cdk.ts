@@ -4,6 +4,7 @@ import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getStackName } from '@aws-blocks/blocks/scripts';
+import { wireRuntime } from './runtime.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,11 @@ if (sandboxMode) {
   // Tell the runtime that cookies need cross-domain attributes (frontend on
   // localhost, API on API Gateway — different registrable domains).
   blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');}
+
+// 実決済の実行時設定（PAYMENT_* など）と AgentCore Payments の IAM（決定34）。
+// Amplify 経路（amplify/blocks.ts）と同じものを載せる。sandbox 以外では必須値が
+// 無いとここで落ちるので、決済のできない Lambda が deploy されることは無い
+wireRuntime(blocksStack.handler, process.env, { sandboxMode });
 
 // Add static site hosting only when deploying (not in sandbox mode)
 if (!sandboxMode) {

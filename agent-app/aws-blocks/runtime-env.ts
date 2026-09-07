@@ -1,11 +1,11 @@
-import { MIN_SESSION_MINUTES } from '../aws-blocks/payments/payment-session.js';
+import { MIN_SESSION_MINUTES } from './payments/payment-session.js';
 
 /**
  * 合成時の環境変数から、共有 Lambda に写す実行時設定を決める（決定34）。
  *
  * Amplify Hosting のコンソールで設定した環境変数はビルド（= ampx の合成）にしか届かない。
- * そこで許可リストの変数だけを拾い、amplify/blocks.ts が blocks.handler.addEnvironment で
- * Lambda に写す。値はいずれも識別子や URL で秘密ではない。
+ * そこで許可リストの変数だけを拾い、runtime.cdk.ts の wireRuntime が
+ * handler.addEnvironment で Lambda に写す。値はいずれも識別子や URL で秘密ではない。
  */
 
 /**
@@ -49,7 +49,8 @@ export function runtimeEnvironment(
     if (missing.length > 0) {
       throw new Error(
         `実決済に必要な環境変数が未設定です: ${missing.join(', ')}。` +
-          'Amplify コンソールのブランチ環境変数に設定してください（scripts/payments-setup.ts の出力と売り手の Function URL）',
+          '合成時の環境変数に設定してください（Amplify はコンソールのアプリ／ブランチ環境変数、' +
+          'CDK 直の deploy はシェル。値は scripts/payments-setup.ts の出力と売り手の Function URL）',
       );
     }
   }

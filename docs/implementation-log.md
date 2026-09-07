@@ -2,6 +2,50 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-07: 共有 Lambda への配線を aws-blocks/ に集約（決定33・34）
+
+### 発端
+
+「agent-app の Lambda が AWS Blocks 製でないせいで `amplify/` にもコードが要り、ややこしくなっていないか。
+Blocks で関数単体は作れないのか」というユーザーの問い。調べた結果、前提が食い違っていた。
+
+- 共有 Lambda と API Gateway は Blocks 製。`@aws-blocks/core` の `setupBlocksInfra` が
+  `BlocksBackend.create` / `BlocksStack.create` の中で作っている
+- Blocks に「関数単体」の Building Block は無い。`@aws-blocks/bb-lambda-compute` は存在するが
+  README に「Internal / not yet customer-facing。公開 API に再輸出しておらず、直接依存しないこと」と明記があり、
+  Building Blocks のカタログにも `blocks/docs/` にも載っていない。アプリのコードは 1 本の共有 Lambda で動く
+- `amplify/` にコードがあるのは Amplify Gen2 が `amplify/backend.ts` を入口として要求するため（決定33）
+- 実行時設定と IAM を CDK 層に書くのは回避策ではなく構造上の下限。`Scope` は条件付き exports で二重に解決され、
+  実行時側（`core/dist/common/index.js`）の `Scope` は `handler` も `executionRole` も持たない。
+  `handler.addEnvironment` は core の README が CORS の例で示す公式の手順
+
+### やったこと
+
+- `amplify/runtime-env.ts` → `aws-blocks/runtime-env.ts`（テストも同時に移動。`payment-session.js` の
+  import が相対の上向きから同ディレクトリ配下になった）
+- `aws-blocks/runtime.cdk.ts` を新設し、環境変数の書き写しと AgentCore Payments の `PolicyStatement` を
+  `wireRuntime` 1 つにまとめた。`amplify/blocks.ts` と `aws-blocks/index.cdk.ts` の両方から呼ぶ
+- `aws-blocks/runtime.cdk.test.ts` を追加。素の `lambda.Function` に対して合成し、`Template` で
+  環境変数（許可リスト外は写らないこと込み）とポリシーの両方を見る。配線を外すと落ちることを確認してから通した
+- `amplify/` に残ったのは Amplify 固有のものだけ: `backend.ts`（入口）、`cors-origins.ts`、
+  クロスドメイン Cookie の `BLOCKS_CROSS_DOMAIN`。CORS は CDK 直経路では `Hosting` construct が
+  CloudFront のドメインを自動で足すため、Amplify 経路にしか要らない
+- コメントとドキュメントの `amplify/runtime-env.ts` という参照を新しい場所へ更新（過去の記録は書き換えない）
+
+### 判断・つまずき
+
+- CDK 直経路（決定33 の退路）には配線が丸ごと無かった。`npm run deploy` / `npm run sandbox` は
+  決済のできない Lambda を作る状態で、退路が退路になっていなかった。集約の副産物として塞がった
+- 集約の副作用で、CDK 直の非 sandbox 合成は `PAYMENT_MANAGER_ARN` などが無いと落ちるようになった。
+  黙って壊れたものを deploy するより良いと判断して受け入れる。`npm run sandbox` は従来どおり欠けても通る
+- `runtime-env.ts` の必須値エラーの文面が Amplify 前提だったので、両経路を指す文言に直した
+- `wireRuntime` の引数の型は `NodejsFunction` ではなく `lambda.Function`（その基底）にした。
+  テストで bundling を走らせずに済ませるため。共有 Lambda は `NodejsFunction` なのでそのまま渡せる
+- 合成で実地確認: sandbox モードの `cdk synth` で、ポリシーが共有ロール（`BlocksRole`）に
+  `BlocksRoleOverflowPolicy1` として付くこと、必須値の欠落と `BUYER_TOOL_TIMEOUT_MS` の超過が
+  それぞれ意図した文面で落ちることを見た
+- Amplify をやめて CDK 直に一本化すれば `amplify/` は消えるが、決定33 はコンソール一元管理という
+  ユーザー要件を受けた決定で、物理名も deploy 済み。今回の範囲外とした
 ## 2026-09-07: ウォレットと支払いの枠を 3 枚目のタブへ（決定51）
 
 ### 発端

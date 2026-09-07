@@ -122,10 +122,12 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 実行時設定と検証
 
 - 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
-  （Amplify コンソールのアプリまたはブランチの環境変数、sandbox ではシェル）から `amplify/runtime-env.ts` の許可リストで拾い、
-  共有 Lambda の環境変数に写す（AppSetting 化はしない）。ブランチ deploy では
+  （Amplify コンソールのアプリまたはブランチの環境変数、sandbox ではシェル）から `aws-blocks/runtime-env.ts` の許可リストで拾い、
+  共有 Lambda の環境変数に写す（AppSetting 化はしない）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける。
+  写す処理は `aws-blocks/runtime.cdk.ts` の `wireRuntime` にまとめてあり、Amplify 経路（`amplify/blocks.ts`）と
+  CDK 直経路（`aws-blocks/index.cdk.ts`）の両方が呼ぶ。sandbox 以外では
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox では
-  欠けても通る（認証と API の疎通だけを見る用途）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける
+  欠けても通る（認証と API の疎通だけを見る用途）
 - クラウドの buyer API を認証込みで UI なしに通す縦串検証は `scripts/buy-via-cloud.ts`
   （`BLOCKS_API_URL=<custom.blocks_api_url> BUYER_EMAIL=<Cognito の利用者> npx tsx -C browser scripts/buy-via-cloud.ts "指示"`。
   OTP はプロンプトか `BUYER_OTP_FILE`、セッション Cookie は `BUYER_COOKIE_FILE` で持ち回る。実オンチェーン決済が発生する）
