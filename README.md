@@ -73,7 +73,7 @@ AWS 上にこの一連の流れを組んだサンプルです。
 | --- | --- |
 | `billing-mcp/` | 売り手。x402 で課金する MCP Apps サーバーと、それを Lambda へ載せる CDK |
 | `agent-app/` | 買い手。支払って MCP を実行するエージェントと、操作・表示を行う Web アプリ |
-| `docs/` | 設計決定録・実装記録・AWS 構成図 |
+| `docs/` | 設計決定録・実装記録・考察・AWS 構成図 |
 
 ## ステータス
 
@@ -96,6 +96,8 @@ AWS 上にこの一連の流れを組んだサンプルです。
   この README で触れている「決定N」はここを指します
 - [docs/implementation-log.md](docs/implementation-log.md) — 日付ごとの作業記録。
   何につまずき、どう判断したかの詳細
+- [docs/agentcore-payments-considerations.md](docs/agentcore-payments-considerations.md) — AgentCore Payments の
+  制限が何をしてくれて何をしてくれないか、制限をどこまで掛けるべきかの考察
 - [CLAUDE.md](CLAUDE.md) / [agent-app/AGENTS.md](agent-app/AGENTS.md) — AI エージェントに作業させるための規約
 
 ## 参考リポジトリ
