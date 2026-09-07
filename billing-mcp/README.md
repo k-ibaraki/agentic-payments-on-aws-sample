@@ -109,9 +109,14 @@ agent-app の `npx tsx scripts/payments-setup.ts` が出力する（agent-app/RE
 
 ## 後片付け
 
-検証が済んだら公開を閉じる。出しっぱなしにすると、支払いなしで叩ける経路
-（`initialize` / `tools/list` / `ui://` 取得）の Lambda 実行時間とログの課金が
-積み上がり続ける。
+検証が済んだら公開を閉じる。理由は 2 つある。
+
+1. 支払いなしで叩ける経路（`initialize` / `tools/list` / `ui://` 取得）の
+   Lambda 実行時間とログの課金が、出しっぱなしのあいだ積み上がり続ける
+2. **テストネットでは x402 が経済的な抑止力にならない**。売上は Base Sepolia の
+   テスト USDC（faucet で無料に手に入る）で、原価だけが実費の Bedrock ドルなので、
+   正規に支払われても攻撃者の費用はゼロ。閉じないかぎり、実費の Bedrock を
+   無料で配っているのと変わらない（DESIGN.md 決定8。2026-09-07 の点検で判明）
 
 ```bash
 pnpm cdk destroy
