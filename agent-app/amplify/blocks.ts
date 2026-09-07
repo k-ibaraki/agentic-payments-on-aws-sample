@@ -7,7 +7,7 @@
  * - フロント（Amplify Hosting）と API（API Gateway）が別オリジンになるため、
  *   CORS とクロスドメイン Cookie の設定を Lambda に渡す
  *
- * 実決済の実行時設定と IAM（決定34）は Amplify 固有ではなく CDK 直経路（aws-blocks/index.cdk.ts）
+ * 実決済の実行時設定と IAM（決定34）は Amplify 固有ではなく cdk deploy 経路（aws-blocks/index.cdk.ts）
  * にも要るので、aws-blocks/runtime.cdk.ts の wireRuntime に寄せて両方から呼ぶ。
  */
 import type { BackendBase } from '@aws-amplify/backend';
@@ -28,7 +28,7 @@ export async function initBlocks(backend: BackendBase) {
 
   // ブランチ deploy では amplifyapp.com のオリジンを許可する。決められなければ CORS 未設定のまま
   // deploy させず落とす。sandbox では BlocksBackend が localhost を許可済みなので触らない
-  // （同じキーを二重に足すと上書きになる）。CDK 直経路では Hosting construct が CloudFront の
+  // （同じキーを二重に足すと上書きになる）。cdk deploy 経路では Hosting construct が CloudFront の
   // ドメインを自動で足すため、この設定が要るのは Amplify 経路だけ
   if (!sandboxMode) {
     blocks.handler.addEnvironment('CORS_ALLOWED_ORIGINS', requireCorsAllowedOrigins(process.env));

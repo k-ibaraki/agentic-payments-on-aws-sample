@@ -8,8 +8,8 @@
  * （`*.cdk.ts`）にしか置けない。`handler.addEnvironment` は `@aws-blocks/core` の README が
  * CORS の例で示している公式の手順。
  *
- * Amplify 経路（amplify/blocks.ts）と CDK 直経路（index.cdk.ts）の両方から呼ぶ。以前は
- * amplify/ にだけ置いていたため、CDK 直（決定33 の退路）で deploy すると決済のできない
+ * Amplify 経路（amplify/blocks.ts）と cdk deploy 経路（index.cdk.ts）の両方から呼ぶ。以前は
+ * amplify/ にだけ置いていたため、cdk deploy 経路（決定33 の退路）では決済のできない
  * Lambda が出来上がっていた。
  */
 import { Stack } from 'aws-cdk-lib';
@@ -22,7 +22,7 @@ import { runtimeEnvironment } from './runtime-env.js';
  *
  * @param handler  BlocksBackend / BlocksStack が作った共有 Lambda（NodejsFunction は Function の派生。
  *                 テストで束ねる関数を差し替えられるよう、広い方の型で受ける）
- * @param env      合成時のプロセス環境変数（Amplify はコンソールのビルド環境変数、CDK 直はシェルと
+ * @param env      合成時のプロセス環境変数（Amplify はコンソールのビルド環境変数、cdk deploy 経路はシェルと
  *                 .env.production）
  * @param options.requireAll  必須値の欠落を合成で落とすか。決済のできる Lambda を作ろうとしている
  *                 場面（deploy）でだけ true にする。判定の理由は呼び出し側のコメントを参照

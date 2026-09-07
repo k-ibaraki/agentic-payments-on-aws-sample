@@ -34,6 +34,8 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### アーキテクチャ
 
 - 雛形は `npx @aws-blocks/create-blocks-app --template auth-cognito` の生成物（npm 管理）
+- AWS Blocks は Infrastructure from Code のフレームワーク。`aws-blocks/` に書いた Block の宣言から
+  AWS CDK の構成を生成するので、AWS へ載せるときは中身が CDK になる（deploy の経路は下記「クラウド deploy」）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime の5つ。
   Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する
 - ウォレット（AgentCore Payments）は ap-southeast-1（AgentCore Payments が東京リージョン非対応のため、ここだけクロスリージョン呼び出し）
@@ -65,8 +67,8 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 運用上の注意
 
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（下記「クラウド deploy」）。
-  Amplify を介さず AWS CDK だけで deploy する経路（`npm run deploy`。`BlocksStack` + `Hosting` を
-  `cdk deploy` する。以下「CDK 単独 deploy」）は退路・比較用に残している。
+  手元から `cdk deploy` を走らせる経路（`npm run deploy`。以下「`cdk deploy` 経路」）は
+  退路・比較用に残している。
   退路として使う前に次の 3 点を承知しておくこと:
   - `npm run destroy` / `cdk diff` / `cdk synth` は、`aws-blocks/client.js` が無いと `Hosting` の
     フロントビルド（`npm run build`）が `Failed to resolve entry for package "aws-blocks"` で落ちる。
@@ -75,7 +77,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   - `@aws-blocks/core` の `destroy()` は `cdk destroy` を sandbox 扱いせず `.env.production` も読まない
     （`deploy()` は読む）。合成時のガードを足すときは、撤収の経路も塞いでいないか確かめること。
     実行時設定の必須チェックはこの理由で deploy のときだけに絞ってある（決定34 の改訂）
-  - このリポジトリを fork して CDK 単独 deploy を使うなら、先に `.blocks/config.json` の `stackId` を
+  - このリポジトリを fork して `cdk deploy` 経路を使うなら、先に `.blocks/config.json` の `stackId` を
     書き換えること。スタック名は `<stackId>-prod` に固定で、Agent 内蔵の S3 バケット名もそこから決まる。
     S3 のバケット名は全 AWS アカウントを通じて一意なので、同じ `stackId` のまま別のアカウントで deploy すると
     バケットの作成で失敗する（sandbox は機械ごとの乱数が付くので衝突しない。Amplify 経路はこのファイルを読まない）
@@ -107,6 +109,14 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 
 ## クラウド deploy（Amplify Gen2）
 
+AWS Blocks が生成するのは CDK の構成なので、AWS へ載せる作業は結局 `cdk` の合成と deploy になる。
+経路は 2 つあり、違うのは誰がそれを走らせるかだけ。
+
+- **Amplify 経路**（正）: git push を契機に Amplify のビルドが `ampx pipeline-deploy` を走らせ、
+  バックエンドを Amplify のネストスタックとして deploy する。フロントは Amplify Hosting が配信する
+- **`cdk deploy` 経路**（退路・比較用）: 手元から `npm run deploy` を叩き、`aws-blocks/index.cdk.ts` が
+  組む `BlocksStack` + `Hosting` を `cdk deploy` する。Amplify は関わらない。落とし穴は上記「運用上の注意」
+
 ### スタック構成
 
 - `amplify/backend.ts` の `defineBackend({})` に `backend.createStack('blocks')` でネストスタックを切り、
@@ -135,11 +145,11 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 実行時設定と検証
 
 - 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
-  （Amplify 経路はコンソールのアプリまたはブランチの環境変数、CDK 単独 deploy はシェルと `.env.production`、sandbox はシェル）から
+  （Amplify 経路はコンソールのアプリまたはブランチの環境変数、`cdk deploy` 経路はシェルと `.env.production`、sandbox はシェル）から
   `aws-blocks/runtime-env.ts` の許可リストで拾い、
   共有 Lambda の環境変数に写す（AppSetting 化はしない）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける。
   写す処理は `aws-blocks/runtime.cdk.ts` の `wireRuntime` にまとめてあり、Amplify 経路（`amplify/blocks.ts`）と
-  CDK 単独 deploy の入口（`aws-blocks/index.cdk.ts`）の両方が呼ぶ。deploy のときは
+  `cdk deploy` 経路（`aws-blocks/index.cdk.ts`）の両方が呼ぶ。deploy のときは
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox と、
   deploy を伴わない合成（`npm run destroy` / `cdk diff`）では欠けても通る——値が手元に無いと
   スタックを畳めない、という状態を作らないため
