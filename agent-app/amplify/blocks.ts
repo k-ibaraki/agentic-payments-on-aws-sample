@@ -34,8 +34,10 @@ export async function initBlocks(backend: BackendBase) {
     blocks.handler.addEnvironment('CORS_ALLOWED_ORIGINS', requireCorsAllowedOrigins(process.env));
   }
 
-  // 実決済の実行時設定（PAYMENT_* など）と AgentCore Payments の IAM（決定34）
-  wireRuntime(blocks.handler, process.env, { sandboxMode });
+  // 実決済の実行時設定（PAYMENT_* など）と AgentCore Payments の IAM（決定34）。
+  // ampx は deploy でも削除（sandbox delete）でも合成するが、削除の合成は sandbox のみなので、
+  // ブランチ deploy を必須にしても畳めなくなる経路は生まれない
+  wireRuntime(blocks.handler, process.env, { requireAll: !sandboxMode });
 
   // amplify_outputs.json に Blocks の API URL を出す。フロントのビルドはこれを
   // /.blocks-sandbox/config.json に写す（scripts/amplify-blocks-config.ts）

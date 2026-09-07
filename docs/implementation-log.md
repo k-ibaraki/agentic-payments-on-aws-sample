@@ -2,6 +2,46 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-07: PR #23 のセルフレビューでの是正（決定32・34）
+
+### 発端
+
+PR #23 に 9 観点の機械レビューを掛け、10 件の指摘を得た（投稿はせず、この場で全件を直した）。
+うち 5 体が独立に挙げたのが「必須値の検証が `cdk destroy` まで塞ぐ」で、これが最も重い。
+
+### やったこと
+
+- **必須値を落とす条件を deploy に限った**（指摘 1）。`@aws-blocks/core` の `destroy()` は
+  `cdk destroy` を `sandboxMode` 無し・`.env.production` も読まずに起動する（`deploy()` は
+  `loadProductionEnv()` を呼ぶ）。`cdk destroy` もアプリを合成するため、「sandbox 以外なら落とす」だと
+  値が手元に無い限りスタックを畳めなくなっていた。`runtimeEnvironment` の引数を `sandboxMode` から
+  `requireAll` に替え、deploy の意思は `scripts/deploy.ts` が `BUYER_CDK_DEPLOY` で子プロセスへ渡す
+- **両経路が `wireRuntime` を呼ぶことを固定した**（指摘 2）。`aws-blocks/wiring.test.ts` を新設し、
+  2 つの入口のソースを読んで import と呼び出しの存在を確かめる。入口の合成をテストから走らせるのは
+  現実的でない（`index.cdk.ts` は読み込むだけで App を作りバンドルし、`--conditions=cdk` も要る）
+- **載せたキー名を合成時に 1 行出す**ようにした（指摘 10）。取得元に対話シェルが加わったため、
+  検証用に export したままの値が黙って焼き込まれるのを気づけるように。値そのものは出さない
+- 構成図（指摘 4・5・7）: 出典の日付、「ネストスタック「b」」、Handler のラベル幅。詳細は決定32 の是正
+- 文言（指摘 3・6・8・9）: 決定34 の決定欄のポインタ、`index.cdk.ts` のコメントの範囲、
+  README と CLAUDE.md の取得元の列挙、`runtime-env.ts` の「ブランチ deploy」表現
+
+### 判断・つまずき
+
+- `sandboxMode` を `requireAll` に改名したのは、CDK 直経路の条件が「sandbox でない」だけでなくなり、
+  引数名が実態を指さなくなったため。`sandboxMode: sandboxMode || !isDeploy` のように呼び出し側で
+  嘘をつく形は採らなかった
+- 検証を「`npx cdk deploy` を直に叩く人」まで守れてはいない。ただしその経路は `.env.production` の
+  読み込みも通らないので、元から値が揃わない。守るべきは `npm run deploy`と判断した
+- 図のラベルは、直したつもりで実測するまで気づけなかった。base と head の PNG を画素で比べ、
+  ラベル左端が base と同じ x=799 に戻ったことを確認してから確定した
+- 除外した指摘が 1 件ある。「sandbox の CDK 直経路にも決済権限が付くのは過剰」は、本プロジェクトの
+  sandbox が決定35 で実オンチェーン決済の実測に使われている以上、権限は必要なので誤検知とした
+- 是正の確認中に、CDK 直経路の非 sandbox 合成にはもう一つ関門があると分かった。`Hosting` が
+  `npm run build` を走らせるが、`aws-blocks/client.js`（gitignore。`npm run blocks:client` が生成）が
+  無いと vite が `Failed to resolve entry for package "aws-blocks"` で落ちる。これは本 PR とは無関係の
+  既存の性質で、`npm run destroy` も client.js を先に作らないと通らない。今回の範囲外として直していないが、
+  「必須値の件を直せば destroy がそのまま通る」わけではない点は記録しておく
+
 ## 2026-09-07: 共有 Lambda への配線を aws-blocks/ に集約（決定33・34）
 
 ### 発端
@@ -35,7 +75,7 @@ Blocks で関数単体は作れないのか」というユーザーの問い。�
 ### 構成図の是正（同日、ユーザー指摘）
 
 「Lambda が Blocks 製なら構成図が違うのでは」という指摘。図を切り出して確かめたところ、
-Handler Lambda の描き方（どの Block の囲みにも入れず、ネストスタック「b」の直下に置く）は正しく、
+Handler Lambda の描き方（どの Block の囲みにも入れず、ネストスタックの直下に置く）は正しく、
 `実行は Handler Lambda` `買い手のコードが動くのは Handler Lambda 1 か所だけ` の注記も既に入っていた。
 
 誤っていたのは API Gateway（REST）の所属だった。REST API を作るのは `BlocksBackend` の

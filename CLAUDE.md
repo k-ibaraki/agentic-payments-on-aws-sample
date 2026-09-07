@@ -92,10 +92,11 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   支出上限は利用者が画面で自分の分を変えられ、変更時に現在のセッションを破棄する（決定43。天井なし）
 - 自己サインアップは既定で閉じている（決定36）。`npm run dev` / `npm run test:e2e` は `BUYER_SELF_SIGNUP=true` を
   付けて開ける。クラウドの利用者は Cognito コンソールで作る
-- クラウドの実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は Amplify の環境変数（アプリ単位・ブランチ単位のどちらでも可。sandbox はシェル）から
-  `aws-blocks/runtime-env.ts` の許可リストで拾い、`aws-blocks/runtime.cdk.ts` の `wireRuntime` が
-  AgentCore Payments の IAM と併せて共有 Lambda に載せる（決定34）。Amplify 経路と CDK 直経路の両方から呼ぶ。
-  sandbox 以外では必須値が無いと合成で落ちる
+- 実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は合成時の環境変数（Amplify はコンソールのアプリ単位・ブランチ単位、
+  CDK 直はシェルと `.env.production`、sandbox はシェル）から `aws-blocks/runtime-env.ts` の許可リストで拾い、
+  `aws-blocks/runtime.cdk.ts` の `wireRuntime` が AgentCore Payments の IAM と併せて共有 Lambda に載せる（決定34）。
+  Amplify 経路と CDK 直経路の両方から呼ぶ。必須値が無いと合成で落ちるのは deploy のときだけで、
+  sandbox と `npm run destroy` / `cdk diff` は欠けても通る
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証（ローカルのエージェント）。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**
 - `BLOCKS_API_URL=... BUYER_EMAIL=... npx tsx -C browser scripts/buy-via-cloud.ts "指示"` — クラウドの buyer API を認証込みで通す縦串検証。

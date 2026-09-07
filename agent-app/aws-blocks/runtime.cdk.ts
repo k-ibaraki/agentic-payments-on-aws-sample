@@ -22,19 +22,33 @@ import { runtimeEnvironment } from './runtime-env.js';
  *
  * @param handler  BlocksBackend / BlocksStack が作った共有 Lambda（NodejsFunction は Function の派生。
  *                 テストで束ねる関数を差し替えられるよう、広い方の型で受ける）
- * @param env      合成時のプロセス環境変数（Amplify はコンソールのビルド環境変数、それ以外はシェル）
+ * @param env      合成時のプロセス環境変数（Amplify はコンソールのビルド環境変数、CDK 直はシェルと
+ *                 .env.production）
+ * @param options.requireAll  必須値の欠落を合成で落とすか。決済のできる Lambda を作ろうとしている
+ *                 場面（deploy）でだけ true にする。判定の理由は呼び出し側のコメントを参照
  */
 export function wireRuntime(
   handler: LambdaFunction,
   env: Record<string, string | undefined>,
-  options: { sandboxMode: boolean },
+  options: { requireAll: boolean },
 ): void {
   // 実決済の実行時設定（決定34）。Amplify コンソールの環境変数はビルドにしか届かないので、
-  // 合成時の process.env から許可リストで拾って共有 Lambda に写す。sandbox 以外では必須値の欠落と
-  // BUYER_TOOL_TIMEOUT_MS の超過（決定31 の注記）を合成で落とす
-  for (const [key, value] of Object.entries(runtimeEnvironment(env, options))) {
+  // 合成時の process.env から許可リストで拾って共有 Lambda に写す。BUYER_TOOL_TIMEOUT_MS の超過
+  // （決定31 の注記）などの書式の検証は requireAll に関わらず常に効く
+  const applied = runtimeEnvironment(env, options);
+  for (const [key, value] of Object.entries(applied)) {
     handler.addEnvironment(key, value);
   }
+
+  // 何を載せたのかを合成の記録に残す（決定34 の改訂）。取得元が対話シェルにもなったため、
+  // 検証用に export したままの値が黙って焼き込まれるのを気づけるようにする。値は出さない
+  // （秘密ではないが、ログを読む人が確かめたいのは「どのキーが載ったか」なので）
+  const keys = Object.keys(applied);
+  console.log(
+    keys.length > 0
+      ? `[wireRuntime] 共有 Lambda に載せた実行時設定: ${keys.join(', ')}`
+      : '[wireRuntime] 共有 Lambda に載せた実行時設定: なし',
+  );
 
   handler.addToRolePolicy(paymentsPolicy(Stack.of(handler).account));
 }

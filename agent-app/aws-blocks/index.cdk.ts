@@ -26,9 +26,14 @@ if (sandboxMode) {
   blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');}
 
 // 実決済の実行時設定（PAYMENT_* など）と AgentCore Payments の IAM（決定34）。
-// Amplify 経路（amplify/blocks.ts）と同じものを載せる。sandbox 以外では必須値が
-// 無いとここで落ちるので、決済のできない Lambda が deploy されることは無い
-wireRuntime(blocksStack.handler, process.env, { sandboxMode });
+// Amplify 経路（amplify/blocks.ts）と同じものを載せる。
+//
+// 必須値の検証を deploy のときだけに絞るのは、この入口が cdk のあらゆる操作で合成されるため。
+// @aws-blocks/core の destroy() は cdk destroy を sandboxMode 無し・.env.production も読まずに
+// 起動するので、sandbox 以外なら常に落とす作りだと「値が手元に無いとスタックを畳めない」状態に
+// なる（cdk diff / synth も同じ）。deploy の意思は scripts/deploy.ts が BUYER_CDK_DEPLOY で伝える
+const requireAll = !sandboxMode && process.env.BUYER_CDK_DEPLOY === 'true';
+wireRuntime(blocksStack.handler, process.env, { requireAll });
 
 // Add static site hosting only when deploying (not in sandbox mode)
 if (!sandboxMode) {

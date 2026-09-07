@@ -14,7 +14,7 @@ const FULL_ENV = {
 };
 
 /** 共有 Lambda の代わり。bundling を走らせたくないので素の Function を使う */
-function synth(env: Record<string, string | undefined>, options: { sandboxMode: boolean }) {
+function synth(env: Record<string, string | undefined>, options: { requireAll: boolean }) {
   const stack = new Stack(new App(), 'test');
   const handler = new LambdaFunction(stack, 'Handler', {
     runtime: Runtime.NODEJS_22_X,
@@ -27,7 +27,7 @@ function synth(env: Record<string, string | undefined>, options: { sandboxMode: 
 
 describe('wireRuntime', () => {
   it('許可リストの環境変数を共有 Lambda に写す', () => {
-    const template = synth({ ...FULL_ENV, UNRELATED: 'x' }, { sandboxMode: false });
+    const template = synth({ ...FULL_ENV, UNRELATED: 'x' }, { requireAll: true });
 
     template.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: FULL_ENV },
@@ -36,7 +36,7 @@ describe('wireRuntime', () => {
   });
 
   it('AgentCore Payments の権限を関数のロールに付ける', () => {
-    const template = synth(FULL_ENV, { sandboxMode: false });
+    const template = synth(FULL_ENV, { requireAll: true });
 
     template.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
@@ -58,12 +58,12 @@ describe('wireRuntime', () => {
 
   // 必須値が欠けた deploy は決済のできない Lambda を作ってしまうので、合成の時点で落とす。
   // 判定そのものは runtime-env.test.ts が網羅する
-  it('sandbox 以外では必須の環境変数が欠けていると合成で落ちる', () => {
-    expect(() => synth({}, { sandboxMode: false })).toThrow(/PAYMENT_MANAGER_ARN/);
+  it('必須にすると環境変数の欠落で合成が落ちる', () => {
+    expect(() => synth({}, { requireAll: true })).toThrow(/PAYMENT_MANAGER_ARN/);
   });
 
-  it('sandbox では必須の環境変数が欠けていても通る', () => {
-    expect(() => synth({}, { sandboxMode: true })).not.toThrow();
+  it('必須にしなければ環境変数が欠けていても通る', () => {
+    expect(() => synth({}, { requireAll: false })).not.toThrow();
   });
 
   // Amplify 経路の共有 Lambda は backend.createStack('blocks') のネストスタックの中にある（決定33）。
@@ -77,7 +77,7 @@ describe('wireRuntime', () => {
       handler: 'index.handler',
       code: Code.fromInline('exports.handler = () => {};'),
     });
-    wireRuntime(handler, FULL_ENV, { sandboxMode: false });
+    wireRuntime(handler, FULL_ENV, { requireAll: true });
 
     const statements = Template.fromStack(nested).toJSON().Resources as Record<
       string,
