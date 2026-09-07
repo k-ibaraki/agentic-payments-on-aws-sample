@@ -65,7 +65,15 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 ### 運用上の注意
 
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（下記「クラウド deploy」）。
-  CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している
+  CDK 直の `npm run deploy`（`BlocksStack` + `Hosting`）は退路・比較用に残している。
+  退路として使う前に次の 2 点を承知しておくこと（いずれも 2026-09-07 に実測）:
+  - `npm run destroy` / `cdk diff` / `cdk synth` は、`aws-blocks/client.js` が無いと `Hosting` の
+    フロントビルド（`npm run build`）が `Failed to resolve entry for package "aws-blocks"` で落ちる。
+    `client.js` は gitignore で `npm run blocks:client` が作るので、**撤収の前に生成しておくこと**。
+    「deploy はできたのに畳めない」の原因になりやすい
+  - `@aws-blocks/core` の `destroy()` は `cdk destroy` を sandbox 扱いせず `.env.production` も読まない
+    （`deploy()` は読む）。合成時のガードを足すときは、撤収の経路も塞いでいないか確かめること。
+    実行時設定の必須チェックはこの理由で deploy のときだけに絞ってある（決定34 の改訂）
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名になる。
   Amplify のスタック名が長く、Agent 内蔵の S3 バケット名を 63 文字に収めるために短い。deploy 後は変えないこと
 

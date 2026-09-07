@@ -45,6 +45,9 @@ PR #23 に 9 観点の機械レビューを掛け、10 件の指摘を得た（�
   無いと vite が `Failed to resolve entry for package "aws-blocks"` で落ちる。これは本 PR とは無関係の
   既存の性質で、`npm run destroy` も client.js を先に作らないと通らない。今回の範囲外として直していないが、
   「必須値の件を直せば destroy がそのまま通る」わけではない点は記録しておく
+- 上の 2 つ（`client.js` の不在と、`destroy()` が sandbox 扱いも `.env.production` の読み込みもしないこと）は、
+  ユーザーの申し出で README の「運用上の注意」にも注意喚起として残した。どちらも `node_modules` を読んで
+  初めて分かる挙動で、退路（決定33）を実際に使う人が同じところで詰まるため
 
 ## 2026-09-07: 共有 Lambda への配線を aws-blocks/ に集約（決定33・34）
 
