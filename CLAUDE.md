@@ -42,9 +42,11 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - 雛形はスキャフォールドで生成し、手書きで模倣しない。例外は `amplify/` と `aws-blocks/amplify.cdk.ts` で、
   公式 CLI（`@aws-blocks/create-blocks-app`）の Amplify 用テンプレートの写し（DESIGN.md 決定33）
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33）。`ampx` は必ず
-  `NODE_OPTIONS="--conditions=cdk"` で動かす（npm スクリプトが付ける）。CDK 直の `npm run deploy` は退路として残す
+  `NODE_OPTIONS="--conditions=cdk"` で動かす（npm スクリプトが付ける）。Amplify を介さず AWS CDK だけで deploy する経路
+  （`npm run deploy`。以下「CDK 単独 deploy」）は退路として残す
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
-  合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）
+  合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）。`.blocks/config.json` の
+  `stackId` も CDK 単独 deploy のスタック名と S3 バケット名の元になる（gitignore しない。fork 先で使うなら書き換える）
 
 ## リージョン
 
@@ -93,9 +95,9 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - 自己サインアップは既定で閉じている（決定36）。`npm run dev` / `npm run test:e2e` は `BUYER_SELF_SIGNUP=true` を
   付けて開ける。クラウドの利用者は Cognito コンソールで作る
 - 実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は合成時の環境変数（Amplify はコンソールのアプリ単位・ブランチ単位、
-  CDK 直はシェルと `.env.production`、sandbox はシェル）から `aws-blocks/runtime-env.ts` の許可リストで拾い、
+  CDK 単独 deploy はシェルと `.env.production`、sandbox はシェル）から `aws-blocks/runtime-env.ts` の許可リストで拾い、
   `aws-blocks/runtime.cdk.ts` の `wireRuntime` が AgentCore Payments の IAM と併せて共有 Lambda に載せる（決定34）。
-  Amplify 経路と CDK 直経路の両方から呼ぶ。必須値が無いと合成で落ちるのは deploy のときだけで、
+  Amplify 経路と CDK 単独 deploy の両方から呼ぶ。必須値が無いと合成で落ちるのは deploy のときだけで、
   sandbox と `npm run destroy` / `cdk diff` は欠けても通る
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給
 - `npx tsx scripts/buy-via-agent.ts "指示"` — 縦串検証（ローカルのエージェント）。**実オンチェーン決済（テスト USDC）が発生する。実行前に確認を取ること**
