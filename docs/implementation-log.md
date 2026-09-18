@@ -2,6 +2,40 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-18: 公開前の点検（2 回目）
+
+### 発端
+
+ユーザーの依頼「このリポジトリを public にしようと思う。公開するとマズい情報が無いかチェックして」。
+2026-09-07 の点検（決定52）の後に PR #23〜#26 が入っているため、全体を取り直した。
+
+### やったこと
+
+- 追跡ファイル 125 件の全文と、git 全履歴の全ブロブ（lock ファイルと PNG を除く 589 件）を、
+  メールアドレス・12 桁の数字・ARN・0x アドレス（40 桁と 64 桁）・Function URL・amplifyapp / Cognito の ID・
+  UUID・AKIA / ASIA・PEM・GitHub / JWT トークン・長い base64・ホームパスの観点で走査した
+- GitHub 側は Issue / PR 本文・コメント・レビュー本文に加え、`refs/pull/*/head` を全 PR 分取り込んで
+  main に無いコミットの有無を見た（0 件。force push で消えた差分は残っていない）
+- コミットメッセージと author・committer、構成図 PNG、`.env.example` 2 件、`parameter.sample.ts`、`ci.yml`、
+  `.blocks/config.json` も目視した。`.env` / `parameter.ts` / `amplify_outputs.json` がコミットされた履歴は無い
+- 秘密情報の類は見つからなかった。テストコード中のアドレス・ARN・UUID はすべてダミー
+- HEAD に残っていたのは 1 点。本ファイルの 2026-09-01 の節にあった PaymentManager の実名
+  （`agenticpaymentssample-<ランダム 10 文字>`）で、前回の点検で伏せ損ねていた。アカウント ID が無ければ
+  使えないが、決定52 ①の「実環境の識別子は書かない」に揃えて `<省略>` に伏せた（ユーザー判断）
+- 履歴にだけ残るもの（旧 Function URL・tx ハッシュ 2 件・author の勤務先メール）は決定52 のとおり据え置き。
+  ユーザー判断「見られて困るものではないので履歴の修正は不要。見せる必要も無いので HEAD だけ伏せる」
+
+### 判断・つまずき
+
+- zsh では `while read sha path` の `path` が `PATH` と連動する特殊変数で、ループの中で PATH が壊れて
+  `git` も `sed` も見つからなくなった。変数名を `fpath` に替えて解決。走査スクリプトの変数名には注意
+- 初回の履歴走査で pathspec `:!*lock*` が `aws-blocks/` と `.blocks/` まで除外していた。除外は
+  `package-lock.json` / `pnpm-lock.yaml` を名指しする方が安全。取り直して差分の 52 ファイルも走査した
+- 旧 Function URL は前回と同じく 403 と `{"Message":null}` を返し、Lambda が無い場合の応答と一致する。
+  ただし AWS のセッションが切れており、スタックの削除は API では確かめていない
+- Zed 名義の WIP コミットは 36 件に増えているが、引き続き `refs/archived-worktrees/*` からしか辿れず
+  GitHub には無い。`git push --mirror` をしない限り出ない
+
 ## 2026-09-07: セキュリティ点検 — 売り手の「402 だけで守る」構えの評価
 
 ### 発端
@@ -1949,7 +1983,7 @@ CI の agent-app ジョブ有効化。push はユーザー指示があるまで�
 - **スキャフォールド生成**: `npx @aws-blocks/create-blocks-app agent-app --template auth-cognito`。
   生成物そのままを基線コミットし、以後の差分を追えるようにした（決定13・15。npm 管理）
 - **Payments セットアップスクリプト**（`agent-app/scripts/payments-setup.ts`、冪等）を実装し、
-  ap-southeast-1 に IAM サービスロールと PaymentManager（`agenticpaymentssample-btbtr1e6q9`、READY）
+  ap-southeast-1 に IAM サービスロールと PaymentManager（`agenticpaymentssample-<省略>`、READY）
   を作成した。実測で公式ドキュメントと食い違った点が2つ:
   - 信頼ポリシーはグローバルの `bedrock-agentcore.amazonaws.com` だけでは
     `Role validation failed` になり、**リージョン付き `bedrock-agentcore.ap-southeast-1.amazonaws.com`
