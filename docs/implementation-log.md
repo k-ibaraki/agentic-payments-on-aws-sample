@@ -2,6 +2,35 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-19: WalletHub 委任の失効と再許可、テスト USDC の補充
+
+### やったこと
+
+- ローカルの AWS セッションが期限切れだったため、ユーザーが `aws login` で入り直した
+  （`aws sts get-caller-identity` で確認。プロファイルは default）
+- `npx tsx scripts/payments-setup.ts` を実行した。冪等に作ってあるとおり、サービスロール・
+  PaymentManager・PaymentConnector・PaymentInstrument はいずれも既存が再利用され、
+  作られた資源は無い（サービスロールのポリシー同期のみ）。出力の WalletHub の URL を開いて、
+  ユーザーが Delegated signing を再度許可した
+- 買い手ウォレット（`0x4288…9B13`）の残高が 0.4 テスト USDC まで減っていたので、
+  `npx tsx scripts/faucet.ts <アドレス> usdc` で 1.0 USDC を補充した。
+  Base Sepolia の RPC で `balanceOf` を読み、0.4 → 1.4 になったことを確認した
+- ルート README の「使っている技術」表に Amplify Gen2・AWS CDK・Lambda Function URL の 3 行を足した
+  （ユーザー指摘。買い手のクラウド deploy の正である Amplify Gen2 が表から抜けていた。決定33）
+
+### 分かったこと
+
+- WalletHub の委任が切れても PaymentInstrument の status は ACTIVE のままで、API からは見分けが付かない
+  （決定27 の実測どおり）。再許可の URL は `GetPaymentInstrument` の `redirectUrl` に毎回同じものが入るため、
+  `payments-setup.ts` を流し直せば取り出せる。専用の再委任スクリプトは要らない
+- CDP faucet の USDC は 1 回あたり 1.0 で、必要量に応じて回数を分ける。今回は 1 回で足りた
+
+### つまずき
+
+- `aws sts get-caller-identity` が `Your session has expired` を返す一方、
+  `~/.aws/login/cache` にはファイルが残るため、キャッシュの有無では判別できない。
+  更新時刻を見るか、素直にコマンドの成否で判断する
+
 ## 2026-09-18: 公開前の点検（2 回目）
 
 ### 発端
