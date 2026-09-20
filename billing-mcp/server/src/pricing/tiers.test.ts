@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TIER_TABLE,
+  generationBudgetOf,
   parseTierTable,
   priceOf,
   sizeHintOf,
@@ -89,5 +90,34 @@ describe("parseTierTable（AppConfig から読む想定）", () => {
     for (const broken of [null, undefined, 1, "x", {}, { tiers: null }]) {
       expect(parseTierTable(broken)).toBeUndefined();
     }
+  });
+});
+
+describe("generationBudgetOf（生成に渡す予算）", () => {
+  it("規模の指示と maxTokens を一緒に返す", () => {
+    const budget = generationBudgetOf(DEFAULT_TIER_TABLE, "take");
+    expect(budget.sizeHint).toContain("8000");
+    expect(budget.maxTokens).toBeGreaterThan(8_000);
+  });
+
+  // 打ち切ると閉じタグ欠落のHTMLが黙って返るため、目安に対して十分な余裕を確保する（決定56）
+  it("maxTokens は目安の3倍以上を確保する", () => {
+    for (const tier of ["ume", "take", "matsu"] as const) {
+      const budget = generationBudgetOf(DEFAULT_TIER_TABLE, tier);
+      expect(budget.maxTokens).toBeGreaterThanOrEqual(
+        targetTokensOf(DEFAULT_TIER_TABLE, tier) * 3,
+      );
+    }
+  });
+
+  it("モデルの出力上限は超えない", () => {
+    const huge = {
+      tiers: {
+        ume: { price: "$0.1", targetTokens: 30_000 },
+        take: { price: "$0.15", targetTokens: 40_000 },
+        matsu: { price: "$0.2", targetTokens: 50_000 },
+      },
+    };
+    expect(generationBudgetOf(huge, "matsu").maxTokens).toBe(64_000);
   });
 });

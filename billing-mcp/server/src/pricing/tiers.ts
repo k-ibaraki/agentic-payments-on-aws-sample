@@ -113,3 +113,34 @@ export function parseTierTable(value: unknown): TierTable | undefined {
 
   return { tiers };
 }
+
+/** モデルの出力上限。これを超える maxTokens は指定できない */
+const MODEL_OUTPUT_CEILING = 64_000;
+
+/** 目安に対して確保する余裕の倍率。打ち切りを避けるため厚めに取る */
+const HEADROOM = 3;
+
+export interface GenerationBudget {
+  /** 生成のシステムプロンプトに足す規模の指示 */
+  sizeHint: string;
+  /** Converse に渡す maxTokens。目安ではなく打ち切りを避けるための天井 */
+  maxTokens: number;
+}
+
+/**
+ * 段から生成側の予算を作る。
+ *
+ * `maxTokens` は目安そのものではなく、その 3 倍を確保する。目安は引き寄せる力であって
+ * 固定する力ではなく（決定56 の実測）、指示を超えて書かれることがあるため。打ち切ると
+ * 閉じタグを欠いた HTML が黙って返る
+ */
+export function generationBudgetOf(
+  table: TierTable,
+  tier: Tier,
+): GenerationBudget {
+  const target = targetTokensOf(table, tier);
+  return {
+    sizeHint: sizeHintOf(table, tier),
+    maxTokens: Math.min(MODEL_OUTPUT_CEILING, target * HEADROOM),
+  };
+}
