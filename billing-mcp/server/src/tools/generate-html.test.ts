@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   buildAttachmentBlock,
   buildUserMessage,
+  createGenerateHtmlHandler,
   GENERATE_HTML_INPUT_SCHEMA,
   generateHtmlWithBedrock,
   sanitizeDocumentName,
@@ -178,6 +179,28 @@ describe("段に応じた規模の指示（決定56）", () => {
       prompt: "案内ページ",
       modelId: "m",
     });
+    expect(converse.mock.calls[0][0].inferenceConfig.maxTokens).toBe(64_000);
+  });
+});
+
+describe("createGenerateHtmlHandler に段の予算を渡す", () => {
+  it("予算を渡すと規模の指示と天井が生成に伝わる", async () => {
+    const converse = fakeConverse("<html></html>");
+    const handler = createGenerateHtmlHandler(converse, {
+      sizeHint: "このページは概ね 12000 トークン程度の規模が適切です。",
+      maxTokens: 36_000,
+    });
+    await handler({ prompt: "予約システム", modelId: "m" });
+    const input = converse.mock.calls[0][0];
+    expect(JSON.stringify(input.system)).toContain("12000");
+    expect(input.inferenceConfig.maxTokens).toBe(36_000);
+  });
+
+  it("予算を渡さなければ従来どおり", async () => {
+    const converse = fakeConverse("<html></html>");
+    const handler = createGenerateHtmlHandler(converse);
+    await handler({ prompt: "連絡先", modelId: "m" });
+    expect(converse.mock.calls[0][0].system).toHaveLength(1);
     expect(converse.mock.calls[0][0].inferenceConfig.maxTokens).toBe(64_000);
   });
 });

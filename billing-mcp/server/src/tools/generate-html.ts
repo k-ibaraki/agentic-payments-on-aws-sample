@@ -211,8 +211,17 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
     ),
 };
 
+/** 段から決まる生成の予算（DESIGN.md 決定56）。省略時は規模を指示しない */
+export interface GenerationBudget {
+  sizeHint: string;
+  maxTokens: number;
+}
+
 // ツール本体のハンドラ。x402 の支払いラッパーで包めるよう register とは分離する
-export function createGenerateHtmlHandler(converse?: ConverseFn) {
+export function createGenerateHtmlHandler(
+  converse?: ConverseFn,
+  budget?: GenerationBudget,
+) {
   const converseFn = converse ?? createDefaultConverse();
   return async ({
     prompt,
@@ -231,6 +240,9 @@ export function createGenerateHtmlHandler(converse?: ConverseFn) {
         modelId,
         previousHtml,
         attachments,
+        ...(budget
+          ? { sizeHint: budget.sizeHint, maxTokens: budget.maxTokens }
+          : {}),
       });
       return {
         content: [{ type: "text" as const, text: "HTMLを生成しました" }],

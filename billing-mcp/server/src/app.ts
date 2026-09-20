@@ -3,13 +3,31 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   type BillingMcpServerOptions,
+  buildPaidWrapper,
   createBillingMcpServer,
-  createPaidWrapper,
+  createResourceServer,
 } from "./billing-mcp-server.js";
-import { createDefaultConverse } from "./tools/generate-html.js";
+import { createBedrockJudge, type Judge } from "./pricing/judge.js";
+import { resolveQuote } from "./pricing/quote.js";
+import {
+  DEFAULT_TIER_TABLE,
+  generationBudgetOf,
+  tierLabel,
+} from "./pricing/tiers.js";
+import {
+  type ConverseFn,
+  createDefaultConverse,
+} from "./tools/generate-html.js";
 
 /** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
 export const MCP_PATH = "/mcp";
+
+/**
+ * 見積書の封の鍵の既定値（決定55）。開発とテスト専用。
+ *
+ * 本番で使うと、封を偽造して安い段で買えてしまう。`QUOTE_SEAL_KEY` を必ず渡すこと
+ */
+export const DEV_QUOTE_SEAL_KEY = "dev-only-quote-seal-key";
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
 // Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
@@ -66,21 +84,27 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  let paidPromise: ReturnType<typeof createPaidWrapper> | undefined;
+  // 段の判定器（決定53）。Bedrock クライアントは共有する。
+  // System One（Jev 互換）へ差し替えるときはここを createSystemOneJudge に替える
+  const judge: Judge =
+    options.judge ?? createBedrockJudge(resolvedOptions.converse as ConverseFn);
 
-  const getPaid = () => {
-    if (!paidPromise) {
-      const pending = createPaidWrapper({
-        facilitatorUrl: options.facilitatorUrl,
-        payTo: options.payTo,
-        price: options.price,
-      });
-      paidPromise = pending;
+  // facilitator への /supported 照会を伴う初期化だけを使い回す。
+  // accepts の構築は段ごとに価格が変わるため毎リクエスト行う（決定56）
+  let resourceServerPromise:
+    | ReturnType<typeof createResourceServer>
+    | undefined;
+
+  const getResourceServer = () => {
+    if (!resourceServerPromise) {
+      const pending = createResourceServer(options.facilitatorUrl);
+      resourceServerPromise = pending;
       pending.catch(() => {
-        if (paidPromise === pending) paidPromise = undefined;
+        if (resourceServerPromise === pending)
+          resourceServerPromise = undefined;
       });
     }
-    return paidPromise;
+    return resourceServerPromise;
   };
 
   return async function handleMcpRequest(request: Request): Promise<Response> {
@@ -112,10 +136,25 @@ export function createMcpFetchHandler(
       return response;
     }
 
-    // 支払いラッパーと、それが提示する accepts の組
-    let payment: Awaited<ReturnType<typeof createPaidWrapper>>;
+    // 本文は一度しか読めない。段を決めるために先に読み切り、
+    // transport には同じ本文で組み直した Request を渡す
+    const body = await request.text();
+
+    const table = options.tierTable ?? DEFAULT_TIER_TABLE;
+    const quote = await resolveQuote(body, {
+      table,
+      judge,
+      key: options.quoteSealKey ?? DEV_QUOTE_SEAL_KEY,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    });
+
+    let payment: Awaited<ReturnType<typeof buildPaidWrapper>>;
     try {
-      payment = await getPaid();
+      payment = await buildPaidWrapper(await getResourceServer(), {
+        payTo: options.payTo,
+        price: quote.price,
+        ...(quote.seal ? { quoteSeal: quote.seal } : {}),
+      });
     } catch (error) {
       // facilitator に到達できないと価格を広告できない。落ちた理由を残す
       console.error("支払いラッパーの初期化に失敗しました", error);
@@ -124,15 +163,28 @@ export function createMcpFetchHandler(
       });
     }
 
+    if (quote.seal) {
+      console.info(`[pricing] 段=${tierLabel(quote.tier)} 価格=${quote.price}`);
+    }
+
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに
     // サーバーとトランスポートを立て、応答を読み切ってから閉じる
-    const server = await createBillingMcpServer(resolvedOptions, payment);
+    const server = await createBillingMcpServer(
+      { ...resolvedOptions, generation: generationBudgetOf(table, quote.tier) },
+      payment,
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });
     try {
       await server.connect(transport);
-      const response = await transport.handleRequest(request);
+      const response = await transport.handleRequest(
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body,
+        }),
+      );
       if (isStreamingResponse(response)) {
         // ここに来る経路は塞いだつもりだが、万一残っていても待ち続けない
         await response.body?.cancel();
@@ -148,8 +200,8 @@ export function createMcpFetchHandler(
           },
         });
       }
-      const body = await response.text();
-      return new Response(body === "" ? null : body, {
+      const responseBody = await response.text();
+      return new Response(responseBody === "" ? null : responseBody, {
         status: response.status,
         headers: withCors(new Headers(response.headers)),
       });
@@ -166,10 +218,18 @@ export function optionsFromEnv(): BillingMcpServerOptions {
   if (!payTo) {
     throw new Error("環境変数 PAY_TO_ADDRESS（売上受取ウォレット）が必要です");
   }
+  const quoteSealKey = process.env.QUOTE_SEAL_KEY;
+  if (!quoteSealKey) {
+    console.warn(
+      "[pricing] QUOTE_SEAL_KEY が未設定です。開発用の鍵で動きますが、" +
+        "本番では封を偽造されます（決定55）",
+    );
+  }
   return {
     facilitatorUrl:
       process.env.FACILITATOR_URL ?? "https://x402.org/facilitator",
     payTo,
     price: process.env.PRICE,
+    ...(quoteSealKey ? { quoteSealKey } : {}),
   };
 }
