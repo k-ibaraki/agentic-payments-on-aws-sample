@@ -11,6 +11,7 @@ import { createPaymentWrapper, x402ResourceServer } from "@x402/mcp";
 import { guardPayment } from "./payment-guard.js";
 import type { TierTableLoader } from "./pricing/config.js";
 import type { Judge } from "./pricing/judge.js";
+import type { JudgeBudgetOptions } from "./pricing/judge-guard.js";
 import type { QuoteSealKeyLoader } from "./pricing/seal-key.js";
 import type { TierTable } from "./pricing/tiers.js";
 import {
@@ -48,6 +49,8 @@ export interface BillingMcpServerOptions {
   generation?: GenerationBudget;
   /** 段の判定器（決定53）。省略時は Bedrock の Haiku */
   judge?: Judge;
+  /** 見積もりの呼び出し予算（U12）。省略時は app.ts の既定値 */
+  judgeBudget?: JudgeBudgetOptions;
   /** 段ごとの価格表（決定56）。省略時は既定値。テストや静的な指定に使う */
   tierTable?: TierTable;
   /**
@@ -108,7 +111,13 @@ export async function createResourceServer(facilitatorUrl: string) {
  */
 export async function buildPaidWrapper(
   resourceServer: Awaited<ReturnType<typeof createResourceServer>>,
-  options: { payTo: `0x${string}`; price?: string; quoteSeal?: string },
+  options: {
+    payTo: `0x${string}`;
+    price?: string;
+    quoteSeal?: string;
+    /** 買い手への根拠の開示（決定56）。402 応答の資源説明に載る */
+    disclosure?: string;
+  },
 ) {
   const accepts = await resourceServer.buildPaymentRequirements({
     scheme: "exact",
@@ -129,7 +138,11 @@ export async function buildPaidWrapper(
     accepts,
     resource: {
       url: "mcp://tool/generate-html",
-      description: "ユーザーの指示に従ってHTMLを生成する",
+      // 段の根拠を添えて示す（決定56）。資源説明は支払い条件の照合対象ではないので、
+      // 価格表が差し替わっても 2 往復目の照合を壊さない
+      description: options.disclosure
+        ? `ユーザーの指示に従ってHTMLを生成する。${options.disclosure}`
+        : "ユーザーの指示に従ってHTMLを生成する",
       mimeType: "application/json",
     },
   });

@@ -9,11 +9,13 @@ import {
 } from "./billing-mcp-server.js";
 import { tierTableLoaderFromEnv } from "./pricing/config.js";
 import { createBedrockJudge, type Judge } from "./pricing/judge.js";
+import { withJudgeBudget } from "./pricing/judge-guard.js";
 import { resolveQuote } from "./pricing/quote.js";
 import { createQuoteSealKeyLoader } from "./pricing/seal-key.js";
 import {
   DEFAULT_TIER_TABLE,
   generationBudgetOf,
+  quoteDisclosure,
   tierLabel,
 } from "./pricing/tiers.js";
 import {
@@ -23,6 +25,15 @@ import {
 
 /** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
 export const MCP_PATH = "/mcp";
+
+/**
+ * 見積もりの呼び出し予算の既定値（U12）。
+ *
+ * コンテナごとに持つので、全体の天井は「同時実行数 × この値」になる。
+ * 正規の買い手は 1 回の購入につき見積もりを 1 度しか要さないため、
+ * この程度あれば通常の売買は妨げない
+ */
+export const DEFAULT_JUDGE_BUDGET = { capacity: 20, refillPerSecond: 0.2 };
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
 // Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
@@ -81,8 +92,12 @@ export function createMcpFetchHandler(
   };
   // 段の判定器（決定53）。Bedrock クライアントは共有する。
   // System One（Jev 互換）へ差し替えるときはここを createSystemOneJudge に替える
-  const judge: Judge =
-    options.judge ?? createBedrockJudge(resolvedOptions.converse as ConverseFn);
+  // 乱発への防護（U12）。無認証の公開エンドポイントでは、支払う気のない相手が
+  // 見積もりだけを繰り返せる。予算を使い切ったら判定器を呼ばず既定の段で売る
+  const judge: Judge = withJudgeBudget(
+    options.judge ?? createBedrockJudge(resolvedOptions.converse as ConverseFn),
+    options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
+  );
 
   // facilitator への /supported 照会を伴う初期化だけを使い回す。
   // accepts の構築は段ごとに価格が変わるため毎リクエスト行う（決定56）
@@ -156,6 +171,9 @@ export function createMcpFetchHandler(
         payTo: options.payTo,
         price: quote.price,
         ...(quote.seal ? { quoteSeal: quote.seal } : {}),
+        ...(quote.seal
+          ? { disclosure: quoteDisclosure(table, quote.tier) }
+          : {}),
       });
     } catch (error) {
       // facilitator に到達できないと価格を広告できない。落ちた理由を残す

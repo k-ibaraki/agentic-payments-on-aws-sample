@@ -92,11 +92,34 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | --- | --- | --- |
 | `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
 | `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
-| `Price` | 1 回あたりの価格（`parameter.ts` で設定した場合のみ） | agent-app の `PAYMENT_MAX_AMOUNT` がこれを賄えるか確認する |
+| `Price` | 段を判定できない呼び出しの退避額（`parameter.ts` で設定した場合のみ） | agent-app の `PAYMENT_MAX_AMOUNT` が松の価格を賄えるか確認する |
 | `LogGroupName` | Lambda のロググループ名 | —（調査用）|
 
 `Price` は `parameter.ts` で `price` を省くと出力されない。その場合はサーバー側の既定額が効く
 （値を二重に持たないため、スタックからは出さない）。
+
+## 価格（段階制）
+
+価格は呼び出しごとに決まる（DESIGN.md 決定56）。売り手が依頼の内容から段を判じ、その段の価格を
+根拠つきで提示し、同じ段の目安トークン数を生成の指示に織り込む。
+
+| 段 | 目安 | 既定の価格 |
+| --- | --- | --- |
+| 梅 | 5,000 トークン | $0.1 |
+| 竹 | 8,000 トークン | $0.15 |
+| 松 | 12,000 トークン | $0.2 |
+
+価格と目安は AppConfig から変えられる。`parameter.ts` に `appConfigExtensionLayerArn`
+（AppConfig Agent Lambda extension のレイヤー ARN）を渡すと、Lambda がそこから価格表を読む。
+渡さなければ上の既定値で動く。設定が読めないときは直前に読めた表を使い続けるので、
+書き損じで売り手が止まることはない。
+
+価格を差し替えても、その時点で提示済みの見積もりは有効期限（15 分）まで元の価格で通る。
+提示した額は見積書の封（決定55）に封じてあり、支払いのときは判定をやり直さず封を検めるため。
+
+段の判定には Bedrock の Haiku を使う。`allowedModelIds` に
+`jp.anthropic.claude-haiku-4-5-20251001-v1:0` を含めること。判定は無認証の経路で走るため、
+呼び出し予算で単位時間あたりの費用に天井を付けている（決定57）。
 
 **`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
 その時点の出力を取り直すこと。

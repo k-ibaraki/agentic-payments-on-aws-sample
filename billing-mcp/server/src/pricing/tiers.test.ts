@@ -4,6 +4,7 @@ import {
   generationBudgetOf,
   parseTierTable,
   priceOf,
+  quoteDisclosure,
   sizeHintOf,
   targetTokensOf,
   tierLabel,
@@ -119,5 +120,22 @@ describe("generationBudgetOf（生成に渡す予算）", () => {
       },
     };
     expect(generationBudgetOf(huge, "matsu").maxTokens).toBe(64_000);
+  });
+});
+
+describe("買い手への根拠の開示（決定56）", () => {
+  it("段と分量と価格を一文で示す", () => {
+    const text = quoteDisclosure(DEFAULT_TIER_TABLE, "take");
+    expect(text).toContain("竹");
+    expect(text).toContain("8000");
+    expect(text).toContain("$0.15");
+  });
+
+  // 品質の等級ではなく、依頼が求める規模の見立てであることを明示する
+  it("値引きや簡素版とは読めない言い方にする", () => {
+    const text = quoteDisclosure(DEFAULT_TIER_TABLE, "ume");
+    expect(text).toContain("ご依頼の内容");
+    expect(text).not.toContain("簡素");
+    expect(text).not.toContain("値引き");
   });
 });

@@ -144,3 +144,20 @@ export function generationBudgetOf(
     maxTokens: Math.min(MODEL_OUTPUT_CEILING, target * HEADROOM),
   };
 }
+
+/**
+ * 買い手への根拠の開示（決定56）。402 応答の資源説明に載せる。
+ *
+ * 段は品質の等級ではなく、依頼が求める規模の見立てである。「簡素版」や「値引き」と
+ * 読める言い方は避け、「この依頼ならこの分量になるので、この段の価格です」と示す。
+ *
+ * 資源説明は支払い条件の照合対象ではないため、価格表が差し替わっても 2 往復目の
+ * 照合を壊さない
+ */
+export function quoteDisclosure(table: TierTable, tier: Tier): string {
+  const target = targetTokensOf(table, tier);
+  return (
+    `ご依頼の内容では、およそ ${target} トークン相当の分量のページになります。` +
+    `このため ${tierLabel(tier)}（${priceOf(table, tier)}）でのご提供です。`
+  );
+}

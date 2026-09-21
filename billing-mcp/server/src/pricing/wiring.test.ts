@@ -80,6 +80,39 @@ describe("段に応じた値付けの結線", () => {
     expect(extra?.quote).toContain("take");
   });
 
+  it("402 応答に段の根拠が載る（決定56）", async () => {
+    const app = createMcpFetchHandler({
+      facilitatorUrl: facilitator.url,
+      payTo: PAY_TO,
+      converse: vi.fn(),
+      judge: async () => ({ tier: "matsu" }),
+      quoteSealKey: "test-seal-key",
+      loadUiHtml: () => "<html></html>",
+    });
+    const response = await app(
+      new Request(`${ORIGIN}${MCP_PATH}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "generate-html",
+            arguments: { prompt: "予約システム" },
+          },
+        }),
+      }),
+    );
+    const text = await response.text();
+    expect(text).toContain("12000 トークン相当");
+    expect(text).toContain("松");
+    expect(text).toContain("$0.2");
+  });
+
   it("封を返せば判定器を呼ばずに同じ額が出る", async () => {
     const first = await requestQuote(
       async () => ({ tier: "matsu" }),
