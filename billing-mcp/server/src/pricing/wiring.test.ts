@@ -205,21 +205,21 @@ describe("判定器の切り替えの結線", () => {
   }
 
   it("価格表が bedrock を指せば既定の判定器で値が付く", async () => {
-    const { accepted, systemOneFetch } = await requestWith("bedrock", "k");
+    const { accepted, systemOneFetch } = await requestWith("haiku", "k");
     expect(accepted?.amount).toBe("100000");
     expect(systemOneFetch).not.toHaveBeenCalled();
   });
 
-  it("価格表が systemone を指し鍵があれば Jev で値が付く", async () => {
-    const { accepted, systemOneFetch } = await requestWith("systemone", "k");
+  it("価格表が jev を指し鍵があれば Jev で値が付く", async () => {
+    const { accepted, systemOneFetch } = await requestWith("jev", "k");
     expect(accepted?.amount).toBe("200000");
     expect(systemOneFetch).toHaveBeenCalled();
   });
 
   // 鍵の入れ忘れで価格の判定品質を落とさない（決定58）
-  it("systemone でも鍵が無ければ既定の判定器に留まる", async () => {
+  it("jev でも鍵が無ければ既定の判定器に留まる", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { accepted, systemOneFetch } = await requestWith("systemone");
+    const { accepted, systemOneFetch } = await requestWith("jev");
     expect(accepted?.amount).toBe("100000");
     expect(systemOneFetch).not.toHaveBeenCalled();
     warn.mockRestore();

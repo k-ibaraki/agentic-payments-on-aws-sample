@@ -101,7 +101,7 @@ export function createMcpFetchHandler(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
   // 段の判定器（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
-  // 共有する。価格表が systemone を指していれば Jev に切り替える。鍵はコールド
+  // 共有する。価格表が jev を指していれば Jev に切り替える。鍵はコールド
   // スタートに一度だけ Secrets Manager から読む
   const selectJudge = createJudgeSelector({
     bedrock:

@@ -140,10 +140,10 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
 2. **AppConfig の価格表で倒す。** 価格表（profile `tier-table`）に `judge` の欄を足す:
 
    ```json
-   { "tiers": { "ume": { ... }, "take": { ... }, "matsu": { ... } }, "judge": "systemone" }
+   { "tiers": { "ume": { ... }, "take": { ... }, "matsu": { ... } }, "judge": "jev" }
    ```
 
-   再デプロイは要らない。`judge` を省くか読めない値を書けば `bedrock` に戻る
+   再デプロイは要らない。`judge` を省くか読めない値を書けば `haiku` に戻る
    （価格表そのものは巻き添えにしない）。鍵が未投入のまま倒した場合も Haiku に留まり、
    CloudWatch に警告が出る。
 

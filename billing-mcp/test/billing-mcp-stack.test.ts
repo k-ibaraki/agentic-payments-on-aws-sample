@@ -155,7 +155,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
       "AWS::AppConfig::HostedConfigurationVersion",
     );
     const content = Object.values(versions)[0].Properties.Content as string;
-    expect(JSON.parse(content).judge).toBe("bedrock");
+    expect(JSON.parse(content).judge).toBe("haiku");
   });
 
   it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {

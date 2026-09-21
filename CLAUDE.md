@@ -35,8 +35,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - サーバーは express を使わず、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから使う。MCP セッションはステートレス（DESIGN.md 決定22）
 - 売り手は無認証の公開エンドポイント。認可は x402 の支払いのみが担う（DESIGN.md 決定19・21）
 - x402 は `@x402/*`（v2 系）のみ使用。旧 `x402-express` 等の v1 パッケージは deprecated のため使わない
-- 段の判定器は AppConfig の価格表（profile `tier-table`）の `judge` 欄で選ぶ。既定は `bedrock`（Haiku）、
-  `systemone` で TypeSafe の Jev（DESIGN.md 決定58）。鍵が無ければ既定に留まる。AppConfig の反映は
+- 段の判定器は AppConfig の価格表（profile `tier-table`）の `judge` 欄で選ぶ。既定は `haiku`（Bedrock の Haiku）、
+  `jev` で TypeSafe の Jev（DESIGN.md 決定58）。鍵が無ければ既定に留まる。AppConfig の反映は
   即時ではなく、間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取得した回には旧値を返す）
 
 ### agent-app/

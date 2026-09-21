@@ -130,10 +130,10 @@ async function main(): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  console.log(`入れました（${key.length} 文字）。判定器を切り替えるには AppConfig の judge を systemone にすること`);
+  console.log(`入れました（${key.length} 文字）。判定器を切り替えるには AppConfig の judge を jev にすること`);
   console.log("");
   console.log("  AppConfig の価格表（tier-table）の例:");
-  console.log('    { "tiers": { ... }, "judge": "systemone" }');
+  console.log('    { "tiers": { ... }, "judge": "jev" }');
 }
 
 main().catch((error) => {

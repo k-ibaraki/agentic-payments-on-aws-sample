@@ -173,22 +173,23 @@ describe("判定器の切り替え（決定58）", () => {
   };
 
   it("既定の表は Bedrock を指す", () => {
-    expect(DEFAULT_TIER_TABLE.judge).toBe("bedrock");
+    expect(DEFAULT_TIER_TABLE.judge).toBe("haiku");
   });
 
   it("judge の欄が無ければ Bedrock を指す", () => {
-    expect(parseTierTable({ tiers: VALID_TIERS })?.judge).toBe("bedrock");
+    expect(parseTierTable({ tiers: VALID_TIERS })?.judge).toBe("haiku");
   });
 
-  it("systemone を指定できる", () => {
-    const table = parseTierTable({ tiers: VALID_TIERS, judge: "systemone" });
-    expect(table?.judge).toBe("systemone");
+  it("jev を指定できる", () => {
+    const table = parseTierTable({ tiers: VALID_TIERS, judge: "jev" });
+    expect(table?.judge).toBe("jev");
   });
 
   // 価格表ごと退けると、判定器の書き損じで価格まで巻き添えになる
   it("judge の欄が不正でも価格表は生かし、判定器だけ既定へ戻す", () => {
-    const table = parseTierTable({ tiers: VALID_TIERS, judge: "jev" });
-    expect(table?.judge).toBe("bedrock");
+    // 一覧に無い値。書き損じや、値の名前を変える前の古い設定が来たときを模す
+    const table = parseTierTable({ tiers: VALID_TIERS, judge: "sonnet" });
+    expect(table?.judge).toBe("haiku");
     expect(priceOf(table as TierTable, "take")).toBe("$0.15");
   });
 });

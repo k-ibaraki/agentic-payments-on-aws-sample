@@ -10,20 +10,20 @@ describe("判定器の選択（決定58）", () => {
     const loadApiKey = vi.fn();
     const select = createJudgeSelector({ bedrock, loadApiKey });
     expect(
-      await (await select("bedrock"))({ toolName: "t", state: "s" }),
+      await (await select("haiku"))({ toolName: "t", state: "s" }),
     ).toEqual({ tier: "ume" });
     // 使わない鍵を取りに行かない
     expect(loadApiKey).not.toHaveBeenCalled();
   });
 
-  it("systemone を指し、鍵があれば System One を使う", async () => {
+  it("jev を指し、鍵があれば System One を使う", async () => {
     const create = vi.fn().mockReturnValue(systemOne);
     const select = createJudgeSelector({
       bedrock,
       loadApiKey: async () => "k",
       createSystemOne: create,
     });
-    const judge = await select("systemone");
+    const judge = await select("jev");
     expect(await judge({ toolName: "t", state: "s" })).toEqual({
       tier: "matsu",
     });
@@ -31,16 +31,16 @@ describe("判定器の選択（決定58）", () => {
   });
 
   // CDK が作るのは空の Secret なので、鍵を入れ忘れたまま倒す事故は実際に起きる
-  it("systemone を指しても鍵が無ければ既定の判定器に留まり、警告を出す", async () => {
+  it("jev を指しても鍵が無ければ既定の判定器に留まり、警告を出す", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const select = createJudgeSelector({
       bedrock,
       loadApiKey: async () => undefined,
       createSystemOne: () => systemOne,
     });
-    expect(
-      await (await select("systemone"))({ toolName: "t", state: "s" }),
-    ).toEqual({ tier: "ume" });
+    expect(await (await select("jev"))({ toolName: "t", state: "s" })).toEqual({
+      tier: "ume",
+    });
     expect(warn.mock.calls.flat().join(" ")).toContain("既定");
     warn.mockRestore();
   });
@@ -53,8 +53,8 @@ describe("判定器の選択（決定58）", () => {
       loadApiKey: async () => "k",
       createSystemOne: create,
     });
-    await select("systemone");
-    await select("systemone");
+    await select("jev");
+    await select("jev");
     expect(create).toHaveBeenCalledTimes(1);
   });
 });

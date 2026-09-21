@@ -22,14 +22,14 @@ export interface TierEntry {
 /**
  * 段を判ずる判定器の種類（決定58）。
  *
- * 既定は Bedrock の Haiku。`systemone` は TypeSafe の Jev（および System One 互換の
+ * 既定は Bedrock の Haiku。`jev` は TypeSafe の Jev（および System One 互換の
  * サーバー）を指す。価格表と同じ profile に置くので、運用中に再 deploy なしで倒せる
  */
-export const JUDGE_KINDS = ["bedrock", "systemone"] as const;
+export const JUDGE_KINDS = ["haiku", "jev"] as const;
 
 export type JudgeKind = (typeof JUDGE_KINDS)[number];
 
-export const DEFAULT_JUDGE_KIND: JudgeKind = "bedrock";
+export const DEFAULT_JUDGE_KIND: JudgeKind = "haiku";
 
 export interface TierTable {
   tiers: Record<Tier, TierEntry>;

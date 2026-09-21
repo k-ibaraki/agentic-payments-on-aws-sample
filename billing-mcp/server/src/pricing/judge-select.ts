@@ -5,7 +5,7 @@
 // 行う。作り直しが高くつくもの（Bedrock クライアント、Jev の HTTP クライアント）は
 // 使い回す。
 //
-// 鍵が無いまま systemone を指された場合は既定（Bedrock）に留まる。設定に忠実に
+// 鍵が無いまま jev を指された場合は既定（Bedrock の Haiku）に留まる。設定に忠実に
 // 従って全件をフォールバックの段に落とすより、価格の判定品質を保つほうが害が小さい。
 // ただし黙って無視すると運用者が気づけないので、警告は必ず出す。
 import type { Judge } from "./judge.js";
@@ -36,12 +36,12 @@ export function createJudgeSelector(
   let cachedJudge: Judge | undefined;
 
   return async (kind) => {
-    if (kind !== "systemone") return options.bedrock;
+    if (kind !== "jev") return options.bedrock;
 
     const apiKey = await options.loadApiKey();
     if (!apiKey) {
       console.warn(
-        "[pricing] 判定器に systemone が指定されていますが API キーがありません。既定の判定器で応じます（決定58）",
+        "[pricing] 判定器に jev が指定されていますが API キーがありません。既定の判定器で応じます（決定58）",
       );
       return options.bedrock;
     }
