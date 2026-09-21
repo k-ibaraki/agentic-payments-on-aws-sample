@@ -4,11 +4,13 @@ import {
   CfnOutput,
   Duration,
   RemovalPolicy,
+  SecretValue,
   Stack,
   type StackProps,
 } from "aws-cdk-lib";
 import * as appconfig from "aws-cdk-lib/aws-appconfig";
 import * as iam from "aws-cdk-lib/aws-iam";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
   Architecture,
   FunctionUrlAuthType,
@@ -48,6 +50,12 @@ export interface BillingMcpStackProps extends StackProps {
   readonly appConfigExtensionLayerArn?: string;
 }
 
+/**
+ * 鍵が未投入であることを表す目印。
+ * server 側の `pricing/typesafe-key.ts` の UNSET_API_KEY と揃える（決定58）
+ */
+const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
+
 /** 価格表の既定値。server 側の DEFAULT_TIER_TABLE と揃える（決定56） */
 const DEFAULT_TIER_TABLE = {
   tiers: {
@@ -55,6 +63,9 @@ const DEFAULT_TIER_TABLE = {
     take: { price: "$0.15", targetTokens: 8_000 },
     matsu: { price: "$0.2", targetTokens: 12_000 },
   },
+  // 段を判ずる判定器（決定58）。既定は Bedrock の Haiku。Jev に切り替えるときは
+  // この値を "systemone" にして AppConfig を再展開する（再 deploy は要らない）
+  judge: "bedrock",
 };
 
 /**
@@ -191,6 +202,22 @@ export function createBillingMcpStack(
     deploymentStrategyId: strategy.ref,
   });
 
+  // Jev の API キー（決定58）。器だけ作り、値は人が後から入れる（`pnpm set:jev-key`）。
+  // API キーを CDK に書くと CloudFormation テンプレートに平文で残るため。
+  //
+  // 中身を目印（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
+  // 出鱈目な鍵が入っていると、判定器を systemone に倒したときに毎回 401 になり、
+  // 全件がフォールバックの段に落ちて価格が実質固定になる。目印ならサーバーが
+  // 「未投入」と判って既定の判定器に留まる
+  const typesafeApiKeySecret = new Secret(stack, "TypesafeApiKey", {
+    secretStringValue: SecretValue.unsafePlainText(UNSET_TYPESAFE_API_KEY),
+    secretName: `billing-mcp/typesafe-api-key-${props.envName}`,
+    description:
+      "TypeSafe（Jev）の API キー。判定器を systemone に切り替えるときに使う（決定58）",
+    // 作り直しの余地を残す。鍵は外部サービスの発行物で、消えても再発行できる
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+
   const useAppConfig = Boolean(props.appConfigExtensionLayerArn);
 
   const mcpFunction = new NodejsFunction(stack, "McpFunction", {
@@ -211,6 +238,8 @@ export function createBillingMcpStack(
       ...(props.price ? { PRICE: props.price } : {}),
       // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
       UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
+      // 判定器に systemone が指定されたときだけ読みに行く（決定58）
+      TYPESAFE_API_KEY_SECRET_ARN: typesafeApiKeySecret.secretArn,
       // 拡張を載せたときだけ AppConfig を見る。無ければ既定の表で動く（決定56）
       ...(useAppConfig
         ? {
@@ -267,6 +296,9 @@ export function createBillingMcpStack(
     }),
   );
 
+  // 鍵はコールドスタートに一度だけ読む。読めるのはこの Secret だけ
+  typesafeApiKeySecret.grantRead(mcpFunction);
+
   // AppConfig の拡張は関数の実行ロールで設定を取りに行く
   if (useAppConfig) {
     mcpFunction.addToRolePolicy(
@@ -291,6 +323,11 @@ export function createBillingMcpStack(
     value: `${functionUrl.url}mcp`,
     description:
       "MCP エンドポイント（無認証。認可は x402 の支払いのみ）。agent-app の BILLING_MCP_URL に設定する。作り直すと変わる",
+  });
+  new CfnOutput(stack, "TypesafeApiKeySecretArn", {
+    value: typesafeApiKeySecret.secretArn,
+    description:
+      "Jev の API キーを入れる Secret の ARN（決定58）。値は空で作られるので、使うなら pnpm set:jev-key で入れる",
   });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,

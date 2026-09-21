@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "verify:bundle": "node scripts/verify-bundle.mjs",
     "synth": "cdk synth --quiet",
-    "outputs": "tsx scripts/outputs.ts"
+    "outputs": "tsx scripts/outputs.ts",
+    "set:jev-key": "tsx scripts/set-jev-key.ts"
   },
   "devDependencies": {
     "@swc/core": "^1.15.0",

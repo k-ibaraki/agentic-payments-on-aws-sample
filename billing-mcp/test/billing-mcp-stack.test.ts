@@ -149,6 +149,15 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     expect(table.tiers.take.price).toBe("$0.15");
   });
 
+  // 既定は Haiku。Jev へは AppConfig の同じ profile を倒して切り替える（決定58）
+  it("価格表に判定器の指定を載せ、既定は bedrock にする", () => {
+    const versions = template.findResources(
+      "AWS::AppConfig::HostedConfigurationVersion",
+    );
+    const content = Object.values(versions)[0].Properties.Content as string;
+    expect(JSON.parse(content).judge).toBe("bedrock");
+  });
+
   it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {
     const functions = template.findResources("AWS::Lambda::Function");
     const variables = Object.values(functions)[0].Properties.Environment
@@ -177,5 +186,52 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
         ]),
       }),
     });
+  });
+});
+
+describe("Jev の API キー（決定58）", () => {
+  let template: Template;
+
+  beforeAll(() => {
+    template = synth();
+  });
+
+  // 値は人が後から入れる。CDK に書くと CloudFormation テンプレートに平文で残る。
+  // ランダム生成に任せると、出鱈目な鍵で 401 になり全件が中央の段へ落ちる
+  it("鍵ではなく置き換えの目印を入れて作る", () => {
+    template.resourceCountIs("AWS::SecretsManager::Secret", 1);
+    const secrets = template.findResources("AWS::SecretsManager::Secret");
+    const props = Object.values(secrets)[0].Properties as Record<string, unknown>;
+    expect(props.SecretString).toBe("REPLACE_ME");
+    expect(props.GenerateSecretString).toBeUndefined();
+  });
+
+  it("Secret の場所を Lambda に環境変数で渡す", () => {
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          TYPESAFE_API_KEY_SECRET_ARN: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it("その Secret だけを読める権限を与える", () => {
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["secretsmanager:GetSecretValue"]),
+            Resource: Match.anyValue(),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  // 鍵を入れる手順（pnpm set:jev-key）が ARN を引けること
+  it("Secret の ARN を出力に出す", () => {
+    const outputs = template.findOutputs("*");
+    expect(Object.keys(outputs)).toContain("TypesafeApiKeySecretArn");
   });
 });
