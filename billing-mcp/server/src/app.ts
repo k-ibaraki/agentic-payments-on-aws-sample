@@ -11,7 +11,6 @@ import { tierTableLoaderFromEnv } from "./pricing/config.js";
 import { createBedrockJudge, type Judge } from "./pricing/judge.js";
 import { withJudgeBudget } from "./pricing/judge-guard.js";
 import { resolveQuote } from "./pricing/quote.js";
-import { createQuoteSealKeyLoader } from "./pricing/seal-key.js";
 import {
   DEFAULT_TIER_TABLE,
   generationBudgetOf,
@@ -105,9 +104,6 @@ export function createMcpFetchHandler(
     | ReturnType<typeof createResourceServer>
     | undefined;
 
-  // 封の鍵（決定55）。Secrets Manager からの取得は初回だけ
-  const getSealKey = options.loadQuoteSealKey ?? createQuoteSealKeyLoader();
-
   const getResourceServer = () => {
     if (!resourceServerPromise) {
       const pending = createResourceServer(options.facilitatorUrl);
@@ -158,20 +154,15 @@ export function createMcpFetchHandler(
     const table = options.loadTierTable
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
-    const quote = await resolveQuote(body, {
-      table,
-      judge,
-      key: options.quoteSealKey ?? (await getSealKey()),
-      nowSeconds: Math.floor(Date.now() / 1000),
-    });
+    const quote = await resolveQuote(body, { table, judge });
 
     let payment: Awaited<ReturnType<typeof buildPaidWrapper>>;
     try {
       payment = await buildPaidWrapper(await getResourceServer(), {
         payTo: options.payTo,
         price: quote.price,
-        ...(quote.seal ? { quoteSeal: quote.seal } : {}),
-        ...(quote.seal
+        ...(quote.quote ? { quoteNote: quote.quote } : {}),
+        ...(quote.quote
           ? { disclosure: quoteDisclosure(table, quote.tier) }
           : {}),
       });
@@ -183,7 +174,7 @@ export function createMcpFetchHandler(
       });
     }
 
-    if (quote.seal) {
+    if (quote.quote) {
       console.info(`[pricing] 段=${tierLabel(quote.tier)} 価格=${quote.price}`);
     }
 

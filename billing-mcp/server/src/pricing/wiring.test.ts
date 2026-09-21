@@ -23,7 +23,6 @@ describe("段に応じた値付けの結線", () => {
       payTo: PAY_TO,
       converse: vi.fn(),
       judge,
-      quoteSealKey: "test-seal-key",
       loadUiHtml: () => "<html></html>",
     });
     const response = await app(
@@ -86,7 +85,6 @@ describe("段に応じた値付けの結線", () => {
       payTo: PAY_TO,
       converse: vi.fn(),
       judge: async () => ({ tier: "matsu" }),
-      quoteSealKey: "test-seal-key",
       loadUiHtml: () => "<html></html>",
     });
     const response = await app(

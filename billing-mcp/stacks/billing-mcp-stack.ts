@@ -17,7 +17,6 @@ import {
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
-import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import type { Construct } from "constructs";
 
 /** パラメータ（parameter.ts / parameter.sample.ts が満たす形） */
@@ -151,14 +150,6 @@ export function createBillingMcpStack(
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
-  // 見積書の封の鍵（決定55）。値は CloudFormation に現れないよう自動生成させる。
-  // 鍵が漏れると、封を偽造して松の依頼を梅の値段で買える
-  const quoteSealSecret = new Secret(stack, "QuoteSealKey", {
-    description: "billing-mcp の見積書の封に使う鍵（DESIGN.md 決定55）",
-    generateSecretString: { passwordLength: 48, excludePunctuation: true },
-    removalPolicy: RemovalPolicy.DESTROY,
-  });
-
   // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く。
   // 差し替えても飛行中の取引は壊れない。提示済みの価格は封に封じられているため
   const application = new appconfig.CfnApplication(stack, "PricingApp", {
@@ -219,8 +210,6 @@ export function createBillingMcpStack(
       ...(props.price ? { PRICE: props.price } : {}),
       // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
       UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
-      // 封の鍵は値ではなく在り処だけを渡す（決定55）
-      QUOTE_SEAL_SECRET_ARN: quoteSealSecret.secretArn,
       // 拡張を載せたときだけ AppConfig を見る。無ければ既定の表で動く（決定56）
       ...(useAppConfig
         ? {
@@ -276,8 +265,6 @@ export function createBillingMcpStack(
       ),
     }),
   );
-
-  quoteSealSecret.grantRead(mcpFunction);
 
   // AppConfig の拡張は関数の実行ロールで設定を取りに行く
   if (useAppConfig) {

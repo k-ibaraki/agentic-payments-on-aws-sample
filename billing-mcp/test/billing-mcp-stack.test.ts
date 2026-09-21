@@ -135,23 +135,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     template = synth();
   });
 
-  it("封の鍵を Secrets Manager に作り、値はテンプレートに現れない", () => {
-    template.resourceCountIs("AWS::SecretsManager::Secret", 1);
-    const secrets = template.findResources("AWS::SecretsManager::Secret");
-    const properties = Object.values(secrets)[0].Properties;
-    expect(properties.GenerateSecretString).toBeDefined();
-    expect(JSON.stringify(properties)).not.toContain("SecretString\":\"");
-  });
 
-  it("関数には鍵の値ではなく在り処だけを渡す", () => {
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Environment: {
-        Variables: Match.objectLike({
-          QUOTE_SEAL_SECRET_ARN: Match.anyValue(),
-        }),
-      },
-    });
-  });
 
   it("価格表を AppConfig に置き、既定の3段を載せる", () => {
     template.resourceCountIs("AWS::AppConfig::Application", 1);

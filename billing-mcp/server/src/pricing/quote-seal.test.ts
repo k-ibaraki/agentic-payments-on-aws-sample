@@ -1,121 +1,70 @@
 import { describe, expect, it } from "vitest";
 import {
-  fingerprintArgs,
-  openQuoteSeal,
-  type SealedQuote,
-  sealQuote,
+  decodeQuote,
+  encodeQuote,
+  matchesTable,
+  type Quote,
 } from "./quote-seal.js";
+import { DEFAULT_TIER_TABLE } from "./tiers.js";
 
-const KEY = "test-key-0123456789";
-const OTHER_KEY = "another-key-9876543210";
+const QUOTE: Quote = { tier: "take", price: "$0.15" };
 
-const QUOTE: SealedQuote = {
-  toolName: "generate-html",
-  argsFingerprint: "a".repeat(64),
-  tier: "take",
-  price: "$0.15",
-  expiresAt: 2_000_000_000,
-};
-
-describe("fingerprintArgs", () => {
-  it("キーの並び順が違っても同じ指紋になる", () => {
-    const a = fingerprintArgs({ prompt: "こんにちは", modelId: "m" });
-    const b = fingerprintArgs({ modelId: "m", prompt: "こんにちは" });
-    expect(a).toBe(b);
+describe("見積書の往復", () => {
+  it("書き出して読み戻すと同じ中身になる", () => {
+    expect(decodeQuote(encodeQuote(QUOTE))).toEqual(QUOTE);
   });
 
-  it("値が1文字でも違えば指紋が変わる", () => {
-    const a = fingerprintArgs({ prompt: "ページを作って" });
-    const b = fingerprintArgs({ prompt: "ページを作つて" });
-    expect(a).not.toBe(b);
+  it("3段のいずれも往復できる", () => {
+    for (const tier of ["ume", "take", "matsu"] as const) {
+      const quote = { tier, price: "$0.1" };
+      expect(decodeQuote(encodeQuote(quote))).toEqual(quote);
+    }
   });
 
-  it("未定義の項目がある場合と無い場合を区別する", () => {
-    const a = fingerprintArgs({ prompt: "x" });
-    const b = fingerprintArgs({ prompt: "x", previousHtml: "" });
-    expect(a).not.toBe(b);
+  // 価格は "$0.15" のように小数点を含むので、区切りに `.` を使うと割れる
+  it("小数点を含む価格でも壊れない", () => {
+    expect(decodeQuote(encodeQuote({ tier: "ume", price: "$0.125" }))).toEqual({
+      tier: "ume",
+      price: "$0.125",
+    });
   });
 });
 
-describe("sealQuote / openQuoteSeal", () => {
-  it("封をして開くと同じ見積もりが戻る", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const opened = openQuoteSeal(sealed, {
-      toolName: QUOTE.toolName,
-      argsFingerprint: QUOTE.argsFingerprint,
-      key: KEY,
-      nowSeconds: 1_999_999_000,
-    });
-    expect(opened).toEqual(QUOTE);
-  });
-
-  it("鍵が違えば開かない", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const opened = openQuoteSeal(sealed, {
-      toolName: QUOTE.toolName,
-      argsFingerprint: QUOTE.argsFingerprint,
-      key: OTHER_KEY,
-      nowSeconds: 1_999_999_000,
-    });
-    expect(opened).toBeUndefined();
-  });
-
-  it("有効期限を過ぎていれば開かない", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const opened = openQuoteSeal(sealed, {
-      toolName: QUOTE.toolName,
-      argsFingerprint: QUOTE.argsFingerprint,
-      key: KEY,
-      nowSeconds: QUOTE.expiresAt + 1,
-    });
-    expect(opened).toBeUndefined();
-  });
-
-  // 安い見積書を高い依頼に付け替える細工を防ぐ（決定55）
-  it("引数の指紋が一致しなければ開かない", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const opened = openQuoteSeal(sealed, {
-      toolName: QUOTE.toolName,
-      argsFingerprint: "b".repeat(64),
-      key: KEY,
-      nowSeconds: 1_999_999_000,
-    });
-    expect(opened).toBeUndefined();
-  });
-
-  it("別のツールの見積書は開かない", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const opened = openQuoteSeal(sealed, {
-      toolName: "other-tool",
-      argsFingerprint: QUOTE.argsFingerprint,
-      key: KEY,
-      nowSeconds: 1_999_999_000,
-    });
-    expect(opened).toBeUndefined();
-  });
-
-  it("額を書き換えた封は開かない", () => {
-    const sealed = sealQuote(QUOTE, KEY);
-    const tampered = sealed.replace("$0.15", "$0.01");
-    expect(tampered).not.toBe(sealed);
-    const opened = openQuoteSeal(tampered, {
-      toolName: QUOTE.toolName,
-      argsFingerprint: QUOTE.argsFingerprint,
-      key: KEY,
-      nowSeconds: 1_999_999_000,
-    });
-    expect(opened).toBeUndefined();
-  });
-
-  it("形が壊れていても例外を投げずに開かないとだけ答える", () => {
-    for (const broken of ["", "v1", "v1.x.y", "..", "not-a-seal"]) {
-      const opened = openQuoteSeal(broken, {
-        toolName: QUOTE.toolName,
-        argsFingerprint: QUOTE.argsFingerprint,
-        key: KEY,
-        nowSeconds: 1_999_999_000,
-      });
-      expect(opened).toBeUndefined();
+describe("読めない見積書", () => {
+  it("形が壊れていれば読まない", () => {
+    for (const broken of ["", "v1", "v1|take", "||", "not-a-quote"]) {
+      expect(decodeQuote(broken)).toBeUndefined();
     }
+  });
+
+  it("知らない段は読まない", () => {
+    expect(decodeQuote("v1|gold|$0.15")).toBeUndefined();
+  });
+
+  it("価格の形が違えば読まない", () => {
+    expect(decodeQuote("v1|take|0.15")).toBeUndefined();
+  });
+
+  it("版が違えば読まない", () => {
+    expect(decodeQuote("v0|take|$0.15")).toBeUndefined();
+  });
+
+  it("文字列でなければ読まない", () => {
+    for (const value of [undefined, null, 1, {}, []]) {
+      expect(decodeQuote(value)).toBeUndefined();
+    }
+  });
+});
+
+describe("価格表との整合", () => {
+  it("表どおりの価格なら使う", () => {
+    expect(matchesTable(QUOTE, DEFAULT_TIER_TABLE)).toBe(true);
+  });
+
+  // 価格表が差し替わった直後の古い見積書を弾く
+  it("表と食い違う価格は使わない", () => {
+    expect(
+      matchesTable({ tier: "take", price: "$9.99" }, DEFAULT_TIER_TABLE),
+    ).toBe(false);
   });
 });

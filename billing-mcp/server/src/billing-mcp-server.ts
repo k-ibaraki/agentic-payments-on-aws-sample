@@ -12,7 +12,6 @@ import { guardPayment } from "./payment-guard.js";
 import type { TierTableLoader } from "./pricing/config.js";
 import type { Judge } from "./pricing/judge.js";
 import type { JudgeBudgetOptions } from "./pricing/judge-guard.js";
-import type { QuoteSealKeyLoader } from "./pricing/seal-key.js";
 import type { TierTable } from "./pricing/tiers.js";
 import {
   type ConverseFn,
@@ -58,10 +57,6 @@ export interface BillingMcpServerOptions {
    * `tierTable` より優先する
    */
   loadTierTable?: TierTableLoader;
-  /** 見積書の封の鍵（決定55）。テストや静的な指定に使う */
-  quoteSealKey?: string;
-  /** 封の鍵の読み手（決定55）。省略時は環境変数と Secrets Manager から調達する */
-  loadQuoteSealKey?: QuoteSealKeyLoader;
 }
 
 // ui:// で配信する HTML の場所を決める。
@@ -106,7 +101,7 @@ export async function createResourceServer(facilitatorUrl: string) {
 /**
  * 初期化済みの resourceServer から、この呼び出し用の accepts と支払いラッパーを組む。
  *
- * `quoteSeal` は見積書の封（決定55）。`extra.quote` に載せると買い手がそのまま
+ * `quoteNote` は見積書（決定55）。`extra.quote` に載せると買い手がそのまま
  * エコーバックしてくるので、支払い付きの呼び出しでは判定をやり直さずに済む
  */
 export async function buildPaidWrapper(
@@ -114,7 +109,7 @@ export async function buildPaidWrapper(
   options: {
     payTo: `0x${string}`;
     price?: string;
-    quoteSeal?: string;
+    quoteNote?: string;
     /** 買い手への根拠の開示（決定56）。402 応答の資源説明に載る */
     disclosure?: string;
   },
@@ -130,7 +125,7 @@ export async function buildPaidWrapper(
       name: "USDC",
       version: "2",
       paymentFlow: PAYMENT_FLOW,
-      ...(options.quoteSeal ? { quote: options.quoteSeal } : {}),
+      ...(options.quoteNote ? { quote: options.quoteNote } : {}),
     },
   });
 
@@ -155,7 +150,7 @@ export async function createPaidWrapper(options: {
   facilitatorUrl: string;
   payTo: `0x${string}`;
   price?: string;
-  quoteSeal?: string;
+  quoteNote?: string;
 }) {
   const resourceServer = await createResourceServer(options.facilitatorUrl);
   return buildPaidWrapper(resourceServer, options);
