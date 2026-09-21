@@ -14,10 +14,10 @@ import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
   Architecture,
   FunctionUrlAuthType,
+  LayerVersion,
   Runtime,
 } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
-import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
 
