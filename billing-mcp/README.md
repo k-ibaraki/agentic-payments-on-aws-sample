@@ -118,9 +118,38 @@ pnpm outputs <名前>  # スタック名を直接指定する
 支払いのときは判定をやり直さずその値を使うので、同じ額で決済できる。価格表を差し替えた
 直後の古い見積書は、表と食い違うため使われず、新しい額で提示し直す。
 
-段の判定には Bedrock の Haiku を使う。`allowedModelIds` に
+### 段を判ずる判定器を切り替える（決定58）
+
+既定は Bedrock の Haiku。`allowedModelIds` に
 `jp.anthropic.claude-haiku-4-5-20251001-v1:0` を含めること。判定は無認証の経路で走るため、
 呼び出し予算で単位時間あたりの費用に天井を付けている（決定57）。
+
+TypeSafe の Jev に切り替えることもできる。手順は二つ。
+
+1. **鍵を入れる。** CDK は空の器（目印 `REPLACE_ME` 入りの Secret）だけを作る。
+   [console.typesafe.ai/keys](https://console.typesafe.ai/keys) で取った鍵を入れる:
+
+   ```sh
+   pnpm set:jev-key            # 端末から。入力は画面に出ない
+   pbpaste | pnpm set:jev-key  # クリップボードから渡す場合
+   ```
+
+   鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは
+   標準入力で受け、`--cli-input-json file:///dev/stdin` で AWS CLI に渡す。
+
+2. **AppConfig の価格表で倒す。** 価格表（profile `tier-table`）に `judge` の欄を足す:
+
+   ```json
+   { "tiers": { "ume": { ... }, "take": { ... }, "matsu": { ... } }, "judge": "systemone" }
+   ```
+
+   再 deploy は要らない。`judge` を省くか読めない値を書けば `bedrock` に戻る
+   （価格表そのものは巻き添えにしない）。鍵が未投入のまま倒した場合も Haiku に留まり、
+   CloudWatch に警告が出る。
+
+切り替えると、買い手の依頼文が AWS の外（`api.typesafe.ai`）へ出る。判定の精度は
+2026-09-21 の実測で Haiku 17/20 に対し Jev 14〜15/20、応答は Jev のほうが約 2 倍速い
+（540ms 対 1,010ms）。詳細は DESIGN.md 決定58。
 
 **`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
 その時点の出力を取り直すこと。
