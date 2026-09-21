@@ -14,7 +14,7 @@
 //                            利用者 1 人・1 セッションあたりの値（決定39）。期限の下限は 15 分。
 //                            上限は利用者が画面で変えられ、変えた値が KVStore にあればそちらが勝つ（決定43）
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
-//   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 100000 = 0.1 USDC）
+//   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 150000 = 0.15 USDC。決定59）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
 //   BUYER_TOOL_TIMEOUT_MS … 有料ツールの応答を待つ上限。既定 600000（売り手の Lambda タイムアウトと同じ 600 秒。
 //                            売り手は Bedrock 呼び出しを 570 秒で打ち切り、その外側の Lambda が 600 秒）。
@@ -75,7 +75,7 @@ export function paymentPolicyFromEnv(): PaymentPolicy {
   return {
     network: BASE_SEPOLIA,
     asset: USDC_BASE_SEPOLIA,
-    maxAmount: process.env.PAYMENT_MAX_AMOUNT ?? '100000',
+    maxAmount: process.env.PAYMENT_MAX_AMOUNT ?? '150000',
     ...(payTo ? { payTo } : {}),
   };
 }
