@@ -13,6 +13,7 @@ import type { TierTableLoader } from "./pricing/config.js";
 import type { Judge } from "./pricing/judge.js";
 import type { JudgeBudgetOptions } from "./pricing/judge-guard.js";
 import type { TierTable } from "./pricing/tiers.js";
+import type { ApiKeyLoader } from "./pricing/typesafe-key.js";
 import {
   type ConverseFn,
   createGenerateHtmlHandler,
@@ -48,6 +49,16 @@ export interface BillingMcpServerOptions {
   generation?: GenerationBudget;
   /** 段の判定器（決定53）。省略時は Bedrock の Haiku */
   judge?: Judge;
+  /**
+   * Jev の API キーの読み手（決定58）。省略時は環境変数と Secrets Manager から読む。
+   * テストで差し替えるために受ける
+   */
+  loadApiKey?: ApiKeyLoader;
+  /**
+   * System One の判定器の作り手（決定58）。省略時は公式 SDK で作る。
+   * テストで差し替えるために受ける
+   */
+  createSystemOne?: (apiKey: string) => Judge;
   /** 見積もりの呼び出し予算（U12）。省略時は app.ts の既定値 */
   judgeBudget?: JudgeBudgetOptions;
   /** 段ごとの価格表（決定56）。省略時は既定値。テストや静的な指定に使う */

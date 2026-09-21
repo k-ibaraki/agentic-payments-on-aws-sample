@@ -41,22 +41,29 @@ describe("不具合チェック用の評価セット", () => {
 
   it("System One の判定器でも順序尺度から同じ段に至る", async () => {
     const scores = { ume: 0.1, take: 1.0, matsu: 1.9 };
-    const fetchImpl = vi.fn().mockImplementation((_url, init) => {
-      const state = JSON.parse(init.body as string).state as string;
+    const fetchImpl = vi.fn(async (_url: unknown, init: { body?: unknown }) => {
+      const state = JSON.parse(String(init.body)).state as string;
       const hit = EVAL_CASES.find((c) => c.prompt === state);
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
+      return new Response(
+        JSON.stringify({
+          model: "jev-1.13.0",
           answers: {
-            tier: { type: "score", score: scores[hit?.tier ?? "take"] },
+            tier: {
+              type: "score",
+              score: scores[hit?.tier ?? "take"],
+              legend: {},
+              probabilities: {},
+              confidence: 0.9,
+            },
           },
+          usage: { input_tokens: 1, output_tokens: 1 },
         }),
-      } as unknown as Response);
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     });
     const judge = createSystemOneJudge({
-      url: "http://example.test/v1/systemone",
       apiKey: "k",
-      fetchImpl,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     for (const c of EVAL_CASES) {
       const result = await judge({

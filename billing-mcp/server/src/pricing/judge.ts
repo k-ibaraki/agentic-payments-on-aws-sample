@@ -17,6 +17,7 @@ import type {
   ConverseCommandInput,
   ConverseCommandOutput,
 } from "@aws-sdk/client-bedrock-runtime";
+import { APIError, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { Tier } from "./quote-seal.js";
 import { TIER_ORDER } from "./tiers.js";
 
@@ -149,14 +150,40 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
 // ---------------------------------------------------------------------------
 
 export interface SystemOneOptions {
-  /** `/v1/systemone` のエンドポイント */
-  url: string;
+  /** Jev の API キー。Secrets Manager から取り出したもの（決定58） */
   apiKey: string;
+  /** API の根。既定は https://api.typesafe.ai。System One 互換サーバーを指すときに使う */
+  baseURL?: string;
   /** 判定に使うモデル名。既定は Jev の最新 */
   model?: string;
+  /** 1 回あたりの待ちの上限 */
+  timeoutMs?: number;
+  /** 再送の回数 */
+  maxRetries?: number;
   /** テストで差し替えるための fetch */
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * 1 回あたりの待ちの上限。
+ *
+ * ここは 402 を返す経路、すなわち買い手が待たされる区間である（決定57 のコメント参照）。
+ * 2026-09-21 の実測で本物の Jev は 1 件あたり 540ms 前後だったので、5 倍の余裕を取る。
+ * SDK の既定（10 秒）をそのまま使うと、詰まったときに待ちが目立つ
+ */
+export const SYSTEM_ONE_TIMEOUT_MS = 3_000;
+
+/**
+ * 再送の回数。
+ *
+ * docs は 429 / 529 にバックオフを案内しているが、SDK の既定（2 回）では最悪の待ちが
+ * 30 秒を超える。判定に失敗しても中央の段で売れる以上、粘る利が無いので 1 回に抑える。
+ * 最悪でも 3 秒 + 待ち + 3 秒に収まる
+ */
+export const SYSTEM_ONE_MAX_RETRIES = 1;
+
+/** 段の判定に使う質問の名前。応答はこの名前で返る */
+const QUESTION_NAME = "tier";
 
 /**
  * 順序尺度の値を段へ写す。
@@ -174,63 +201,62 @@ export function scoreToTier(score: number): Tier {
 }
 
 /**
- * System One 互換の API で判ずる判定器を作る。
+ * System One（Jev および互換サーバー）で判ずる判定器を作る。
  *
- * ワイヤ形式は 2026-09-20 に `jev_local` に対して実地に確かめたもの。`state` と
- * 型付きの質問を渡すと、質問ごとに型付きの答えが返る。ここでは `score`（順序尺度）を
- * 一問だけ投げる
+ * 公式 SDK（`@typesafe-ai/sdk`）に乗る。型・リトライ・`retry-after` の尊重を自前で
+ * 抱えないため。待ちと再送の既定だけは、買い手を待たせない値に締め直す。
+ *
+ * 判定の形に `score`（順序尺度）を採るのは、2026-09-20 にローカルの互換実装 5 種で
+ * 測った際、choice より score が全基盤で優れていたため。
  */
 export function createSystemOneJudge(options: SystemOneOptions): Judge {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const model = options.model ?? "jev-latest";
+  const client = new TypeSafeClient({
+    apiKey: options.apiKey,
+    ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+    defaultModel: options.model ?? "jev-latest",
+    timeout: options.timeoutMs ?? SYSTEM_ONE_TIMEOUT_MS,
+    retry: { maxRetries: options.maxRetries ?? SYSTEM_ONE_MAX_RETRIES },
+    ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
+  });
+
   return async ({ state }) => {
     try {
-      const response = await fetchImpl(options.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${options.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          state,
-          questions: {
-            tier: {
-              type: "score",
-              // 問いと前置きは別の欄に分ける。混ぜると互いに滲み、コード側から
-              // 前置きだけを差し替えられなくなる（docs「構造化した質問定義」）
-              instructions: {
-                question: TIER_QUESTION,
-                context: TIER_CONTEXT,
-              },
-              criteria: TIER_ORDER.map((tier) => TIER_CRITERIA[tier]),
-            },
+      const { answers } = await client.systemOne({
+        state,
+        questions: {
+          [QUESTION_NAME]: {
+            type: "score",
+            // 問いと前置きは別の欄に分ける。混ぜると互いに滲み、コード側から
+            // 前置きだけを差し替えられなくなる（docs「構造化した質問定義」）
+            instructions: { question: TIER_QUESTION, context: TIER_CONTEXT },
+            criteria: TIER_ORDER.map((tier) => TIER_CRITERIA[tier]) as [
+              string,
+              string,
+              ...string[],
+            ],
           },
-        }),
+        },
       });
-      if (!response.ok) {
-        // 本文を読まないまま捨てると接続がプールへ戻らない
-        await response.body?.cancel();
-        console.warn(
-          `[pricing] System One が段を返しませんでした（HTTP ${response.status}）`,
-        );
-        return { tier: FALLBACK_TIER, fellBack: true };
-      }
-      const body = (await response.json()) as {
-        answers?: { tier?: { score?: number; confidence?: number } };
-      };
-      const score = body.answers?.tier?.score;
-      if (typeof score !== "number" || !Number.isFinite(score)) {
+      const answer = answers[QUESTION_NAME];
+      if (answer?.type !== "score" || !Number.isFinite(answer.score)) {
         console.warn("[pricing] System One の応答から段を読み取れませんでした");
         return { tier: FALLBACK_TIER, fellBack: true };
       }
-      const confidence = body.answers?.tier?.confidence;
       return {
-        tier: scoreToTier(score),
-        ...(typeof confidence === "number" ? { confidence } : {}),
+        tier: scoreToTier(answer.score),
+        ...(typeof answer.confidence === "number"
+          ? { confidence: answer.confidence }
+          : {}),
       };
     } catch (error) {
-      console.warn("[pricing] System One への問い合わせに失敗しました", error);
+      // 鍵切れ・過負荷・繋がらないを同じ一行に潰さない。HTTP まで届いたなら
+      // ステータスを添える（APIError だけが status を持つ）
+      const status =
+        error instanceof APIError ? `（HTTP ${error.status}）` : "";
+      console.warn(
+        `[pricing] System One への問い合わせに失敗しました${status}`,
+        error,
+      );
       return { tier: FALLBACK_TIER, fellBack: true };
     }
   };

@@ -31,6 +31,54 @@ export interface JudgeBudgetOptions {
   now?: () => number;
 }
 
+export interface JudgeBudget {
+  /** 判定器をこの予算で包む。同じ予算から包んだものはバケツを共有する */
+  wrap(judge: Judge): Judge;
+}
+
+/**
+ * 呼び出し予算を作る。
+ *
+ * バケツは予算そのものが持つ。判定器は価格表の指定で毎リクエスト選び直す（決定58）
+ * ため、包むたびにバケツができる造りだと予算が毎回満タンに戻り、防護が消える
+ */
+export function createJudgeBudget(options: JudgeBudgetOptions): JudgeBudget {
+  const now = options.now ?? Date.now;
+  let tokens = options.capacity;
+  let lastRefill = now();
+
+  /** 1 回ぶんの予算を取る。取れなければ false */
+  const take = (): boolean => {
+    const current = now();
+    const refilled = ((current - lastRefill) / 1_000) * options.refillPerSecond;
+    if (refilled > 0) {
+      tokens = Math.min(options.capacity, tokens + refilled);
+      lastRefill = current;
+    }
+    if (tokens < 1) return false;
+    tokens -= 1;
+    return true;
+  };
+
+  return {
+    wrap(judge) {
+      return async (request) => {
+        if (!take()) {
+          console.warn(
+            "[pricing] 見積もりの呼び出し予算を使い切りました。既定の段で応じます（決定57）",
+          );
+          return FALLBACK;
+        }
+        const state =
+          request.state.length > JUDGE_STATE_LIMIT
+            ? request.state.slice(0, JUDGE_STATE_LIMIT)
+            : request.state;
+        return judge({ ...request, state });
+      };
+    },
+  };
+}
+
 /**
  * 判定器を呼び出し予算で包む。
  *
@@ -41,30 +89,5 @@ export function withJudgeBudget(
   judge: Judge,
   options: JudgeBudgetOptions,
 ): Judge {
-  const now = options.now ?? Date.now;
-  let tokens = options.capacity;
-  let lastRefill = now();
-
-  return async (request) => {
-    const current = now();
-    const refilled = ((current - lastRefill) / 1_000) * options.refillPerSecond;
-    if (refilled > 0) {
-      tokens = Math.min(options.capacity, tokens + refilled);
-      lastRefill = current;
-    }
-
-    if (tokens < 1) {
-      console.warn(
-        "[pricing] 見積もりの呼び出し予算を使い切りました。既定の段で応じます（決定57）",
-      );
-      return FALLBACK;
-    }
-    tokens -= 1;
-
-    const state =
-      request.state.length > JUDGE_STATE_LIMIT
-        ? request.state.slice(0, JUDGE_STATE_LIMIT)
-        : request.state;
-    return judge({ ...request, state });
-  };
+  return createJudgeBudget(options).wrap(judge);
 }

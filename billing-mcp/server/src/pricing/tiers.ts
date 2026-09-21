@@ -19,8 +19,22 @@ export interface TierEntry {
   targetTokens: number;
 }
 
+/**
+ * 段を判ずる判定器の種類（決定58）。
+ *
+ * 既定は Bedrock の Haiku。`systemone` は TypeSafe の Jev（および System One 互換の
+ * サーバー）を指す。価格表と同じ profile に置くので、運用中に再 deploy なしで倒せる
+ */
+export const JUDGE_KINDS = ["bedrock", "systemone"] as const;
+
+export type JudgeKind = (typeof JUDGE_KINDS)[number];
+
+export const DEFAULT_JUDGE_KIND: JudgeKind = "bedrock";
+
 export interface TierTable {
   tiers: Record<Tier, TierEntry>;
+  /** 段を判ずる判定器（決定58） */
+  judge: JudgeKind;
 }
 
 /**
@@ -35,6 +49,7 @@ export const DEFAULT_TIER_TABLE: TierTable = {
     take: { price: "$0.15", targetTokens: 8_000 },
     matsu: { price: "$0.2", targetTokens: 12_000 },
   },
+  judge: DEFAULT_JUDGE_KIND,
 };
 
 const LABELS: Record<Tier, string> = { ume: "梅", take: "竹", matsu: "松" };
@@ -92,6 +107,25 @@ function parseEntry(value: unknown): TierEntry | undefined {
 }
 
 /**
+ * 判定器の指定を読む（決定58）。
+ *
+ * 読めなければ既定（Bedrock）へ戻す。価格表ごと退けないのは、判定器の書き損じで
+ * 価格まで巻き添えにしないため。黙って戻すと気づけないので警告は残す
+ */
+function parseJudgeKind(value: unknown): JudgeKind {
+  if (value === undefined) return DEFAULT_JUDGE_KIND;
+  if (
+    typeof value === "string" &&
+    (JUDGE_KINDS as readonly string[]).includes(value)
+  )
+    return value as JudgeKind;
+  console.warn(
+    `[pricing] 判定器の指定を読み取れませんでした（${JSON.stringify(value)}）。${DEFAULT_JUDGE_KIND} を使います`,
+  );
+  return DEFAULT_JUDGE_KIND;
+}
+
+/**
  * 外から来た価格表を読む（AppConfig の設定値を想定）。
  *
  * 読めなければ undefined を返し、呼び出し側は既定値を使い続ける。設定の書き損じで
@@ -117,7 +151,7 @@ export function parseTierTable(value: unknown): TierTable | undefined {
     if (priceValue(upper.price) <= priceValue(lower.price)) return undefined;
   }
 
-  return { tiers };
+  return { tiers, judge: parseJudgeKind(value.judge) };
 }
 
 /** モデルの出力上限。これを超える maxTokens は指定できない */

@@ -8,8 +8,9 @@ import {
   createResourceServer,
 } from "./billing-mcp-server.js";
 import { tierTableLoaderFromEnv } from "./pricing/config.js";
-import { createBedrockJudge, type Judge } from "./pricing/judge.js";
-import { withJudgeBudget } from "./pricing/judge-guard.js";
+import { createBedrockJudge } from "./pricing/judge.js";
+import { createJudgeBudget } from "./pricing/judge-guard.js";
+import { createJudgeSelector } from "./pricing/judge-select.js";
 import { resolveQuote } from "./pricing/quote.js";
 import {
   DEFAULT_TIER_TABLE,
@@ -17,6 +18,10 @@ import {
   quoteDisclosure,
   tierLabel,
 } from "./pricing/tiers.js";
+import {
+  createApiKeyLoader,
+  createDefaultSecretReader,
+} from "./pricing/typesafe-key.js";
 import {
   type ConverseFn,
   createDefaultConverse,
@@ -89,14 +94,29 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  // 段の判定器（決定53）。Bedrock クライアントは共有する。
-  // System One（Jev 互換）へ差し替えるときはここを createSystemOneJudge に替える
   // 乱発への防護（決定57）。無認証の公開エンドポイントでは、支払う気のない相手が
-  // 見積もりだけを繰り返せる。予算を使い切ったら判定器を呼ばず既定の段で売る
-  const judge: Judge = withJudgeBudget(
-    options.judge ?? createBedrockJudge(resolvedOptions.converse as ConverseFn),
+  // 見積もりだけを繰り返せる。予算を使い切ったら判定器を呼ばず既定の段で売る。
+  // バケツはコンテナに 1 つで、判定器を選び直しても引き継がれる（決定58）
+  const judgeBudget = createJudgeBudget(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
+  // 段の判定器（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
+  // 共有する。価格表が systemone を指していれば Jev に切り替える。鍵はコールド
+  // スタートに一度だけ Secrets Manager から読む
+  const selectJudge = createJudgeSelector({
+    bedrock:
+      options.judge ??
+      createBedrockJudge(resolvedOptions.converse as ConverseFn),
+    loadApiKey:
+      options.loadApiKey ??
+      createApiKeyLoader({
+        env: process.env,
+        read: createDefaultSecretReader(),
+      }),
+    ...(options.createSystemOne
+      ? { createSystemOne: options.createSystemOne }
+      : {}),
+  });
 
   // facilitator への /supported 照会を伴う初期化だけを使い回す。
   // accepts の構築は段ごとに価格が変わるため毎リクエスト行う（決定56）
@@ -154,6 +174,9 @@ export function createMcpFetchHandler(
     const table = options.loadTierTable
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
+    // 判定器は価格表の指定で毎リクエスト選ぶ（AppConfig で倒せるため）。
+    // 予算はコンテナ共有のバケツから取る
+    const judge = judgeBudget.wrap(await selectJudge(table.judge));
     const quote = await resolveQuote(body, { table, judge });
 
     let payment: Awaited<ReturnType<typeof buildPaidWrapper>>;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { TierTable } from "./tiers.js";
 import {
   DEFAULT_TIER_TABLE,
   generationBudgetOf,
@@ -161,5 +162,33 @@ describe("買い手への根拠の開示（決定56）", () => {
     expect(text).toContain("ご依頼の内容");
     expect(text).not.toContain("簡素");
     expect(text).not.toContain("値引き");
+  });
+});
+
+describe("判定器の切り替え（決定58）", () => {
+  const VALID_TIERS = {
+    ume: { price: "$0.1", targetTokens: 5_000 },
+    take: { price: "$0.15", targetTokens: 8_000 },
+    matsu: { price: "$0.2", targetTokens: 12_000 },
+  };
+
+  it("既定の表は Bedrock を指す", () => {
+    expect(DEFAULT_TIER_TABLE.judge).toBe("bedrock");
+  });
+
+  it("judge の欄が無ければ Bedrock を指す", () => {
+    expect(parseTierTable({ tiers: VALID_TIERS })?.judge).toBe("bedrock");
+  });
+
+  it("systemone を指定できる", () => {
+    const table = parseTierTable({ tiers: VALID_TIERS, judge: "systemone" });
+    expect(table?.judge).toBe("systemone");
+  });
+
+  // 価格表ごと退けると、判定器の書き損じで価格まで巻き添えになる
+  it("judge の欄が不正でも価格表は生かし、判定器だけ既定へ戻す", () => {
+    const table = parseTierTable({ tiers: VALID_TIERS, judge: "jev" });
+    expect(table?.judge).toBe("bedrock");
+    expect(priceOf(table as TierTable, "take")).toBe("$0.15");
   });
 });
