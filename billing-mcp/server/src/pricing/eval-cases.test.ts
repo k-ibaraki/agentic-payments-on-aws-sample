@@ -3,8 +3,9 @@ import { EVAL_CASES } from "./eval-cases.js";
 import { createBedrockJudge, createSystemOneJudge } from "./judge.js";
 import { TIER_ORDER } from "./tiers.js";
 
-// 判定器を実際のモデルに繋がずに確かめる。見るのは精度ではなく、段を作り分けられて
-// いるかどうかである。実測では、全件を同じ段に潰す事故がたびたび起きた
+// 判定器を実際のモデルに繋がずに確かめる。見るのは精度ではなく、評価セットの段が
+// 判定器の出口まで結線されているかどうかである。実モデルが全件を同じ段に潰す事故
+// （実測でたびたび起きた）は、モデルを差し替えているここでは捕まらない
 describe("不具合チェック用の評価セット", () => {
   it("各段がちょうど1件ずつある", () => {
     const tiers = EVAL_CASES.map((c) => c.tier);

@@ -26,7 +26,7 @@ import {
 export const MCP_PATH = "/mcp";
 
 /**
- * 見積もりの呼び出し予算の既定値（U12）。
+ * 見積もりの呼び出し予算の既定値（決定57）。
  *
  * コンテナごとに持つので、全体の天井は「同時実行数 × この値」になる。
  * 正規の買い手は 1 回の購入につき見積もりを 1 度しか要さないため、
@@ -91,7 +91,7 @@ export function createMcpFetchHandler(
   };
   // 段の判定器（決定53）。Bedrock クライアントは共有する。
   // System One（Jev 互換）へ差し替えるときはここを createSystemOneJudge に替える
-  // 乱発への防護（U12）。無認証の公開エンドポイントでは、支払う気のない相手が
+  // 乱発への防護（決定57）。無認証の公開エンドポイントでは、支払う気のない相手が
   // 見積もりだけを繰り返せる。予算を使い切ったら判定器を呼ばず既定の段で売る
   const judge: Judge = withJudgeBudget(
     options.judge ?? createBedrockJudge(resolvedOptions.converse as ConverseFn),
@@ -175,7 +175,14 @@ export function createMcpFetchHandler(
     }
 
     if (quote.quote) {
-      console.info(`[pricing] 段=${tierLabel(quote.tier)} 価格=${quote.price}`);
+      // 確信度は判断に使わないが、水準の記述が効いているかを実地で見るために残す
+      const confidence =
+        quote.confidence === undefined
+          ? ""
+          : ` 確信度=${quote.confidence.toFixed(2)}`;
+      console.info(
+        `[pricing] 段=${tierLabel(quote.tier)} 価格=${quote.price}${confidence}`,
+      );
     }
 
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに

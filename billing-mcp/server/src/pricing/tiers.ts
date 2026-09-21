@@ -70,6 +70,11 @@ export function sizeHintOf(table: TierTable, tier: Tier): string {
 /** "$0.1" のような価格の形 */
 const PRICE_PATTERN = /^\$\d+(\.\d+)?$/;
 
+/** 価格の額。形を検めたあとにだけ呼ぶ */
+function priceValue(price: string): number {
+  return Number(price.slice(1));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -78,6 +83,8 @@ function parseEntry(value: unknown): TierEntry | undefined {
   if (!isRecord(value)) return undefined;
   const { price, targetTokens } = value;
   if (typeof price !== "string" || !PRICE_PATTERN.test(price)) return undefined;
+  // 0 ドルの表は書き損じとみなす。ただで売る意図があるなら価格表ではなく決定で示す
+  if (priceValue(price) <= 0) return undefined;
   if (typeof targetTokens !== "number" || !Number.isInteger(targetTokens))
     return undefined;
   if (targetTokens <= 0) return undefined;
@@ -102,13 +109,12 @@ export function parseTierTable(value: unknown): TierTable | undefined {
   }
   const tiers = entries as Record<Tier, TierEntry>;
 
-  // 段が上がるほど規模が大きくなっていること。逆転した表は設定の書き損じとみなす
+  // 段が上がるほど規模も価格も大きくなっていること。逆転した表は設定の書き損じとみなす
   for (let i = 1; i < TIER_ORDER.length; i++) {
-    if (
-      tiers[TIER_ORDER[i]].targetTokens <= tiers[TIER_ORDER[i - 1]].targetTokens
-    ) {
-      return undefined;
-    }
+    const lower = tiers[TIER_ORDER[i - 1]];
+    const upper = tiers[TIER_ORDER[i]];
+    if (upper.targetTokens <= lower.targetTokens) return undefined;
+    if (priceValue(upper.price) <= priceValue(lower.price)) return undefined;
   }
 
   return { tiers };

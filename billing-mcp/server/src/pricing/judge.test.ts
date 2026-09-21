@@ -2,8 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createBedrockJudge,
   createSystemOneJudge,
+  scoreToTier,
+  TIER_CONTEXT,
   TIER_CRITERIA,
+  TIER_QUESTION,
 } from "./judge.js";
+import type { Tier } from "./quote-seal.js";
 
 /** Converse の戻りを、本文だけ差し替えて作る */
 function converseReturning(text: string) {
@@ -129,5 +133,105 @@ describe("System One（Jev 互換）を使う判定器", () => {
       fetchImpl: vi.fn().mockRejectedValue(new Error("unreachable")),
     });
     expect((await judge({ toolName: "t", state: "s" })).fellBack).toBe(true);
+  });
+
+  // 鍵切れと過負荷と応答形式の変更を同じ一行に潰さない
+  it("HTTP エラーならその旨を残して中央の段へ落とす", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const judge = createSystemOneJudge({
+      url: "http://example.test/v1/systemone",
+      apiKey: "k",
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({}),
+      } as unknown as Response),
+    });
+    const result = await judge({ toolName: "t", state: "s" });
+    expect(result.tier).toBe("take");
+    expect(result.fellBack).toBe(true);
+    expect(warn.mock.calls.flat().join(" ")).toContain("429");
+    warn.mockRestore();
+  });
+
+  // Bedrock 側の前置きと同じ土台で判じさせる（docs の「構造化した質問定義」）
+  it("問いと前置きを instructions の別の欄に分けて載せる", async () => {
+    const fetchImpl = fetchReturning(scoreAnswer(1.0));
+    const judge = createSystemOneJudge({
+      url: "http://example.test/v1/systemone",
+      apiKey: "k",
+      fetchImpl,
+    });
+    await judge({ toolName: "t", state: "s" });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(body.questions.tier.instructions.question).toBe(TIER_QUESTION);
+    expect(body.questions.tier.instructions.context).toBe(TIER_CONTEXT);
+  });
+
+  it("確信度をそのまま返す", async () => {
+    const judge = createSystemOneJudge({
+      url: "http://example.test/v1/systemone",
+      apiKey: "k",
+      fetchImpl: fetchReturning(scoreAnswer(1.0)),
+    });
+    expect((await judge({ toolName: "t", state: "s" })).confidence).toBe(0.8);
+  });
+});
+
+describe("段の読み取りの寛容さ", () => {
+  // 完全一致だと `take。` のような些細な飾りで中央へ落ち、静かに価格へ響く
+  it("飾りが付いていても段を読み取れる", async () => {
+    const cases: Array<[string, Tier]> = [
+      ["take。", "take"],
+      ["`matsu`", "matsu"],
+      ["答え: ume", "ume"],
+      ["TAKE\n", "take"],
+    ];
+    for (const [text, tier] of cases) {
+      const judge = createBedrockJudge(converseReturning(text));
+      expect((await judge({ toolName: "t", state: "s" })).tier).toBe(tier);
+    }
+  });
+
+  it("段が混ざっていれば読み取れない扱いにする", async () => {
+    const judge = createBedrockJudge(converseReturning("ume か matsu で迷う"));
+    const result = await judge({ toolName: "t", state: "s" });
+    expect(result.tier).toBe("take");
+    expect(result.fellBack).toBe(true);
+  });
+
+  // "document" は部分文字列として "ume" を含む。語の切れ目で拾う
+  it("別の語の一部に段の名前が紛れても拾わない", async () => {
+    const judge = createBedrockJudge(converseReturning("document"));
+    expect((await judge({ toolName: "t", state: "s" })).fellBack).toBe(true);
+  });
+
+  it("答えが複数のブロックに分かれていても読み取れる", async () => {
+    const judge = createBedrockJudge(
+      vi.fn().mockResolvedValue({
+        output: { message: { content: [{ text: "" }, { text: "matsu" }] } },
+      }),
+    );
+    expect((await judge({ toolName: "t", state: "s" })).tier).toBe("matsu");
+  });
+});
+
+describe("順序尺度から段への写し", () => {
+  it("水準の中間が境になる", () => {
+    expect(scoreToTier(0.49)).toBe("ume");
+    expect(scoreToTier(0.5)).toBe("take");
+    expect(scoreToTier(1.49)).toBe("take");
+    expect(scoreToTier(1.5)).toBe("matsu");
+  });
+
+  it("範囲の外に出た値は端の段に収める", () => {
+    expect(scoreToTier(-1)).toBe("ume");
+    expect(scoreToTier(9)).toBe("matsu");
+  });
+
+  // export した関数が `Tier` を名乗って undefined を返さないこと
+  it("有限でない値は中央の段に収める", () => {
+    expect(scoreToTier(Number.NaN)).toBe("take");
+    expect(scoreToTier(Number.POSITIVE_INFINITY)).toBe("take");
   });
 });

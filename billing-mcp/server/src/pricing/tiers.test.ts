@@ -87,6 +87,30 @@ describe("parseTierTable（AppConfig から読む想定）", () => {
     ).toBeUndefined();
   });
 
+  // 外から与える表で弾かれる形を、既定値として置いてしまわないように
+  it("既定の価格表も同じ検めを通る", () => {
+    expect(parseTierTable(DEFAULT_TIER_TABLE)).toEqual(DEFAULT_TIER_TABLE);
+  });
+
+  it("価格が段の順に増えていなければ読まない", () => {
+    expect(
+      parseTierTable({
+        tiers: {
+          ...valid.tiers,
+          matsu: { price: "$0.1", targetTokens: 15_000 },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("0 ドルの価格は読まない", () => {
+    expect(
+      parseTierTable({
+        tiers: { ...valid.tiers, ume: { price: "$0", targetTokens: 4_000 } },
+      }),
+    ).toBeUndefined();
+  });
+
   it("壊れた入力でも例外を投げずに undefined を返す", () => {
     for (const broken of [null, undefined, 1, "x", {}, { tiers: null }]) {
       expect(parseTierTable(broken)).toBeUndefined();

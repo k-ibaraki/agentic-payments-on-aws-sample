@@ -40,6 +40,11 @@ export interface ResolvedQuote {
    * 値付けの対象でない呼び出しでは付けない
    */
   quote?: string;
+  /**
+   * 判定器が確信度を返した場合のみ。判断には使わず、記録するために運ぶ。
+   * 見積書を読んだ 2 往復目では付かない
+   */
+  confidence?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,10 +117,15 @@ export async function resolveQuote(
     );
   }
 
-  const { tier } = await judge({
+  const { tier, confidence } = await judge({
     toolName: PAID_TOOL_NAME,
     state: call.prompt,
   });
   const price = priceOf(table, tier);
-  return { tier, price, quote: encodeQuote({ tier, price }) };
+  return {
+    tier,
+    price,
+    quote: encodeQuote({ tier, price }),
+    ...(confidence === undefined ? {} : { confidence }),
+  };
 }

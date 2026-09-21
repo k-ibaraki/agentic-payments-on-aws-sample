@@ -9,6 +9,10 @@
 // 確信度を返す）に合わせてあり、Jev や互換サーバーへ差し替えられる。2026-09-20 に
 // ローカルの Jev 互換実装 5 種を実測した結果、判定の形は choice より score が全基盤で
 // 優れていたため、System One 側は score を使う。
+//
+// score は水準ごとの確率の期待値なので、判定が割れるほど値は中央へ寄り、中央の段
+// （竹）に着地する。すなわち確信度で分岐させずとも、迷いはフォールバック先へ流れる。
+// 確信度は判断には使わず、水準の記述が効いているかを見るために記録だけする。
 import type {
   ConverseCommandInput,
   ConverseCommandOutput,
@@ -48,6 +52,18 @@ export const TIER_CRITERIA: Record<Tier, string> = {
   matsu: "機能が多岐にわたり、画面の切り替えや状態の管理を伴うページ",
 };
 
+/** 判ずる内容そのもの */
+export const TIER_QUESTION = "この依頼で作るべきページの規模を評価する";
+
+/**
+ * 判定の土台に置く前置き。
+ *
+ * 水準の記述だけでは、扱う品揃えがどのあたりに集まっているのかが伝わらない。
+ * どちらの判定器にも同じものを渡し、同じ土台で判じさせる
+ */
+export const TIER_CONTEXT =
+  "扱うのはいずれも相応に作り込まれたページです。極端に短いページは出てきません。";
+
 // ---------------------------------------------------------------------------
 // Bedrock（既定）
 // ---------------------------------------------------------------------------
@@ -61,7 +77,7 @@ export const JUDGE_MODEL_ID = "jp.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 const BEDROCK_SYSTEM_PROMPT = [
   "あなたはHTML生成サービスの見積もり係です。依頼文を読み、作るべきページの規模を3段から1つ選びます。",
-  "扱うのはいずれも相応に作り込まれたページです。極端に短いページは出てきません。",
+  TIER_CONTEXT,
   "",
   `ume: ${TIER_CRITERIA.ume}`,
   `take: ${TIER_CRITERIA.take}`,
@@ -70,9 +86,26 @@ const BEDROCK_SYSTEM_PROMPT = [
   "ume / take / matsu のいずれか1語だけを出力してください。説明は不要です。",
 ].join("\n");
 
+/**
+ * 答えの中の段の名前。語の切れ目で拾い、`document` の中の `ume` を掴まない。
+ *
+ * 段を増減しても書き直さずに済むよう `TIER_ORDER` から組む
+ */
+const TIER_WORD = new RegExp(`\\b(${TIER_ORDER.join("|")})\\b`, "g");
+
+/**
+ * モデルの答えから段を読む。
+ *
+ * 完全一致で照らすと `take。` や `` `take` `` のような些細な飾りで読めなくなり、
+ * 黙って中央の段へ落ちて価格に響く。語として含まれるかで拾う。段が複数混じって
+ * いれば選べていないということなので、読めない扱いにする
+ */
 function readTier(text: string | undefined): Tier | undefined {
-  const found = text?.trim().toLowerCase();
-  return TIER_ORDER.find((tier) => tier === found);
+  if (!text) return undefined;
+  const found = new Set<Tier>(
+    [...text.toLowerCase().matchAll(TIER_WORD)].map(([, word]) => word as Tier),
+  );
+  return found.size === 1 ? [...found][0] : undefined;
 }
 
 /**
@@ -88,9 +121,14 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
         modelId: JUDGE_MODEL_ID,
         system: [{ text: BEDROCK_SYSTEM_PROMPT }],
         messages: [{ role: "user", content: [{ text: state }] }],
-        inferenceConfig: { maxTokens: 8, temperature: 0 },
+        // 1 語で足りるが、前置きを添えられたときに語が途中で切れないよう余裕を持たせる
+        inferenceConfig: { maxTokens: 16, temperature: 0 },
       });
-      const tier = readTier(response.output?.message?.content?.[0]?.text);
+      const tier = readTier(
+        response.output?.message?.content
+          ?.map((block) => block.text ?? "")
+          .join(" "),
+      );
       if (!tier) {
         console.warn("[pricing] 段を読み取れなかったため既定の段に落とします");
         return { tier: FALLBACK_TIER, fellBack: true };
@@ -121,14 +159,18 @@ export interface SystemOneOptions {
 }
 
 /**
- * 順序尺度の値を段へ写す。水準は 0 から始まるので、境は水準の中間に置く。
+ * 順序尺度の値を段へ写す。
  *
- * 3 水準なら 0 / 1 / 2 が各段の中心で、0.5 と 1.5 が境になる
+ * 水準は 0 から始まり、段の数だけある。各段の中心は水準の番号そのものなので、
+ * 四捨五入すれば最も近い段になる（3 段なら境は 0.5 と 1.5）。段を増減しても
+ * 境を書き直さずに済むよう、水準の数から導く。範囲の外に出た値は端へ収める
  */
 export function scoreToTier(score: number): Tier {
-  if (score < 0.5) return "ume";
-  if (score < 1.5) return "take";
-  return "matsu";
+  // 呼び出し側でも検めているが、export した関数が `Tier` を名乗って undefined を
+  // 返すことのないよう、ここでも塞ぐ
+  if (!Number.isFinite(score)) return FALLBACK_TIER;
+  const level = Math.min(Math.max(Math.round(score), 0), TIER_ORDER.length - 1);
+  return TIER_ORDER[level];
 }
 
 /**
@@ -155,12 +197,25 @@ export function createSystemOneJudge(options: SystemOneOptions): Judge {
           questions: {
             tier: {
               type: "score",
-              instructions: "この依頼で作るべきページの規模を評価する",
+              // 問いと前置きは別の欄に分ける。混ぜると互いに滲み、コード側から
+              // 前置きだけを差し替えられなくなる（docs「構造化した質問定義」）
+              instructions: {
+                question: TIER_QUESTION,
+                context: TIER_CONTEXT,
+              },
               criteria: TIER_ORDER.map((tier) => TIER_CRITERIA[tier]),
             },
           },
         }),
       });
+      if (!response.ok) {
+        // 本文を読まないまま捨てると接続がプールへ戻らない
+        await response.body?.cancel();
+        console.warn(
+          `[pricing] System One が段を返しませんでした（HTTP ${response.status}）`,
+        );
+        return { tier: FALLBACK_TIER, fellBack: true };
+      }
       const body = (await response.json()) as {
         answers?: { tier?: { score?: number; confidence?: number } };
       };

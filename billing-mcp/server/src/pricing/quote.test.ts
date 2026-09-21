@@ -36,6 +36,26 @@ describe("支払いの無い呼び出し", () => {
     expect(decodeQuote(result.quote)).toEqual({ tier: "matsu", price: "$0.2" });
   });
 
+  // 水準の記述が効いているかを実地で観測するため、確信度は呼び出し側まで運ぶ
+  it("判定器が確信度を返せば見積もりに載せる", async () => {
+    const judge: Judge = vi
+      .fn()
+      .mockResolvedValue({ tier: "take", confidence: 0.73 });
+    const result = await resolveQuote(toolCall("FAQページ"), {
+      ...base,
+      judge,
+    });
+    expect(result.confidence).toBe(0.73);
+  });
+
+  it("確信度を返さない判定器なら載せない", async () => {
+    const result = await resolveQuote(toolCall("FAQページ"), {
+      ...base,
+      judge: judgeReturning("take"),
+    });
+    expect(result.confidence).toBeUndefined();
+  });
+
   it("依頼文を判定器へ渡す", async () => {
     const judge = judgeReturning("ume");
     await resolveQuote(toolCall("連絡先ページ"), { ...base, judge });
