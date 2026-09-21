@@ -127,3 +127,71 @@ describe("billing-mcp スタック", () => {
     );
   });
 });
+
+describe("段階制の値付けに要る資源（決定55・56）", () => {
+  let template: Template;
+
+  beforeAll(() => {
+    template = synth();
+  });
+
+  it("封の鍵を Secrets Manager に作り、値はテンプレートに現れない", () => {
+    template.resourceCountIs("AWS::SecretsManager::Secret", 1);
+    const secrets = template.findResources("AWS::SecretsManager::Secret");
+    const properties = Object.values(secrets)[0].Properties;
+    expect(properties.GenerateSecretString).toBeDefined();
+    expect(JSON.stringify(properties)).not.toContain("SecretString\":\"");
+  });
+
+  it("関数には鍵の値ではなく在り処だけを渡す", () => {
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          QUOTE_SEAL_SECRET_ARN: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it("価格表を AppConfig に置き、既定の3段を載せる", () => {
+    template.resourceCountIs("AWS::AppConfig::Application", 1);
+    template.resourceCountIs("AWS::AppConfig::HostedConfigurationVersion", 1);
+    const versions = template.findResources(
+      "AWS::AppConfig::HostedConfigurationVersion",
+    );
+    const content = Object.values(versions)[0].Properties.Content as string;
+    const table = JSON.parse(content);
+    expect(Object.keys(table.tiers)).toEqual(["ume", "take", "matsu"]);
+    expect(table.tiers.take.price).toBe("$0.15");
+  });
+
+  it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {
+    const functions = template.findResources("AWS::Lambda::Function");
+    const variables = Object.values(functions)[0].Properties.Environment
+      .Variables as Record<string, unknown>;
+    expect(variables.APPCONFIG_APPLICATION).toBeUndefined();
+  });
+
+  it("拡張レイヤーを渡せば AppConfig を参照し、読み取りを許す", () => {
+    const layerArn =
+      "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1";
+    const withLayer = synth({ appConfigExtensionLayerArn: layerArn });
+    withLayer.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          APPCONFIG_APPLICATION: Match.anyValue(),
+        }),
+      },
+      Layers: Match.arrayWith([layerArn]),
+    });
+    withLayer.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["appconfig:GetLatestConfiguration"]),
+          }),
+        ]),
+      }),
+    });
+  });
+});

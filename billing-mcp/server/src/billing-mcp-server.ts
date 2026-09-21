@@ -9,7 +9,9 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { createPaymentWrapper, x402ResourceServer } from "@x402/mcp";
 import { guardPayment } from "./payment-guard.js";
+import type { TierTableLoader } from "./pricing/config.js";
 import type { Judge } from "./pricing/judge.js";
+import type { QuoteSealKeyLoader } from "./pricing/seal-key.js";
 import type { TierTable } from "./pricing/tiers.js";
 import {
   type ConverseFn,
@@ -46,10 +48,17 @@ export interface BillingMcpServerOptions {
   generation?: GenerationBudget;
   /** 段の判定器（決定53）。省略時は Bedrock の Haiku */
   judge?: Judge;
-  /** 段ごとの価格表（決定56）。省略時は既定値。AppConfig から差し替える */
+  /** 段ごとの価格表（決定56）。省略時は既定値。テストや静的な指定に使う */
   tierTable?: TierTable;
-  /** 見積書の封の鍵（決定55）。本番では Secrets Manager から渡す */
+  /**
+   * 価格表の読み手（決定56）。AppConfig から読む場合に渡す。
+   * `tierTable` より優先する
+   */
+  loadTierTable?: TierTableLoader;
+  /** 見積書の封の鍵（決定55）。テストや静的な指定に使う */
   quoteSealKey?: string;
+  /** 封の鍵の読み手（決定55）。省略時は環境変数と Secrets Manager から調達する */
+  loadQuoteSealKey?: QuoteSealKeyLoader;
 }
 
 // ui:// で配信する HTML の場所を決める。

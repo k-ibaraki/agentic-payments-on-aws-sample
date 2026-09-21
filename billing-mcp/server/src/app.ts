@@ -7,8 +7,10 @@ import {
   createBillingMcpServer,
   createResourceServer,
 } from "./billing-mcp-server.js";
+import { tierTableLoaderFromEnv } from "./pricing/config.js";
 import { createBedrockJudge, type Judge } from "./pricing/judge.js";
 import { resolveQuote } from "./pricing/quote.js";
+import { createQuoteSealKeyLoader } from "./pricing/seal-key.js";
 import {
   DEFAULT_TIER_TABLE,
   generationBudgetOf,
@@ -21,13 +23,6 @@ import {
 
 /** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
 export const MCP_PATH = "/mcp";
-
-/**
- * 見積書の封の鍵の既定値（決定55）。開発とテスト専用。
- *
- * 本番で使うと、封を偽造して安い段で買えてしまう。`QUOTE_SEAL_KEY` を必ず渡すこと
- */
-export const DEV_QUOTE_SEAL_KEY = "dev-only-quote-seal-key";
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
 // Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
@@ -95,6 +90,9 @@ export function createMcpFetchHandler(
     | ReturnType<typeof createResourceServer>
     | undefined;
 
+  // 封の鍵（決定55）。Secrets Manager からの取得は初回だけ
+  const getSealKey = options.loadQuoteSealKey ?? createQuoteSealKeyLoader();
+
   const getResourceServer = () => {
     if (!resourceServerPromise) {
       const pending = createResourceServer(options.facilitatorUrl);
@@ -140,11 +138,15 @@ export function createMcpFetchHandler(
     // transport には同じ本文で組み直した Request を渡す
     const body = await request.text();
 
-    const table = options.tierTable ?? DEFAULT_TIER_TABLE;
+    // AppConfig の読み手があればそれを優先する。読めない設定は退けられ、
+    // 直前に読めた表（無ければ既定の表）が返る
+    const table = options.loadTierTable
+      ? await options.loadTierTable()
+      : (options.tierTable ?? DEFAULT_TIER_TABLE);
     const quote = await resolveQuote(body, {
       table,
       judge,
-      key: options.quoteSealKey ?? DEV_QUOTE_SEAL_KEY,
+      key: options.quoteSealKey ?? (await getSealKey()),
       nowSeconds: Math.floor(Date.now() / 1000),
     });
 
@@ -218,18 +220,12 @@ export function optionsFromEnv(): BillingMcpServerOptions {
   if (!payTo) {
     throw new Error("環境変数 PAY_TO_ADDRESS（売上受取ウォレット）が必要です");
   }
-  const quoteSealKey = process.env.QUOTE_SEAL_KEY;
-  if (!quoteSealKey) {
-    console.warn(
-      "[pricing] QUOTE_SEAL_KEY が未設定です。開発用の鍵で動きますが、" +
-        "本番では封を偽造されます（決定55）",
-    );
-  }
+  const loadTierTable = tierTableLoaderFromEnv();
   return {
     facilitatorUrl:
       process.env.FACILITATOR_URL ?? "https://x402.org/facilitator",
     payTo,
     price: process.env.PRICE,
-    ...(quoteSealKey ? { quoteSealKey } : {}),
+    ...(loadTierTable ? { loadTierTable } : {}),
   };
 }
