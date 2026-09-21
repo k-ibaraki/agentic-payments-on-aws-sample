@@ -174,7 +174,7 @@ export function createMcpFetchHandler(
     const table = options.loadTierTable
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
-    // 判定器は価格表の指定で毎リクエスト選ぶ（AppConfig で倒せるため）。
+    // 判定器は価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
     // 予算はコンテナ共有のバケツから取る
     const judge = judgeBudget.wrap(await selectJudge(table.judge));
     const quote = await resolveQuote(body, { table, judge });

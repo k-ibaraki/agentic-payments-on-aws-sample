@@ -30,7 +30,7 @@ describe("判定器の選択（決定58）", () => {
     expect(create).toHaveBeenCalledWith("k");
   });
 
-  // CDK が作るのは空の Secret なので、鍵を入れ忘れたまま倒す事故は実際に起きる
+  // CDK が作るのは空の Secret なので、鍵を入れ忘れたまま切り替える事故は実際に起きる
   it("jev を指しても鍵が無ければ既定の判定器に留まり、警告を出す", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const select = createJudgeSelector({

@@ -149,7 +149,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     expect(table.tiers.take.price).toBe("$0.15");
   });
 
-  // 既定は Haiku。Jev へは AppConfig の同じ profile を倒して切り替える（決定58）
+  // 既定は Haiku。Jev へは AppConfig の同じ profile の値を書き換えて切り替える（決定58）
   it("価格表に判定器の指定を載せ、既定は bedrock にする", () => {
     const versions = template.findResources(
       "AWS::AppConfig::HostedConfigurationVersion",

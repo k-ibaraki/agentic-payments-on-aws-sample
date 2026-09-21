@@ -137,14 +137,14 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは
    標準入力で受け、`--cli-input-json file:///dev/stdin` で AWS CLI に渡す。
 
-2. **AppConfig の価格表で倒す。** 価格表（profile `tier-table`）に `judge` の欄を足す:
+2. **AppConfig の価格表で切り替える。** 価格表（profile `tier-table`）に `judge` の欄を足す:
 
    ```json
    { "tiers": { "ume": { ... }, "take": { ... }, "matsu": { ... } }, "judge": "jev" }
    ```
 
    再デプロイは要らない。`judge` を省くか読めない値を書けば `haiku` に戻る
-   （価格表そのものは巻き添えにしない）。鍵が未投入のまま倒した場合も Haiku に留まり、
+   （価格表そのものは巻き添えにしない）。鍵が未投入のまま切り替えた場合も Haiku に留まり、
    CloudWatch に警告が出る。
 
    **反映は即時ではない。** AppConfig の Lambda 拡張は更新を取得した回の呼び出しには旧値を返し、

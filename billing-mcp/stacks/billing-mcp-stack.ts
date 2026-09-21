@@ -206,7 +206,7 @@ export function createBillingMcpStack(
   // API キーを CDK に書くと CloudFormation テンプレートに平文で残るため。
   //
   // 中身を目印（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
-  // 出鱈目な鍵が入っていると、判定器を jev に倒したときに毎回 401 になり、
+  // 出鱈目な鍵が入っていると、判定器を jev に切り替えたときに毎回 401 になり、
   // 全件がフォールバックの段に落ちて価格が実質固定になる。目印ならサーバーが
   // 「未投入」と判って既定の判定器に留まる
   const typesafeApiKeySecret = new Secret(stack, "TypesafeApiKey", {

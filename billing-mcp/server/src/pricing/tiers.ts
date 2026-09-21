@@ -23,7 +23,7 @@ export interface TierEntry {
  * 段を判ずる判定器の種類（決定58）。
  *
  * 既定は Bedrock の Haiku。`jev` は TypeSafe の Jev（および System One 互換の
- * サーバー）を指す。価格表と同じ profile に置くので、運用中に再 deploy なしで倒せる
+ * サーバー）を指す。価格表と同じ profile に置くので、運用中に再デプロイなしで切り替えられる
  */
 export const JUDGE_KINDS = ["haiku", "jev"] as const;
 
