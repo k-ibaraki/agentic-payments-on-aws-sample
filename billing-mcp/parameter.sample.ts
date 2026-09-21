@@ -13,8 +13,9 @@ export const devParameter: AppParameter = {
   payToAddress: "0x0000000000000000000000000000000000000000",
   facilitatorUrl: "https://x402.org/facilitator",
   // 価格は段階制（決定56）。既定は梅 $0.1 / 竹 $0.15 / 松 $0.2 で、
-  // deploy 後は AppConfig から変えられる。`price` は段階制の導入前の単価で、
-  // 段を判定できない呼び出しの退避先としてのみ効く
+  // deploy 後は AppConfig から変えられる。以下の `price` は段階制の導入前の単価で、
+  // 実際の値付けには使われない（`resolveQuote` は常に価格表から価格を引く）。
+  // `PRICE` 環境変数として Lambda には渡るが、現行の値付けロジックでは参照されない
   price: "$0.1",
   // 無認証で公開するため必ず設定する（決定19）。同時実行数 = 瞬間的な流量の上限であり、累積コストの上限ではない
   reservedConcurrency: 5,

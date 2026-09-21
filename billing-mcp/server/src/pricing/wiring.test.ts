@@ -69,7 +69,7 @@ describe("段に応じた値付けの結線", () => {
     expect(accepted?.amount).toBe("100000");
   });
 
-  it("提示に見積書の封が載る", async () => {
+  it("提示に見積書が載る", async () => {
     const accepted = await requestQuote(
       async () => ({ tier: "take" }),
       "FAQページ",
@@ -111,17 +111,17 @@ describe("段に応じた値付けの結線", () => {
     expect(text).toContain("$0.2");
   });
 
-  it("封を返せば判定器を呼ばずに同じ額が出る", async () => {
+  it("見積書を返せば判定器を呼ばずに同じ額が出る", async () => {
     const first = await requestQuote(
       async () => ({ tier: "matsu" }),
       "予約システム",
     );
-    const seal = (first?.extra as Record<string, unknown> | undefined)
+    const quote = (first?.extra as Record<string, unknown> | undefined)
       ?.quote as string;
 
     const judge = vi.fn().mockResolvedValue({ tier: "ume" });
     const second = await requestQuote(judge, "予約システム", {
-      "x402/payment": { accepted: { extra: { quote: seal } } },
+      "x402/payment": { accepted: { extra: { quote } } },
     });
     expect(second?.amount).toBe("200000");
     expect(judge).not.toHaveBeenCalled();

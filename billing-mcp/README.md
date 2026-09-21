@@ -92,7 +92,7 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | --- | --- | --- |
 | `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
 | `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
-| `Price` | 段を判定できない呼び出しの退避額（`parameter.ts` で設定した場合のみ） | agent-app の `PAYMENT_MAX_AMOUNT` が松の価格を賄えるか確認する |
+| `Price` | `parameter.ts` の `price`（設定した場合のみ表示）。現行の値付けロジックでは使われず、実際の価格は常に段階制の価格表から決まる | 参考情報。実際に賄うべき上限は松の価格（既定 $0.2） |
 | `LogGroupName` | Lambda のロググループ名 | —（調査用）|
 
 `Price` は `parameter.ts` で `price` を省くと出力されない。その場合はサーバー側の既定額が効く

@@ -151,7 +151,8 @@ export function createBillingMcpStack(
   });
 
   // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く。
-  // 差し替えても飛行中の取引は壊れない。提示済みの価格は封に封じられているため
+  // 差し替えても飛行中の取引は壊れない。提示済みの価格は見積書としてそのまま
+  // 往復し、価格表と食い違えば使わずに判定し直すため
   const application = new appconfig.CfnApplication(stack, "PricingApp", {
     name: `billing-mcp-pricing-${props.envName}`,
   });
