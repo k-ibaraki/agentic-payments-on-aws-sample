@@ -12,6 +12,9 @@
 //
 // AWS CLI を使う（outputs.ts と揃える。この一手のために SDK の依存を増やさない）。
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { devParameter } from "../parameter";
 
@@ -86,38 +89,54 @@ async function readKey(): Promise<string> {
   return answer.trim();
 }
 
-const key = await readKey();
-if (!key) {
-  console.error("鍵が空です。何もしていません");
-  process.exit(1);
-}
-if (key === "REPLACE_ME") {
-  console.error("目印そのものは入れられません。実際の鍵を渡すこと");
-  process.exit(1);
+// billing-mcp の package.json は ESM 指定が無く、tsx は CJS で出力する。
+// トップレベル await が使えないため、関数に包んで呼ぶ
+async function main(): Promise<void> {
+  const key = await readKey();
+  if (!key) {
+    console.error("鍵が空です。何もしていません");
+    process.exit(1);
+  }
+  if (key === "REPLACE_ME") {
+    console.error("目印そのものは入れられません。実際の鍵を渡すこと");
+    process.exit(1);
+  }
+
+  const arn = secretArn();
+  // 鍵はコマンド引数に置かない。`execFileSync` の引数配列はシェルを介さないが、
+  // プロセス一覧（ps）には見えるため。標準入力（`file:///dev/stdin`）も試したが、
+  // Node が作るパイプでは開けない（macOS で Permission denied）。そこで本人しか
+  // 読めない一時ファイル（0600）に置いて渡し、成否によらず必ず消す
+  const dir = mkdtempSync(path.join(tmpdir(), "set-jev-key-"));
+  const inputPath = path.join(dir, "input.json");
+  try {
+    writeFileSync(inputPath, JSON.stringify({ SecretId: arn, SecretString: key }), {
+      mode: 0o600,
+    });
+    execFileSync(
+      "aws",
+      [
+        "secretsmanager",
+        "put-secret-value",
+        "--cli-input-json",
+        `file://${inputPath}`,
+        ...regionArgs,
+        "--output",
+        "json",
+      ],
+      { stdio: ["ignore", "ignore", "inherit"] },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  console.log(`入れました（${key.length} 文字）。判定器を切り替えるには AppConfig の judge を systemone にすること`);
+  console.log("");
+  console.log("  AppConfig の価格表（tier-table）の例:");
+  console.log('    { "tiers": { ... }, "judge": "systemone" }');
 }
 
-const arn = secretArn();
-// 鍵はコマンド引数に置かない。`execFileSync` の引数配列はシェルを介さないが、
-// プロセス一覧（ps）には見える。`--cli-input-json file:///dev/stdin` で標準入力から
-// 渡せば、どこにも残らない
-execFileSync(
-  "aws",
-  [
-    "secretsmanager",
-    "put-secret-value",
-    "--cli-input-json",
-    "file:///dev/stdin",
-    ...regionArgs,
-    "--output",
-    "json",
-  ],
-  {
-    input: JSON.stringify({ SecretId: arn, SecretString: key }),
-    stdio: ["pipe", "ignore", "inherit"],
-  },
-);
-
-console.log(`入れました（${key.length} 文字）。判定器を切り替えるには AppConfig の judge を systemone にすること`);
-console.log("");
-console.log("  AppConfig の価格表（tier-table）の例:");
-console.log('    { "tiers": { ... }, "judge": "systemone" }');
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});
