@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -193,4 +193,53 @@ export function retargetAnchor(
     if (alive.has(order[i])) return order[i];
   }
   return null;
+}
+
+/**
+ * 購入履歴の行を「表示中」として強調するか（決定62）。強調はプレビューに描けた後に付けるので、
+ * 表示できない失敗の行は resultId が同じでも強調しない
+ */
+export function isSelectedPurchase(purchase: { ok: boolean; resultId: string }, selected: string | null): boolean {
+  return purchase.ok && purchase.resultId === selected;
+}
+
+/**
+ * 1 つきりのホスト（購入履歴のプレビュー）の置き場（決定62）。作っている途中に続けて求められたら、
+ * 作り終わるのを待つ同じ Promise を渡し（同じ iframe に二重に載せない）、作っている途中に捨てられたら、出来上がったものを
+ * 閉じて null を渡す（捨てた後に置き場へ戻さない。戻すと次の表示が古いホストを使い回す）。
+ * 作るのに失敗したら置き場は空のままで、次に求められたときに作り直す
+ */
+export function createHostSlot<T extends { destroy(): void }>(create: () => Promise<T>) {
+  let current: T | null = null;
+  let pending: Promise<T | null> | null = null;
+  let generation = 0;
+  return {
+    get(): Promise<T | null> {
+      if (current) return Promise.resolve(current);
+      if (pending) return pending;
+      const started = generation;
+      // create を次の番に回すのは、同期で投げても pending を埋めた後に片付けるため
+      const task: Promise<T | null> = Promise.resolve()
+        .then(create)
+        .then((host) => {
+          if (started !== generation) {
+            host.destroy();
+            return null;
+          }
+          current = host;
+          return host;
+        })
+        .finally(() => {
+          if (pending === task) pending = null;
+        });
+      pending = task;
+      return task;
+    },
+    discard() {
+      generation += 1;
+      pending = null;
+      current?.destroy();
+      current = null;
+    },
+  };
 }

@@ -1,6 +1,6 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
-// 会話の中の購入カードの並び
+// 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -281,5 +281,108 @@ describe('purchaseDetail', () => {
     expect(purchaseDetail({ ok: false, paymentMade: false, error: '売り手に接続できません' })).toBe(
       '売り手に接続できません',
     );
+  });
+});
+
+// ── 購入履歴の表示中の行（決定62） ──
+import { isSelectedPurchase } from './ui-rules.js';
+
+describe('isSelectedPurchase', () => {
+  it('表示中の resultId と同じ成功した行だけを強調する', () => {
+    expect(isSelectedPurchase({ ok: true, resultId: 'r1' }, 'r1')).toBe(true);
+    expect(isSelectedPurchase({ ok: true, resultId: 'r2' }, 'r1')).toBe(false);
+  });
+
+  it('まだ何も表示していなければ、どの行も強調しない', () => {
+    expect(isSelectedPurchase({ ok: true, resultId: 'r1' }, null)).toBe(false);
+  });
+
+  it('失敗の行は表示できないので、同じ resultId でも強調しない', () => {
+    expect(isSelectedPurchase({ ok: false, resultId: 'r1' }, 'r1')).toBe(false);
+  });
+});
+
+// ── 購入履歴のプレビューのホスト（決定62） ──
+import { createHostSlot } from './ui-rules.js';
+
+describe('createHostSlot', () => {
+  // 作るたびに番号を振り、閉じたかを覚える偽のホスト。resolve は外から呼んで作り終えさせる
+  function fakeFactory() {
+    const made: Array<{ id: number; destroyed: boolean; destroy(): void }> = [];
+    const waiting: Array<() => void> = [];
+    const create = () =>
+      new Promise<(typeof made)[number]>((resolve) => {
+        const host = {
+          id: made.length + 1,
+          destroyed: false,
+          destroy() {
+            host.destroyed = true;
+          },
+        };
+        made.push(host);
+        waiting.push(() => resolve(host));
+      });
+    return { made, create, finishAll: () => waiting.splice(0).forEach((finish) => finish()) };
+  }
+
+  it('作っている途中に続けて求めても、作るのは 1 回で同じものを渡す', async () => {
+    const factory = fakeFactory();
+    const slot = createHostSlot(factory.create);
+    const first = slot.get();
+    const second = slot.get();
+    await Promise.resolve();
+    factory.finishAll();
+    expect(await first).toBe(await second);
+    expect(factory.made).toHaveLength(1);
+  });
+
+  it('出来上がった後は作り直さない', async () => {
+    const factory = fakeFactory();
+    const slot = createHostSlot(factory.create);
+    const first = slot.get();
+    await Promise.resolve();
+    factory.finishAll();
+    const host = await first;
+    expect(await slot.get()).toBe(host);
+    expect(factory.made).toHaveLength(1);
+  });
+
+  it('作っている途中に捨てたら、出来上がったものを閉じて null を渡し、次は作り直す', async () => {
+    const factory = fakeFactory();
+    const slot = createHostSlot(factory.create);
+    const stale = slot.get();
+    await Promise.resolve();
+    slot.discard();
+    factory.finishAll();
+    expect(await stale).toBeNull();
+    expect(factory.made[0]?.destroyed).toBe(true);
+
+    const next = slot.get();
+    await Promise.resolve();
+    factory.finishAll();
+    expect((await next)?.id).toBe(2);
+  });
+
+  it('捨てると今のものを閉じる', async () => {
+    const factory = fakeFactory();
+    const slot = createHostSlot(factory.create);
+    const first = slot.get();
+    await Promise.resolve();
+    factory.finishAll();
+    const host = await first;
+    slot.discard();
+    expect(host?.destroyed).toBe(true);
+  });
+
+  it('作るのに失敗したら、次に求めたときに作り直す', async () => {
+    let calls = 0;
+    const slot = createHostSlot(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('接続できない');
+      return { destroy() {} };
+    });
+    await expect(slot.get()).rejects.toThrow('接続できない');
+    await expect(slot.get()).resolves.not.toBeNull();
+    expect(calls).toBe(2);
   });
 });

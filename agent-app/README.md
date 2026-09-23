@@ -41,8 +41,9 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - ウォレット（AgentCore Payments）は ap-southeast-1（AgentCore Payments が東京リージョン非対応のため、ここだけクロスリージョン呼び出し）
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く）
-- ブラウザ UI は `index.html` + `src/index.ts`（認証・チャット・ウォレット・購入履歴。構成は決定44・50・51:
-  ヘッダー → タブ 3 枚（依頼＝会話 / ウォレット＝残高と支払いの枠 / 購入履歴＝会話をまたいだ一覧）→ 内部情報の折りたたみ）。見た目は `src/style.css`
+- ブラウザ UI は `index.html` + `src/index.ts`（認証・チャット・ウォレット・購入履歴。構成は決定44・50・51・62:
+  ヘッダー → タブ 3 枚（依頼＝会話 / ウォレット＝残高と支払いの枠 / 購入履歴＝会話をまたいだ一覧と右のプレビュー）。
+  内部情報の折りたたみは、広い画面では左の側面パネル、狭い画面では本文の下）。見た目は `src/style.css`
   （Pico.css を `@import` し、淡いブルーのテーマと独自要素のスタイルを重ねる）。生成 HTML は
   `src/mcp-apps-host.ts` が売り手の `ui://` リソース（空の表示器。生成物は含まない）を無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
   として sandbox iframe に描画する。買えたページは会話の中のカードに描き（決定50）、再開した会話の買い置きと

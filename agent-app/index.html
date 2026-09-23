@@ -9,14 +9,15 @@
 </head>
 <body>
   <!--
-    画面の構成（決定44・47・50・51）:
+    画面の構成（決定44・47・50・51・62）:
     ヘッダー（題名・サインイン中の利用者とサインアウト）
     → 未サインイン: 説明とサインインのカード
     → サインイン後: タブ 3 枚（決定50 で決定44 の「タブ部品は使わない」を上書き。3 枚目は決定51）
        ・依頼: 会話（残高と残枠の帯を含み、購入したページはこの中に描く）
        ・ウォレット: ウォレットと支払いの枠（残高・セッション・上限の変更・残高の推移）
-       ・購入履歴: 会話をまたいだ購入の一覧と、選んだ 1 件のプレビュー
-    → 内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）
+       ・購入履歴: 左に会話をまたいだ購入の一覧、右に選んだ 1 件のプレビュー（決定62）
+    内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）は、広い画面では本文の左の
+    側面パネル、狭い画面では本文の下に置く（決定62。並べ替えは style.css の body の grid が担う）
   -->
   <header class="container app-header">
     <nav aria-label="画面の題名と利用者">
@@ -126,20 +127,33 @@
           <h2 id="history-heading">購入したページ</h2>
           <button id="history-refresh-btn" class="secondary outline" title="購入履歴を取り直す">更新</button>
         </header>
-        <p class="hint">これまでに買ったページを会話をまたいで並べます（新しい会話の順）。「表示」を選ぶと下のプレビュー（売り手の MCP Apps UI）に描画します。</p>
-        <div id="history"><span class="hint">まだありません</span></div>
-        <div id="purchase-status" class="hint"></div>
-        <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts" hidden></iframe>
+        <p class="hint">これまでに買ったページを会話をまたいで並べます（新しい会話の順）。「表示」を選ぶとプレビュー（売り手の MCP Apps UI）に描画します。</p>
+        <!-- 左に一覧、右にプレビュー（決定62）。幅が足りなければ一覧の下にプレビューを積む -->
+        <div class="history-split">
+          <div id="history"><span class="hint">まだありません</span></div>
+          <div class="history-preview">
+            <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts" hidden></iframe>
+            <!-- 「表示」を押すまでの案内。iframe の hidden が外れると CSS で隠れる -->
+            <p class="preview-placeholder hint">一覧で「表示」を選ぶと、買ったページをここに描きます。</p>
+            <div id="purchase-status" class="hint"></div>
+          </div>
+        </div>
       </article>
     </div>
+  </main>
 
-    <details id="internals" class="signed-in-only" open>
-      <summary>内部情報（開発者向け）</summary>
+  <!--
+    内部情報（決定44・62）。main の外に置き、広い画面では body の grid で本文の左の列へ、
+    狭い画面では本文の下へ回す。閉じた姿（広い画面では左端の細い帯）も details の summary が担う
+  -->
+  <details id="internals" class="signed-in-only" open>
+    <summary>内部情報（開発者向け）</summary>
+    <div class="internals-body">
       <p class="hint">会話 ID: <code id="conversation-id">（未作成）</code></p>
       <h3>ストリーム（Realtime のチャンク）</h3>
       <div id="events"></div>
-    </details>
-  </main>
+    </div>
+  </details>
   <script type="module" src="/src/index.ts"></script>
 </body>
 </html>

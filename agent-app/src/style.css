@@ -2,8 +2,9 @@
  * 買い手の画面の見た目。Pico.css（classless）を土台に、淡いブルー系のテーマと、
  * この画面だけの独自要素（吹き出し・会話の中の購入カード・購入履歴・イベントログ）を重ねる。
  *
- * 構成（決定44・50・51）: ヘッダー → 未サインイン時のサインインカード →
- * タブ（依頼 / ウォレット / 購入履歴）→ 内部情報の折りたたみ。面はそれぞれ一列。
+ * 構成（決定44・50・51・62）: ヘッダー → 未サインイン時のサインインカード →
+ * タブ（依頼 / ウォレット / 購入履歴）。依頼とウォレットの面は一列、購入履歴は一覧とプレビューの二段組。
+ * 内部情報の折りたたみは、広い画面では本文の左の側面パネル、狭い画面では本文の下に置く。
  *
  * TypeScript から import せず index.html の <link> で読むのは、tsconfig に
  * vite/client の型が無く `import './style.css'` が `npm run build` の tsc で落ちるため。
@@ -50,10 +51,14 @@
  * 1280px で頭打ちにする（決定51 で一列になった後も、会話の中に描く買えたページに
  * 幅を回すため狭めていない）。
  * セレクタに .container を含めるのは、要素セレクタだけではクラス（.container）に
- * 詳細度で負けて上限が効かないため
+ * 詳細度で負けて上限が効かないため。
+ * Pico は 576px 以上で左右の padding を 0 にし、余白を max-width との差で作る。上限を 1280px に
+ * 上げるとその差が消え、1280px 未満では本文が画面の端（決定62 からは側面パネル）に張り付く。
+ * そこで padding を常に付け、その分だけ max-width を足して本文の上限 1280px は保つ
  */
 body > .container {
-  max-width: 1280px;
+  max-width: calc(1280px + 2 * var(--pico-spacing));
+  padding-inline: var(--pico-spacing);
 }
 
 body > main.container {
@@ -229,8 +234,9 @@ h3 {
 }
 
 /* ── 面の中の区画 ──────────────────────────────────────────── */
-/* 決定51 でウォレットを別のタブへ移し、どの面も区画 1 枚になったので二段組は持たない。
-   会話（と、その中に描く買えたページ）はコンテナの幅いっぱいを使う */
+/* 決定51 でウォレットを別のタブへ移し、どの面も区画 1 枚になった。依頼とウォレットは一列で、
+   会話（と、その中に描く買えたページ）はコンテナの幅いっぱいを使う。購入履歴の中だけは
+   一覧とプレビューの二段組にする（決定62。下の「購入履歴」を参照） */
 .panel {
   margin-bottom: 0;
 }
@@ -447,10 +453,63 @@ h3 {
 }
 
 /* ── 購入履歴（会話をまたいだ一覧。決定50） ─────────────────── */
+/*
+ * 左に一覧、右にプレビューの二段組（決定62）。組むかどうかは画面幅ではなく、区画そのものの
+ * 幅で決める（コンテナクエリ）。内部情報の側面パネルを開くと、同じ画面幅でも区画は細くなるため
+ */
+#panel-history .panel {
+  container-type: inline-size;
+}
+
+/* 幅が足りないときは一覧の下にプレビューを積む（決定50 までの並び） */
+.history-split {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
 #history {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.history-preview {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 一覧の最小幅 280px + プレビューに 2 倍の比率を回して、プレビューが 420px ほど取れる幅から組む。
+ * 高さは両列とも画面に合わせ、一覧は枠の中でスクロールさせる（下の行を押してもプレビューが見えている）。
+ * 20rem はヘッダー・タブ・区画の見出しと説明文・区画と main の下の余白の合計（1440×900 で実測して
+ * 合わせた）。ヘッダーや説明文が折り返す幅では少しはみ出すが、ページのスクロールで届く
+ */
+@container (min-width: 720px) {
+  .history-split {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) 2fr;
+    gap: 1rem;
+    height: max(24rem, calc(100vh - 20rem));
+  }
+
+  #history {
+    min-height: 0;
+    padding-right: 0.25rem;
+    overflow: auto;
+  }
+
+  .history-preview {
+    min-height: 0;
+  }
+
+  .history-preview > #preview-frame,
+  .history-preview > .preview-placeholder {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    margin-top: 0;
+  }
 }
 
 /* 会話 1 件ぶんのまとまり（見出し + その会話の購入） */
@@ -485,6 +544,17 @@ h3 {
 
 .purchase code {
   font-size: 0.85em;
+}
+
+/* 履歴の行は、表示中の 1 件を背景で示す（決定62）。余白は強調の背景が文字に張り付かないため */
+#history .purchase {
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--pico-border-radius);
+}
+
+#history .purchase.selected {
+  background: var(--app-tint);
+  box-shadow: inset 3px 0 0 var(--pico-primary);
 }
 
 /*
@@ -534,7 +604,7 @@ h3 {
   margin-top: 0.5rem;
 }
 
-/* 「表示」を押すまで空の白い枠を見せない（JS が hidden を外す） */
+/* 「表示」を押すまで空の白い枠を見せない（JS が hidden を外す）。代わりに案内の枠を出す */
 #preview-frame[hidden] {
   display: none;
 }
@@ -542,15 +612,33 @@ h3 {
 #preview-frame {
   width: 100%;
   height: 520px;
-  margin-top: 0.75rem;
   border: 1px solid var(--app-tint-border);
   border-radius: var(--pico-border-radius);
   background: #fff;
 }
 
+.preview-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 8rem;
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+  text-align: center;
+}
+
+#preview-frame:not([hidden]) + .preview-placeholder {
+  display: none;
+}
+
 /* ── 内部情報（開発者向け。目立たせない） ───────────────────── */
+/* 狭い画面の姿（本文の下の折りたたみ）。main の外にあるので、main.container と同じ左右の余白を付ける。
+   広い画面の側面パネルは下の @media で上書きする */
 #internals {
-  margin-top: 1.5rem;
+  margin: 0 var(--pico-spacing) 1.5rem;
   padding: 0.75rem 1rem;
   border: 1px solid var(--pico-muted-border-color);
   border-radius: var(--pico-border-radius);
@@ -582,6 +670,94 @@ h3 {
 
 #events div {
   padding: 1px 0;
+}
+
+/*
+ * 広い画面では、内部情報を本文の左の側面パネルにする（決定62）。本文（ヘッダーと main）は
+ * 右の列の中で今までどおり 1280px を上限に中央へ寄り、パネルの幅のぶん細くなるのは画面が狭いときだけ。
+ * パネルはヘッダーの行まで縦に通す（ヘッダーだけ全幅にすると、題名と本文の左端がずれるため）。
+ * 未サインインでは #internals が display: none なので、auto の列は 0 に潰れる。
+ * 1024px は、パネル（20rem）を開いても本文に 700px ほど残る幅
+ */
+@media (min-width: 1024px) {
+  body {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'side header'
+      'side main';
+    grid-template-rows: auto 1fr;
+    min-height: 100vh;
+  }
+
+  body > header {
+    grid-area: header;
+    width: 100%;
+  }
+
+  body > main {
+    grid-area: main;
+    width: 100%;
+  }
+
+  /* スクロールしても画面の左に貼り付け、ログは画面の高さいっぱいまで伸ばす */
+  #internals {
+    grid-area: side;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    box-sizing: border-box;
+    width: 20rem;
+    height: 100vh;
+    margin: 0;
+    border-width: 0 1px 0 0;
+    border-radius: 0;
+  }
+
+  /*
+   * details の中身の高さに百分率を使うと、ブラウザによっては details の中身の箱（::details-content）で
+   * 解決されない。画面の高さからパネルの余白（上下 0.75rem）と summary（行 1rem + 下余白 1rem）を引く
+   */
+  #internals .internals-body {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 3.5rem);
+  }
+
+  #internals #events {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  /* 開いているときの矢印は、左へ畳む向きにする（Pico の既定は下向き） */
+  #internals[open] > summary::after {
+    transform: rotate(90deg);
+  }
+
+  /* 閉じた姿は左端の細い帯。summary を帯いっぱいに広げ、題名を縦書きにする */
+  #internals:not([open]) {
+    width: 2.5rem;
+    padding: 0.75rem 0;
+  }
+
+  /* 縦書きの箱は横書きの親の中で内容の幅まで縮むので、幅を明示して帯の中央に置く */
+  #internals:not([open]) > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    height: 100%;
+    writing-mode: vertical-rl;
+  }
+
+  /* 閉じた帯の矢印は、右へ開く向き（Pico の既定の -90deg）のまま、題名の頭に置く */
+  #internals:not([open]) > summary::after {
+    order: -1;
+    margin: 0;
+    float: none;
+    transform: rotate(-90deg);
+  }
 }
 
 /* ── 狭い画面 ─────────────────────────────────────────────── */
