@@ -7,8 +7,8 @@
 ユーザー依頼「ロジックには触れず、コメント・ドキュメントの重複や過剰な記載を削り、不自然な日本語を直す」に
 billing-mcp・agent-app・ドキュメント3領域で対応した。事前に5本の調査（billing-mcp のコメント、agent-app の
 コメント、README群、DESIGN.md、implementation-log.md の日本語表現）を並行で走らせ、結果をユーザーに提示して
-スコープの承認を得てから着手した。ブランチ `chore/reduce-comment-doc-duplication` に3コミット（billing-mcp /
-agent-app / ドキュメント）で分けている。
+スコープの承認を得てから着手した。ブランチ `chore/reduce-comment-doc-duplication` に、領域（billing-mcp /
+agent-app / ドキュメント）ごとのコミットと、セルフレビュー対応のコミットを分けて積んだ。
 
 ### やったこと
 
@@ -62,9 +62,6 @@ agent-app / ドキュメント）で分けている。
   未インストールで、`pnpm install` が必要な状態だった。billing-mcp の gitignore 対象 `parameter.ts` にも
   決定56 で撤去済みの `price` フィールドが残っており型検査が落ちる。どちらも今回の変更以前からの環境の
   ずれで、`git stash` して変更前でも同じ失敗が再現することを確認した（このリファクタでは対応していない）
-- billing-mcp/server は既存のテスト失敗（`@typesafe-ai/sdk` / `@aws-sdk/client-secrets-manager` の
-  未インストール、gitignore 対象の `parameter.ts` の型不一致）があったが、`git stash` で変更前の状態でも
-  同じ失敗が再現することを確認し、今回の変更と無関係と判断した
 - agent-app は `npm run test`（240件）・`npm run typecheck` が全て通過した
 
 ## 2026-09-23: 内部情報パネルの左右を直す（決定62 追記）
