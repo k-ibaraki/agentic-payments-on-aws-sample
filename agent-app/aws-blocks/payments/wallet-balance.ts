@@ -3,6 +3,7 @@
 // （AgentCore Payments の機能を試すのが本サンプルの趣旨で、RPC の依存も増やさない）。
 // CLI から打てないのは userId ヘッダーの都合で、SDK は userId 引数から自動で付ける
 import { GetPaymentInstrumentBalanceCommand } from '@aws-sdk/client-bedrock-agentcore';
+import { formatTokenAmount } from './amount.js';
 
 export interface WalletBalanceContext {
   /** ウォレットの持ち主 ID（Payments 側の userId） */
@@ -23,19 +24,6 @@ export interface WalletBalance {
 
 interface AwsClientLike {
   send(command: unknown): Promise<unknown>;
-}
-
-/**
- * 最小単位の整数を decimals 桁で割った十進表記にする。末尾の 0 は落とす。
- * 既に小数点を含む値は十進表記とみなしてそのまま返す
- */
-export function formatTokenAmount(amount: string, decimals: number): string {
-  if (amount.includes('.')) return amount;
-  const digits = amount.replace(/^-/, '').padStart(decimals + 1, '0');
-  const whole = digits.slice(0, digits.length - decimals) || '0';
-  const fraction = decimals === 0 ? '' : digits.slice(-decimals).replace(/0+$/, '');
-  const sign = amount.startsWith('-') ? '-' : '';
-  return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`;
 }
 
 export async function getWalletBalance(
