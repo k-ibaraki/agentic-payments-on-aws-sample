@@ -144,3 +144,24 @@ describe('purchaseHistory', () => {
     expect(PURCHASE_HISTORY_SCAN_LIMIT).toBe(100);
   });
 });
+
+// 決定60: 支払った額を画面まで運ぶ。生の額ではなく、人が読む表記をそのまま渡す
+describe('extractPurchases（支払額）', () => {
+  it('要約の amountDisplay を購入に載せる', () => {
+    const messages = [
+      toolResultMessage([{ json: { ...okSummary, amountDisplay: '$0.15（150000）' } }]),
+    ];
+    expect(extractPurchases(messages)[0]?.amountDisplay).toBe('$0.15（150000）');
+  });
+
+  it('支払い済みの失敗にも載せる', () => {
+    const messages = [
+      toolResultMessage([{ json: { ...failedSummary, amountDisplay: '$0.2（200000）' } }]),
+    ];
+    expect(extractPurchases(messages)[0]?.amountDisplay).toBe('$0.2（200000）');
+  });
+
+  it('額の無い要約では欄ごと持たない', () => {
+    expect(extractPurchases([toolResultMessage([{ json: okSummary }])])[0]?.amountDisplay).toBeUndefined();
+  });
+});

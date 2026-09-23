@@ -243,3 +243,43 @@ describe('retargetAnchor', () => {
     expect(retargetAnchor(['m1'], '知らない吹き出し', new Set(['m1']))).toBe(null);
   });
 });
+
+// ── 購入 1 件の説明文（決定60。支払額の併記） ──
+import { purchaseDetail } from './ui-rules.js';
+
+describe('purchaseDetail', () => {
+  it('成功した購入は、支払額と大きさを見せる', () => {
+    expect(
+      purchaseDetail({ ok: true, paymentMade: true, amountDisplay: '$0.15（150000）', htmlBytes: 3000 }),
+    ).toBe('支払い済み $0.15（150000） 3000 バイト');
+  });
+
+  it('額が分からない購入は、これまでどおり支払いの状況と大きさだけ', () => {
+    expect(purchaseDetail({ ok: true, paymentMade: true, htmlBytes: 3000 })).toBe('支払い済み 3000 バイト');
+    expect(purchaseDetail({ ok: true, paymentMade: false })).toBe('無課金 ? バイト');
+  });
+
+  it('支払い済みの失敗は、額を添えて理由を見せる', () => {
+    expect(
+      purchaseDetail({ ok: false, paymentMade: true, amountDisplay: '$0.2（200000）', error: '生成に失敗' }),
+    ).toBe('支払い済み $0.2（200000）・生成に失敗');
+  });
+
+  it('成否不明の失敗は、減っているかもしれない額を添える', () => {
+    expect(
+      purchaseDetail({
+        ok: false,
+        paymentMade: false,
+        paymentUncertain: true,
+        amountDisplay: '$0.15（150000）',
+        error: '確認できませんでした',
+      }),
+    ).toBe('支払いの成否不明 $0.15（150000）・確認できませんでした');
+  });
+
+  it('支払いに至っていない失敗には額も接頭辞も付かない', () => {
+    expect(purchaseDetail({ ok: false, paymentMade: false, error: '売り手に接続できません' })).toBe(
+      '売り手に接続できません',
+    );
+  });
+});
