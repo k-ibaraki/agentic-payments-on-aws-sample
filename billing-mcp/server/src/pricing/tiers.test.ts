@@ -12,7 +12,7 @@ import {
 } from "./tiers.js";
 
 describe("既定の価格表", () => {
-  it("梅・竹・松の3段を持つ", () => {
+  it("梅・竹・松の3つの価格帯を持つ", () => {
     expect(Object.keys(DEFAULT_TIER_TABLE.tiers)).toEqual([
       "ume",
       "take",
@@ -67,7 +67,7 @@ describe("parseTierTable（AppConfig から読む想定）", () => {
     expect(targetTokensOf(table, "matsu")).toBe(15_000);
   });
 
-  it("段が欠けていれば読まない", () => {
+  it("価格帯が欠けていれば読まない", () => {
     const { ume, ...rest } = valid.tiers;
     expect(parseTierTable({ tiers: rest })).toBeUndefined();
   });
@@ -80,7 +80,7 @@ describe("parseTierTable（AppConfig から読む想定）", () => {
     ).toBeUndefined();
   });
 
-  it("目安トークン数が段の順に増えていなければ読まない", () => {
+  it("目安トークン数が価格帯の順に増えていなければ読まない", () => {
     expect(
       parseTierTable({
         tiers: { ...valid.tiers, take: { price: "$0.3", targetTokens: 3_000 } },
@@ -93,7 +93,7 @@ describe("parseTierTable（AppConfig から読む想定）", () => {
     expect(parseTierTable(DEFAULT_TIER_TABLE)).toEqual(DEFAULT_TIER_TABLE);
   });
 
-  it("価格が段の順に増えていなければ読まない", () => {
+  it("価格が価格帯の順に増えていなければ読まない", () => {
     expect(
       parseTierTable({
         tiers: {
@@ -149,7 +149,7 @@ describe("generationBudgetOf（生成に渡す予算）", () => {
 });
 
 describe("買い手への根拠の開示（決定56）", () => {
-  it("段と分量と価格を一文で示す", () => {
+  it("価格帯と分量と価格を一文で示す", () => {
     const text = quoteDisclosure(DEFAULT_TIER_TABLE, "take");
     expect(text).toContain("竹");
     expect(text).toContain("8000");
@@ -165,7 +165,7 @@ describe("買い手への根拠の開示（決定56）", () => {
   });
 });
 
-describe("判定器の切り替え（決定58）", () => {
+describe("判定モデルの切り替え（決定58）", () => {
   const VALID_TIERS = {
     ume: { price: "$0.1", targetTokens: 5_000 },
     take: { price: "$0.15", targetTokens: 8_000 },
@@ -185,8 +185,8 @@ describe("判定器の切り替え（決定58）", () => {
     expect(table?.judge).toBe("jev");
   });
 
-  // 価格表ごと退けると、判定器の書き損じで価格まで巻き添えになる
-  it("judge の欄が不正でも価格表は生かし、判定器だけ既定へ戻す", () => {
+  // 価格表ごと退けると、判定モデルの書き損じで価格まで巻き添えになる
+  it("judge の欄が不正でも価格表は生かし、判定モデルだけ既定へ戻す", () => {
     // 一覧に無い値。書き損じや、値の名前を変える前の古い設定が来たときを模す
     const table = parseTierTable({ tiers: VALID_TIERS, judge: "sonnet" });
     expect(table?.judge).toBe("haiku");

@@ -3,16 +3,16 @@ import { EVAL_CASES } from "./eval-cases.js";
 import { createBedrockJudge, createSystemOneJudge } from "./judge.js";
 import { TIER_ORDER } from "./tiers.js";
 
-// 判定器を実際のモデルに繋がずに確かめる。見るのは精度ではなく、評価セットの段が
-// 判定器の出口まで結線されているかどうかである。実モデルが全件を同じ段に潰す事故
+// 価格帯の判定処理を、実際のモデルに繋がずに確かめる。見るのは精度ではなく、評価セットの価格帯が
+// 判定処理の出口まで結線されているかどうかである。実モデルが全件を同じ価格帯に潰す事故
 // （実測でたびたび起きた）は、モデルを差し替えているここでは捕まらない
 describe("不具合チェック用の評価セット", () => {
-  it("各段がちょうど1件ずつある", () => {
+  it("各価格帯がちょうど1件ずつある", () => {
     const tiers = EVAL_CASES.map((c) => c.tier);
     expect([...tiers].sort()).toEqual([...TIER_ORDER].sort());
   });
 
-  it("実測トークン数は段の順に増えている", () => {
+  it("実測トークン数は価格帯の順に増えている", () => {
     const byTier = new Map(EVAL_CASES.map((c) => [c.tier, c.measuredTokens]));
     for (let i = 1; i < TIER_ORDER.length; i++) {
       expect(byTier.get(TIER_ORDER[i])).toBeGreaterThan(
@@ -21,7 +21,7 @@ describe("不具合チェック用の評価セット", () => {
     }
   });
 
-  it("Bedrock の判定器が段どおりに答えれば全件一致する", async () => {
+  it("Bedrock の判定モデルが価格帯どおりに答えれば全件一致する", async () => {
     const converse = vi.fn().mockImplementation((input) => {
       const state = JSON.stringify(input.messages);
       const hit = EVAL_CASES.find((c) => state.includes(c.prompt));
@@ -39,7 +39,7 @@ describe("不具合チェック用の評価セット", () => {
     }
   });
 
-  it("System One の判定器でも順序尺度から同じ段に至る", async () => {
+  it("System One を使う判定処理でも順序尺度から同じ価格帯に至る", async () => {
     const scores = { ume: 0.1, take: 1.0, matsu: 1.9 };
     const fetchImpl = vi.fn(async (_url: unknown, init: { body?: unknown }) => {
       const state = JSON.parse(String(init.body)).state as string;
@@ -74,8 +74,8 @@ describe("不具合チェック用の評価セット", () => {
     }
   });
 
-  // 全件を同じ段に潰す判定器を、テストが捕まえられること自体の確認
-  it("段を作り分けない判定器は見逃さない", async () => {
+  // 全件を同じ価格帯に潰す判定モデルを、テストが捕まえられること自体の確認
+  it("価格帯を作り分けない判定モデルは見逃さない", async () => {
     const judge = createBedrockJudge(
       vi.fn().mockResolvedValue({
         output: { message: { content: [{ text: "ume" }] } },

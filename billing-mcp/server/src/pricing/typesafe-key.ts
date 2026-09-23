@@ -12,12 +12,12 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 
 /**
- * 鍵が未投入であることを表す目印。
+ * 鍵が未投入であることを表す仮の値。
  *
  * CDK は値の入っていない Secret を作りたいが、Secrets Manager は空文字を嫌う。
  * かといって CDK の既定（ランダム生成）に任せると、出鱈目な鍵で Jev を叩いて
- * 毎回 401 になり、全件がフォールバックの段に落ちる。そこで人が置き換える前提の
- * 目印を入れ、サーバー側では未設定と同じに扱う（決定58）
+ * 毎回 401 になり、全件がフォールバックの価格帯に落ちる。そこで人が置き換える前提の
+ * 仮の値を入れ、サーバー側では未設定と同じに扱う（決定58）
  */
 export const UNSET_API_KEY = "REPLACE_ME";
 
@@ -59,7 +59,7 @@ export function createDefaultSecretReader(): ReadSecretFn {
 /**
  * API キーの読み手を作る。
  *
- * 失敗しても投げない。鍵が無ければ undefined を返し、呼び出し側は既定の判定器
+ * 失敗しても投げない。鍵が無ければ undefined を返し、呼び出し側は既定の判定モデル
  * （Bedrock）に留まる（決定58）
  */
 export function createApiKeyLoader(options: ApiKeyLoaderOptions): ApiKeyLoader {
@@ -84,7 +84,7 @@ export function createApiKeyLoader(options: ApiKeyLoaderOptions): ApiKeyLoader {
       if (!value || value === UNSET_API_KEY) {
         failedAt = now();
         console.warn(
-          "[pricing] Jev の API キーが未投入です。値を入れるまで既定の判定器で応じます",
+          "[pricing] Jev の API キーが未投入です。値を入れるまで既定の判定モデルで応じます",
         );
         return undefined;
       }
@@ -93,7 +93,7 @@ export function createApiKeyLoader(options: ApiKeyLoaderOptions): ApiKeyLoader {
     } catch (error) {
       failedAt = now();
       console.warn(
-        "[pricing] Jev の API キーを取り出せませんでした。既定の判定器で応じます",
+        "[pricing] Jev の API キーを取り出せませんでした。既定の判定モデルで応じます",
         error,
       );
       return undefined;

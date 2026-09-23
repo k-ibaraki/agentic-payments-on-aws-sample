@@ -5,8 +5,8 @@ import { createJudgeSelector } from "./judge-select.js";
 const bedrock: Judge = async () => ({ tier: "ume" });
 const systemOne: Judge = async () => ({ tier: "matsu" });
 
-describe("判定器の選択（決定58）", () => {
-  it("bedrock を指せば既定の判定器を返す", async () => {
+describe("判定モデルの選択（決定58）", () => {
+  it("haiku を指せば既定の判定処理を返す", async () => {
     const loadApiKey = vi.fn();
     const select = createJudgeSelector({ bedrock, loadApiKey });
     expect(
@@ -31,7 +31,7 @@ describe("判定器の選択（決定58）", () => {
   });
 
   // CDK が作るのは空の Secret なので、鍵を入れ忘れたまま切り替える事故は実際に起きる
-  it("jev を指しても鍵が無ければ既定の判定器に留まり、警告を出す", async () => {
+  it("jev を指しても鍵が無ければ既定の判定モデルに留まり、警告を出す", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const select = createJudgeSelector({
       bedrock,
@@ -46,7 +46,7 @@ describe("判定器の選択（決定58）", () => {
   });
 
   // リクエストごとにクライアントを作り直すと、接続プールが毎回捨てられる
-  it("鍵が同じなら System One の判定器を作り直さない", async () => {
+  it("鍵が同じなら System One を使う判定処理を作り直さない", async () => {
     const create = vi.fn().mockReturnValue(systemOne);
     const select = createJudgeSelector({
       bedrock,

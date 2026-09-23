@@ -145,13 +145,13 @@ export interface GenerateHtmlParams {
   previousHtml?: string;
   attachments?: Attachment[];
   /**
-   * 段に応じた規模の指示（決定56）。システムプロンプトに足す。
+   * 価格帯に応じた規模の指示（決定56）。システムプロンプトに足す。
    * 省略時は従来どおり規模を指示しない
    */
   sizeHint?: string;
   /**
    * 出力の天井。省略時はモデルの出力上限。
-   * 段の目安ではなく、打ち切りを避けるための余裕込みの値を渡すこと
+   * 価格帯の目安ではなく、打ち切りを避けるための余裕込みの値を渡すこと
    */
   maxTokens?: number;
 }
@@ -173,14 +173,14 @@ export async function generateHtmlWithBedrock(
 
   const response = await converse({
     modelId,
-    // 段の指示は別のブロックに分ける。元のシステムプロンプトを書き換えないことで、
-    // 段を渡さない経路（テストやローカル起動）の挙動を従来のまま保つ
+    // 価格帯の指示は別のブロックに分ける。元のシステムプロンプトを書き換えないことで、
+    // 価格帯を渡さない経路（テストやローカル起動）の挙動を従来のまま保つ
     system: sizeHint
       ? [{ text: SYSTEM_PROMPT }, { text: sizeHint }]
       : [{ text: SYSTEM_PROMPT }],
     messages: [{ role: "user", content }],
     // 未指定だとモデル既定値で出力が打ち切られ、長いHTMLが閉じタグ欠落の
-    // まま黙って返るため、モデルの出力上限に合わせる。段を渡す場合も、
+    // まま黙って返るため、モデルの出力上限に合わせる。価格帯を渡す場合も、
     // 目安そのものではなく余裕を含んだ天井を受け取る（決定56）
     inferenceConfig: { maxTokens: maxTokens ?? 64_000 },
   });
@@ -211,7 +211,7 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
     ),
 };
 
-/** 段から決まる生成の予算（DESIGN.md 決定56）。省略時は規模を指示しない */
+/** 価格帯から決まる生成の予算（DESIGN.md 決定56）。省略時は規模を指示しない */
 export interface GenerationBudget {
   sizeHint: string;
   maxTokens: number;

@@ -43,11 +43,11 @@ export interface BillingMcpServerOptions {
   /** ui:// で配信する HTML のローダー（テストでは差し替える） */
   loadUiHtml?: () => string;
   /**
-   * 段から決まる生成の予算（決定56）。省略時は規模を指示しない。
-   * リクエストごとに段が変わるため、サーバーを組むたびに渡す
+   * 価格帯から決まる生成の予算（決定56）。省略時は規模を指示しない。
+   * リクエストごとに価格帯が変わるため、サーバーを組むたびに渡す
    */
   generation?: GenerationBudget;
-  /** 段の判定器（決定53）。省略時は Bedrock の Haiku */
+  /** 価格帯の判定処理（決定53）。省略時は Bedrock の Haiku を使う */
   judge?: Judge;
   /**
    * Jev の API キーの読み手（決定58）。省略時は環境変数と Secrets Manager から読む。
@@ -55,13 +55,13 @@ export interface BillingMcpServerOptions {
    */
   loadApiKey?: ApiKeyLoader;
   /**
-   * System One の判定器の作り手（決定58）。省略時は公式 SDK で作る。
+   * System One を使う判定処理の作り手（決定58）。省略時は公式 SDK で作る。
    * テストで差し替えるために受ける
    */
   createSystemOne?: (apiKey: string) => Judge;
   /** 見積もりの呼び出し予算（U12）。省略時は app.ts の既定値 */
   judgeBudget?: JudgeBudgetOptions;
-  /** 段ごとの価格表（決定56）。省略時は既定値。テストや静的な指定に使う */
+  /** 価格帯ごとの価格表（決定56）。省略時は既定値。テストや静的な指定に使う */
   tierTable?: TierTable;
   /**
    * 価格表の読み手（決定56）。AppConfig から読む場合に渡す。
@@ -98,7 +98,7 @@ function defaultLoadUiHtml(): string {
 /**
  * facilitator への `/supported` 照会を伴う初期化。往復を伴うので使い回す。
  *
- * 段ごとに価格が変わる（決定56）ため accepts の構築は毎リクエスト行うが、
+ * 価格帯ごとに価格が変わる（決定56）ため accepts の構築は毎リクエスト行うが、
  * そちらは局所計算のみで往復しない
  */
 export async function createResourceServer(facilitatorUrl: string) {
@@ -144,7 +144,7 @@ export async function buildPaidWrapper(
     accepts,
     resource: {
       url: "mcp://tool/generate-html",
-      // 段の根拠を添えて示す（決定56）。資源説明は支払い条件の照合対象ではないので、
+      // 価格帯の根拠を添えて示す（決定56）。資源説明は支払い条件の照合対象ではないので、
       // 価格表が差し替わっても 2 往復目の照合を壊さない
       description: options.disclosure
         ? `ユーザーの指示に従ってHTMLを生成する。${options.disclosure}`

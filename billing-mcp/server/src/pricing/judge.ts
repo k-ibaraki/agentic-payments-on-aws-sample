@@ -1,16 +1,16 @@
-// 段の判定器（DESIGN.md 決定53・56）。
+// 価格帯の判定処理（DESIGN.md 決定53・56）。
 //
-// 判定器の仕事は「モデルが何トークン書くか」を当てることではない。それは 2026-09-20 の
+// 判定モデルの仕事は「モデルが何トークン書くか」を当てることではない。それは 2026-09-20 の
 // 実測で予測できないと分かった（実生成ラベルに対する的中 10/20、最頻クラス基準線 9/20）。
-// ここで判ずるのは「この依頼に見合う規模はどれか」で、判じた段の目安が生成の指示に
-// 織り込まれる。すなわち段は予測ではなく指定である。
+// ここで判定するのは「この依頼に見合う規模はどれか」で、判定した価格帯の目安が生成の指示に
+// 織り込まれる。すなわち価格帯は予測ではなく指定である。
 //
-// 既定は Bedrock の Haiku（決定53）。ただし境界は System One の形（順序尺度で段と
+// 既定は Bedrock の Haiku（決定53）。ただし境界は System One の形（順序尺度で価格帯と
 // 確信度を返す）に合わせてあり、Jev や互換サーバーへ差し替えられる。2026-09-20 に
 // ローカルの Jev 互換実装 5 種を実測した結果、判定の形は choice より score が全基盤で
 // 優れていたため、System One 側は score を使う。
 //
-// score は水準ごとの確率の期待値なので、判定が割れるほど値は中央へ寄り、中央の段
+// score は水準ごとの確率の期待値なので、判定が割れるほど値は中央へ寄り、中央の価格帯
 // （竹）に着地する。すなわち確信度で分岐させずとも、迷いはフォールバック先へ流れる。
 // 確信度は判断には使わず、水準の記述が効いているかを見るために記録だけする。
 import type {
@@ -21,11 +21,11 @@ import { APIError, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { Tier } from "./quote-seal.js";
 import { TIER_ORDER } from "./tiers.js";
 
-/** 判定に迷ったときに寄せる段。誤りの向きを一方に固定しないため中央を選ぶ */
+/** 判定に迷ったときに寄せる価格帯。誤りの向きを一方に固定しないため中央を選ぶ */
 const FALLBACK_TIER: Tier = "take";
 
 export interface JudgeRequest {
-  /** 判ずる対象のツール名 */
+  /** 判定する対象のツール名 */
   toolName: string;
   /** 依頼文（System One の state に相当） */
   state: string;
@@ -35,14 +35,14 @@ export interface JudgeResult {
   tier: Tier;
   /** 判定できず既定へ落としたか。記録と監視のために残す */
   fellBack?: boolean;
-  /** 判定器が確信度を返す場合のみ */
+  /** 判定モデルが確信度を返す場合のみ */
   confidence?: number;
 }
 
 export type Judge = (request: JudgeRequest) => Promise<JudgeResult>;
 
 /**
- * 段の説明。順序尺度の水準として、軽いものから並べる。
+ * 価格帯の説明。順序尺度の水準として、軽いものから並べる。
  *
  * 分量の目安（行数やトークン数）は書かない。2026-09-20 の実測で、数量の手がかりは
  * 小型モデルには効かず、かえって判定を乱したため。ここでは依頼の性質だけを述べる
@@ -53,14 +53,14 @@ export const TIER_CRITERIA: Record<Tier, string> = {
   matsu: "機能が多岐にわたり、画面の切り替えや状態の管理を伴うページ",
 };
 
-/** 判ずる内容そのもの */
+/** 判定する内容そのもの */
 export const TIER_QUESTION = "この依頼で作るべきページの規模を評価する";
 
 /**
  * 判定の土台に置く前置き。
  *
  * 水準の記述だけでは、扱う品揃えがどのあたりに集まっているのかが伝わらない。
- * どちらの判定器にも同じものを渡し、同じ土台で判じさせる
+ * どちらの判定モデルにも同じものを渡し、同じ土台で判定させる
  */
 export const TIER_CONTEXT =
   "扱うのはいずれも相応に作り込まれたページです。極端に短いページは出てきません。";
@@ -88,17 +88,17 @@ const BEDROCK_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
- * 答えの中の段の名前。語の切れ目で拾い、`document` の中の `ume` を掴まない。
+ * 答えの中の価格帯の名前。語の切れ目で拾い、`document` の中の `ume` を掴まない。
  *
- * 段を増減しても書き直さずに済むよう `TIER_ORDER` から組む
+ * 価格帯を増減しても書き直さずに済むよう `TIER_ORDER` から組む
  */
 const TIER_WORD = new RegExp(`\\b(${TIER_ORDER.join("|")})\\b`, "g");
 
 /**
- * モデルの答えから段を読む。
+ * モデルの答えから価格帯を読む。
  *
  * 完全一致で照らすと `take。` や `` `take` `` のような些細な飾りで読めなくなり、
- * 黙って中央の段へ落ちて価格に響く。語として含まれるかで拾う。段が複数混じって
+ * 黙って中央の価格帯へ落ちて価格に響く。語として含まれるかで拾う。価格帯が複数混じって
  * いれば選べていないということなので、読めない扱いにする
  */
 function readTier(text: string | undefined): Tier | undefined {
@@ -110,9 +110,9 @@ function readTier(text: string | undefined): Tier | undefined {
 }
 
 /**
- * Bedrock で判ずる判定器を作る。
+ * Bedrock で価格帯を判定する処理を作る。
  *
- * 失敗しても投げない。判定できないことで売り買いを止めるより、中央の段で売るほうが
+ * 失敗しても投げない。判定できないことで売り買いを止めるより、中央の価格帯で売るほうが
  * 害が小さい。落としたことは `fellBack` で呼び出し側に伝える
  */
 export function createBedrockJudge(converse: ConverseFn): Judge {
@@ -131,13 +131,15 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
           .join(" "),
       );
       if (!tier) {
-        console.warn("[pricing] 段を読み取れなかったため既定の段に落とします");
+        console.warn(
+          "[pricing] 価格帯を読み取れなかったため既定の価格帯に落とします",
+        );
         return { tier: FALLBACK_TIER, fellBack: true };
       }
       return { tier };
     } catch (error) {
       console.warn(
-        "[pricing] 段の判定に失敗したため既定の段に落とします",
+        "[pricing] 価格帯の判定に失敗したため既定の価格帯に落とします",
         error,
       );
       return { tier: FALLBACK_TIER, fellBack: true };
@@ -177,19 +179,19 @@ export const SYSTEM_ONE_TIMEOUT_MS = 3_000;
  * 再送の回数。
  *
  * docs は 429 / 529 にバックオフを案内しているが、SDK の既定（2 回）では最悪の待ちが
- * 30 秒を超える。判定に失敗しても中央の段で売れる以上、粘る利が無いので 1 回に抑える。
+ * 30 秒を超える。判定に失敗しても中央の価格帯で売れる以上、粘る利が無いので 1 回に抑える。
  * 最悪でも 3 秒 + 待ち + 3 秒に収まる
  */
 export const SYSTEM_ONE_MAX_RETRIES = 1;
 
-/** 段の判定に使う質問の名前。応答はこの名前で返る */
+/** 価格帯の判定に使う質問の名前。応答はこの名前で返る */
 const QUESTION_NAME = "tier";
 
 /**
- * 順序尺度の値を段へ写す。
+ * 順序尺度の値を価格帯へ写す。
  *
- * 水準は 0 から始まり、段の数だけある。各段の中心は水準の番号そのものなので、
- * 四捨五入すれば最も近い段になる（3 段なら境は 0.5 と 1.5）。段を増減しても
+ * 水準は 0 から始まり、価格帯の数だけある。各価格帯の中心は水準の番号そのものなので、
+ * 四捨五入すれば最も近い価格帯になる（価格帯が 3 つなら境は 0.5 と 1.5）。価格帯を増減しても
  * 境を書き直さずに済むよう、水準の数から導く。範囲の外に出た値は端へ収める
  */
 export function scoreToTier(score: number): Tier {
@@ -201,7 +203,7 @@ export function scoreToTier(score: number): Tier {
 }
 
 /**
- * System One（Jev および互換サーバー）で判ずる判定器を作る。
+ * System One（Jev および互換サーバー）で価格帯を判定する処理を作る。
  *
  * 公式 SDK（`@typesafe-ai/sdk`）に乗る。型・リトライ・`retry-after` の尊重を自前で
  * 抱えないため。待ちと再送の既定だけは、買い手を待たせない値に締め直す。
@@ -239,7 +241,9 @@ export function createSystemOneJudge(options: SystemOneOptions): Judge {
       });
       const answer = answers[QUESTION_NAME];
       if (answer?.type !== "score" || !Number.isFinite(answer.score)) {
-        console.warn("[pricing] System One の応答から段を読み取れませんでした");
+        console.warn(
+          "[pricing] System One の応答から価格帯を読み取れませんでした",
+        );
         return { tier: FALLBACK_TIER, fellBack: true };
       }
       return {

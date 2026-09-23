@@ -14,7 +14,7 @@ describe("見積書の往復", () => {
     expect(decodeQuote(encodeQuote(QUOTE))).toEqual(QUOTE);
   });
 
-  it("3段のいずれも往復できる", () => {
+  it("3つの価格帯のいずれも往復できる", () => {
     for (const tier of ["ume", "take", "matsu"] as const) {
       const quote = { tier, price: "$0.1" };
       expect(decodeQuote(encodeQuote(quote))).toEqual(quote);
@@ -37,7 +37,7 @@ describe("読めない見積書", () => {
     }
   });
 
-  it("知らない段は読まない", () => {
+  it("知らない価格帯は読まない", () => {
     expect(decodeQuote("v1|gold|$0.15")).toBeUndefined();
   });
 

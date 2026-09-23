@@ -7,7 +7,7 @@ import {
 
 const ok = () => vi.fn().mockResolvedValue({ tier: "matsu" as const });
 
-describe("判定器の呼び出し予算（U12）", () => {
+describe("判定モデルの呼び出し予算（U12）", () => {
   it("予算のうちは素通しする", async () => {
     const inner = ok();
     const judge = withJudgeBudget(inner, { capacity: 3, refillPerSecond: 0 });
@@ -18,7 +18,7 @@ describe("判定器の呼び出し予算（U12）", () => {
   });
 
   // 無認証の公開エンドポイントでは、支払う気のない相手が見積もりだけを繰り返せる
-  it("予算を使い切ったら判定器を呼ばずに既定の段へ落とす", async () => {
+  it("予算を使い切ったら判定モデルを呼ばずに既定の価格帯へ落とす", async () => {
     const inner = ok();
     const judge = withJudgeBudget(inner, { capacity: 2, refillPerSecond: 0 });
     await judge({ toolName: "t", state: "s" });
@@ -61,7 +61,7 @@ describe("判定器の呼び出し予算（U12）", () => {
   });
 });
 
-describe("判定器へ渡す依頼文の長さ", () => {
+describe("判定モデルへ渡す依頼文の長さ", () => {
   // 長い依頼文をそのまま渡すと、1回あたりの入力トークンで費用が伸びる
   it("上限を超える依頼文は切り詰めて渡す", async () => {
     const inner = ok();
@@ -80,9 +80,9 @@ describe("判定器へ渡す依頼文の長さ", () => {
 });
 
 describe("予算の共有（決定58）", () => {
-  // 判定器は価格表の指定で毎リクエスト選び直すが、バケツはコンテナに 1 つでなければ
+  // 判定モデルは価格表の指定で毎リクエスト選び直すが、バケツはコンテナに 1 つでなければ
   // 予算が毎回満タンに戻り、防護が無くなる
-  it("同じ予算から包んだ判定器どうしはバケツを共有する", async () => {
+  it("同じ予算から包んだ判定処理どうしはバケツを共有する", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const budget = createJudgeBudget({
       capacity: 1,

@@ -138,7 +138,7 @@ describe("generateHtmlWithBedrock", () => {
   });
 });
 
-describe("段に応じた規模の指示（決定56）", () => {
+describe("価格帯に応じた規模の指示（決定56）", () => {
   it("sizeHint を渡すとシステムプロンプトに足される", async () => {
     const converse = fakeConverse("<html></html>");
     await generateHtmlWithBedrock(converse, {
@@ -183,7 +183,7 @@ describe("段に応じた規模の指示（決定56）", () => {
   });
 });
 
-describe("createGenerateHtmlHandler に段の予算を渡す", () => {
+describe("createGenerateHtmlHandler に価格帯の予算を渡す", () => {
   it("予算を渡すと規模の指示と天井が生成に伝わる", async () => {
     const converse = fakeConverse("<html></html>");
     const handler = createGenerateHtmlHandler(converse, {

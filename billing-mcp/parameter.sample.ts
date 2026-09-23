@@ -22,10 +22,10 @@ export const devParameter: AppParameter = {
   allowedModelIds: [
     "jp.anthropic.claude-sonnet-4-6",
     "jp.anthropic.claude-opus-4-8",
-    // 段の判定に使う（決定53）
+    // 価格帯の判定に使う（決定53）
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
   ],
-  // 段の判定器（決定58）はパラメータではなく AppConfig の価格表で切り替える。
+  // 価格帯の判定モデル（決定58）はパラメータではなく AppConfig の価格表で切り替える。
   // Jev 用の Secret は常に空で作られるので、ここに書くことは無い
   // 価格表を AppConfig から読むなら、AppConfig Agent Lambda extension の
   // レイヤー ARN を渡す（決定56）。省略するとサーバー側の既定の表で動く。

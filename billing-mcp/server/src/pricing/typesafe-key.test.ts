@@ -57,8 +57,8 @@ describe("Jev の API キーの読み手（決定58）", () => {
     warn.mockRestore();
   });
 
-  // CDK はランダム生成を避けて目印を入れる。出鱈目な鍵で 401 を繰り返さないため
-  it("置き換えの目印のままなら未設定として扱う", async () => {
+  // CDK はランダム生成を避けて仮の値を入れる。出鱈目な鍵で 401 を繰り返さないため
+  it("仮の値のままなら未設定として扱う", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const load = createApiKeyLoader({
       env: { TYPESAFE_API_KEY_SECRET_ARN: "arn" },

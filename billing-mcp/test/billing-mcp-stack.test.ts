@@ -137,7 +137,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
 
 
 
-  it("価格表を AppConfig に置き、既定の3段を載せる", () => {
+  it("価格表を AppConfig に置き、既定の3つの価格帯を載せる", () => {
     template.resourceCountIs("AWS::AppConfig::Application", 1);
     template.resourceCountIs("AWS::AppConfig::HostedConfigurationVersion", 1);
     const versions = template.findResources(
@@ -150,7 +150,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
   });
 
   // 既定は Haiku。Jev へは AppConfig の同じ profile の値を書き換えて切り替える（決定58）
-  it("価格表に判定器の指定を載せ、既定は bedrock にする", () => {
+  it("価格表に判定モデルの指定を載せ、既定は haiku にする", () => {
     const versions = template.findResources(
       "AWS::AppConfig::HostedConfigurationVersion",
     );
@@ -197,8 +197,8 @@ describe("Jev の API キー（決定58）", () => {
   });
 
   // 値は人が後から入れる。CDK に書くと CloudFormation テンプレートに平文で残る。
-  // ランダム生成に任せると、出鱈目な鍵で 401 になり全件が中央の段へ落ちる
-  it("鍵ではなく置き換えの目印を入れて作る", () => {
+  // ランダム生成に任せると、出鱈目な鍵で 401 になり全件が中央の価格帯へ落ちる
+  it("鍵ではなく仮の値を入れて作る", () => {
     template.resourceCountIs("AWS::SecretsManager::Secret", 1);
     const secrets = template.findResources("AWS::SecretsManager::Secret");
     const props = Object.values(secrets)[0].Properties as Record<string, unknown>;

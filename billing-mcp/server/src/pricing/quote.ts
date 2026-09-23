@@ -1,8 +1,8 @@
-// リクエスト本文から段と価格を決める（DESIGN.md 決定55・56）。
+// リクエスト本文から価格帯と価格を決める（DESIGN.md 決定55・56）。
 //
-// x402 は 2 往復する。1 往復目（支払い無し）で段を判じ、見積書を `accepts[].extra.quote`
+// x402 は 2 往復する。1 往復目（支払い無し）で価格帯を判定し、見積書を `accepts[].extra.quote`
 // に載せる。2 往復目（支払い付き）では買い手がその見積書をそのまま返してくるので、判定を
-// やり直さずその値を使う。判定器は決定的でないため、やり直すと額がぶれて上流の照合が
+// やり直さずその値を使う。判定モデルは決定的でないため、やり直すと額がぶれて上流の照合が
 // 外れ、買い手が 402 を受け取り続ける。
 //
 // 見積書が読めない場合、または価格表と食い違う場合（表を差し替えた直後の古い見積書）は
@@ -23,7 +23,7 @@ export const PAID_TOOL_NAME = "generate-html";
 /** `_meta` に積まれる支払いのキー（`@x402/mcp` の MCP_PAYMENT_META_KEY と同値） */
 const PAYMENT_META_KEY = "x402/payment";
 
-/** 判定できないときに使う段。判定器の fallback と揃える */
+/** 判定できないときに使う価格帯。判定処理の fallback と揃える */
 const DEFAULT_TIER: Tier = "take";
 
 export interface ResolveQuoteOptions {
@@ -33,7 +33,7 @@ export interface ResolveQuoteOptions {
 
 export interface ResolvedQuote {
   tier: Tier;
-  /** 段に対応する価格（"$0.15" 形式） */
+  /** 価格帯に対応する価格（"$0.15" 形式） */
   price: string;
   /**
    * `accepts[].extra.quote` に載せる見積書。
@@ -41,7 +41,7 @@ export interface ResolvedQuote {
    */
   quote?: string;
   /**
-   * 判定器が確信度を返した場合のみ。判断には使わず、記録するために運ぶ。
+   * 判定モデルが確信度を返した場合のみ。判断には使わず、記録するために運ぶ。
    * 見積書を読んだ 2 往復目では付かない
    */
   confidence?: number;
@@ -85,9 +85,9 @@ function findPaidCall(
 }
 
 /**
- * リクエスト本文を見て、この呼び出しに適用する段と価格を決める。
+ * リクエスト本文を見て、この呼び出しに適用する価格帯と価格を決める。
  *
- * 判定器は 1 往復目でしか呼ばない。2 往復目は見積書を読むだけなので、判定の費用も
+ * 判定モデルは 1 往復目でしか呼ばない。2 往復目は見積書を読むだけなので、判定の費用も
  * 遅延も 1 回分で済む
  */
 export async function resolveQuote(
@@ -98,7 +98,7 @@ export async function resolveQuote(
   const call = findPaidCall(body);
 
   // 値付けの対象でない呼び出し（initialize、tools/list、壊れた本文など）。
-  // ツールを登録するために accepts は要るので、既定の段で組む
+  // ツールを登録するために accepts は要るので、既定の価格帯で組む
   if (!call) {
     return { tier: DEFAULT_TIER, price: priceOf(table, DEFAULT_TIER) };
   }

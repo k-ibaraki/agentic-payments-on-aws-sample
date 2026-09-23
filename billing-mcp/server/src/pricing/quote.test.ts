@@ -25,7 +25,7 @@ function toolCall(prompt: string, quote?: unknown) {
 const base = { table: DEFAULT_TIER_TABLE };
 
 describe("支払いの無い呼び出し", () => {
-  it("判定器を呼んで段を決め、見積書を作る", async () => {
+  it("判定モデルを呼んで価格帯を決め、見積書を作る", async () => {
     const judge = judgeReturning("matsu");
     const result = await resolveQuote(toolCall("予約システム"), {
       ...base,
@@ -37,7 +37,7 @@ describe("支払いの無い呼び出し", () => {
   });
 
   // 水準の記述が効いているかを実地で観測するため、確信度は呼び出し側まで運ぶ
-  it("判定器が確信度を返せば見積もりに載せる", async () => {
+  it("判定モデルが確信度を返せば見積もりに載せる", async () => {
     const judge: Judge = vi
       .fn()
       .mockResolvedValue({ tier: "take", confidence: 0.73 });
@@ -48,7 +48,7 @@ describe("支払いの無い呼び出し", () => {
     expect(result.confidence).toBe(0.73);
   });
 
-  it("確信度を返さない判定器なら載せない", async () => {
+  it("確信度を返さない判定モデルなら載せない", async () => {
     const result = await resolveQuote(toolCall("FAQページ"), {
       ...base,
       judge: judgeReturning("take"),
@@ -56,7 +56,7 @@ describe("支払いの無い呼び出し", () => {
     expect(result.confidence).toBeUndefined();
   });
 
-  it("依頼文を判定器へ渡す", async () => {
+  it("依頼文を判定モデルへ渡す", async () => {
     const judge = judgeReturning("ume");
     await resolveQuote(toolCall("連絡先ページ"), { ...base, judge });
     expect(judge).toHaveBeenCalledWith(
@@ -66,7 +66,7 @@ describe("支払いの無い呼び出し", () => {
 });
 
 describe("支払い付きの呼び出し", () => {
-  it("見積書が読めれば判定器を呼ばずに同じ段を使う", async () => {
+  it("見積書が読めれば判定モデルを呼ばずに同じ価格帯を使う", async () => {
     const judge = judgeReturning("ume");
     const result = await resolveQuote(
       toolCall("予約システム", "v1|matsu|$0.2"),
@@ -103,7 +103,7 @@ describe("支払い付きの呼び出し", () => {
 });
 
 describe("値付けの要らない呼び出し", () => {
-  it("有料ツール以外では判定器を呼ばない", async () => {
+  it("有料ツール以外では判定モデルを呼ばない", async () => {
     const judge = judgeReturning("matsu");
     const result = await resolveQuote(
       JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
@@ -113,7 +113,7 @@ describe("値付けの要らない呼び出し", () => {
     expect(result.quote).toBeUndefined();
   });
 
-  it("本文が壊れていても既定の段で通す", async () => {
+  it("本文が壊れていても既定の価格帯で通す", async () => {
     const judge = judgeReturning("matsu");
     for (const body of ["", "{", "null", "[]"]) {
       expect((await resolveQuote(body, { ...base, judge })).tier).toBe("take");
@@ -121,7 +121,7 @@ describe("値付けの要らない呼び出し", () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
-  it("依頼文が文字列でなければ判定器を呼ばない", async () => {
+  it("依頼文が文字列でなければ判定モデルを呼ばない", async () => {
     const judge = judgeReturning("matsu");
     const body = JSON.stringify({
       jsonrpc: "2.0",

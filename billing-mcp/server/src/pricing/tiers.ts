@@ -1,7 +1,7 @@
-// 段と価格表（DESIGN.md 決定56）。
+// 価格帯と価格表（DESIGN.md 決定56）。
 //
-// 段は依頼に見合う規模の見立てであり、品質の等級ではない。売り手が段を判じ、
-// 段に応じた目安トークン数を生成の指示に織り込み、段に対応する価格を提示する。
+// 価格帯は依頼に見合う規模の見立てであり、品質の等級ではない。売り手が価格帯を判定し、
+// 価格帯に応じた目安トークン数を生成の指示に織り込み、価格帯に対応する価格を提示する。
 // 買い手には「ご依頼の内容ではおよそ N トークン相当の分量になるため梅（$X）です」と
 // 根拠を添えて示す。
 //
@@ -20,7 +20,7 @@ export interface TierEntry {
 }
 
 /**
- * 段を判ずる判定器の種類（決定58）。
+ * 価格帯の判定モデルの種類（決定58）。
  *
  * 既定は Bedrock の Haiku。`jev` は TypeSafe の Jev（および System One 互換の
  * サーバー）を指す。価格表と同じ profile に置くので、運用中に再デプロイなしで切り替えられる
@@ -33,7 +33,7 @@ export const DEFAULT_JUDGE_KIND: JudgeKind = "haiku";
 
 export interface TierTable {
   tiers: Record<Tier, TierEntry>;
-  /** 段を判ずる判定器（決定58） */
+  /** 価格帯の判定モデル（決定58） */
   judge: JudgeKind;
 }
 
@@ -54,7 +54,7 @@ export const DEFAULT_TIER_TABLE: TierTable = {
 
 const LABELS: Record<Tier, string> = { ume: "梅", take: "竹", matsu: "松" };
 
-/** 段の表示名。買い手への提示と記録に使う */
+/** 価格帯の表示名。買い手への提示と記録に使う */
 export function tierLabel(tier: Tier): string {
   return LABELS[tier];
 }
@@ -107,9 +107,9 @@ function parseEntry(value: unknown): TierEntry | undefined {
 }
 
 /**
- * 判定器の指定を読む（決定58）。
+ * 判定モデルの指定を読む（決定58）。
  *
- * 読めなければ既定（Bedrock）へ戻す。価格表ごと退けないのは、判定器の書き損じで
+ * 読めなければ既定（Bedrock）へ戻す。価格表ごと退けないのは、判定モデルの書き損じで
  * 価格まで巻き添えにしないため。黙って戻すと気づけないので警告は残す
  */
 function parseJudgeKind(value: unknown): JudgeKind {
@@ -120,7 +120,7 @@ function parseJudgeKind(value: unknown): JudgeKind {
   )
     return value as JudgeKind;
   console.warn(
-    `[pricing] 判定器の指定を読み取れませんでした（${JSON.stringify(value)}）。${DEFAULT_JUDGE_KIND} を使います`,
+    `[pricing] 判定モデルの指定を読み取れませんでした（${JSON.stringify(value)}）。${DEFAULT_JUDGE_KIND} を使います`,
   );
   return DEFAULT_JUDGE_KIND;
 }
@@ -143,7 +143,7 @@ export function parseTierTable(value: unknown): TierTable | undefined {
   }
   const tiers = entries as Record<Tier, TierEntry>;
 
-  // 段が上がるほど規模も価格も大きくなっていること。逆転した表は設定の書き損じとみなす
+  // 価格帯が上がるほど規模も価格も大きくなっていること。逆転した表は設定の書き損じとみなす
   for (let i = 1; i < TIER_ORDER.length; i++) {
     const lower = tiers[TIER_ORDER[i - 1]];
     const upper = tiers[TIER_ORDER[i]];
@@ -168,7 +168,7 @@ export interface GenerationBudget {
 }
 
 /**
- * 段から生成側の予算を作る。
+ * 価格帯から生成側の予算を作る。
  *
  * `maxTokens` は目安そのものではなく、その 3 倍を確保する。目安は引き寄せる力であって
  * 固定する力ではなく（決定56 の実測）、指示を超えて書かれることがあるため。打ち切ると
@@ -188,8 +188,8 @@ export function generationBudgetOf(
 /**
  * 買い手への根拠の開示（決定56）。402 応答の資源説明に載せる。
  *
- * 段は品質の等級ではなく、依頼が求める規模の見立てである。「簡素版」や「値引き」と
- * 読める言い方は避け、「この依頼ならこの分量になるので、この段の価格です」と示す。
+ * 価格帯は品質の等級ではなく、依頼が求める規模の見立てである。「簡素版」や「値引き」と
+ * 読める言い方は避け、「この依頼ならこの分量になるので、この価格帯の価格です」と示す。
  *
  * 資源説明は支払い条件の照合対象ではないため、価格表が差し替わっても 2 往復目の
  * 照合を壊さない

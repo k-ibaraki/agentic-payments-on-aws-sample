@@ -1,4 +1,4 @@
-// 段の値付けが HTTP 層まで通っていることの確認（DESIGN.md 決定55・56）。
+// 価格帯の値付けが HTTP 層まで通っていることの確認（DESIGN.md 決定55・56）。
 // facilitator だけ偽物にして、402 応答の中身と 2 往復目の挙動を見る。
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpFetchHandler, MCP_PATH } from "../app.js";
@@ -9,7 +9,7 @@ import { DEFAULT_TIER_TABLE, type JudgeKind } from "./tiers.js";
 const PAY_TO = "0x2222222222222222222222222222222222222222";
 const ORIGIN = "https://billing-mcp.example.test";
 
-describe("段に応じた値付けの結線", () => {
+describe("価格帯に応じた値付けの結線", () => {
   let facilitator: Awaited<ReturnType<typeof startFakeFacilitator>>;
 
   beforeAll(async () => {
@@ -53,7 +53,7 @@ describe("段に応じた値付けの結線", () => {
     return json.result?.structuredContent?.accepts?.[0];
   }
 
-  it("松と判じれば松の価格が提示される", async () => {
+  it("松と判定すれば松の価格が提示される", async () => {
     const accepted = await requestQuote(
       async () => ({ tier: "matsu" }),
       "予約システム",
@@ -62,7 +62,7 @@ describe("段に応じた値付けの結線", () => {
     expect(accepted?.amount).toBe("200000");
   });
 
-  it("梅と判じれば梅の価格が提示される", async () => {
+  it("梅と判定すれば梅の価格が提示される", async () => {
     const accepted = await requestQuote(
       async () => ({ tier: "ume" }),
       "連絡先ページ",
@@ -80,7 +80,7 @@ describe("段に応じた値付けの結線", () => {
     expect(extra?.quote).toContain("take");
   });
 
-  it("402 応答に段の根拠が載る（決定56）", async () => {
+  it("402 応答に価格帯の根拠が載る（決定56）", async () => {
     const app = createMcpFetchHandler({
       facilitatorUrl: facilitator.url,
       payTo: PAY_TO,
@@ -112,7 +112,7 @@ describe("段に応じた値付けの結線", () => {
     expect(text).toContain("$0.2");
   });
 
-  it("見積書を返せば判定器を呼ばずに同じ額が出る", async () => {
+  it("見積書を返せば判定モデルを呼ばずに同じ額が出る", async () => {
     const first = await requestQuote(
       async () => ({ tier: "matsu" }),
       "予約システム",
@@ -129,8 +129,8 @@ describe("段に応じた値付けの結線", () => {
   });
 });
 
-// 判定器の切り替えが AppConfig から HTTP 層まで通っているか（決定58）
-describe("判定器の切り替えの結線", () => {
+// 判定モデルの切り替えが AppConfig から HTTP 層まで通っているか（決定58）
+describe("判定モデルの切り替えの結線", () => {
   let facilitator: Awaited<ReturnType<typeof startFakeFacilitator>>;
 
   beforeAll(async () => {
@@ -164,7 +164,7 @@ describe("判定器の切り替えの結線", () => {
       facilitatorUrl: facilitator.url,
       payTo: PAY_TO,
       converse: vi.fn(),
-      // 既定の判定器は必ず梅を返す。松が出たら Jev が使われた証拠になる
+      // 既定の判定モデルは必ず梅を返す。松が出たら Jev が使われた証拠になる
       judge: async () => ({ tier: "ume" }),
       loadApiKey: async () => apiKey,
       createSystemOne: (key) =>
@@ -204,7 +204,7 @@ describe("判定器の切り替えの結線", () => {
     };
   }
 
-  it("価格表が bedrock を指せば既定の判定器で値が付く", async () => {
+  it("価格表が haiku を指せば既定の判定モデルで値が付く", async () => {
     const { accepted, systemOneFetch } = await requestWith("haiku", "k");
     expect(accepted?.amount).toBe("100000");
     expect(systemOneFetch).not.toHaveBeenCalled();
@@ -217,7 +217,7 @@ describe("判定器の切り替えの結線", () => {
   });
 
   // 鍵の入れ忘れで価格の判定品質を落とさない（決定58）
-  it("jev でも鍵が無ければ既定の判定器に留まる", async () => {
+  it("jev でも鍵が無ければ既定の判定モデルに留まる", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { accepted, systemOneFetch } = await requestWith("jev");
     expect(accepted?.amount).toBe("100000");

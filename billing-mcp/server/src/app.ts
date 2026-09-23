@@ -95,12 +95,12 @@ export function createMcpFetchHandler(
     converse: options.converse ?? createDefaultConverse(),
   };
   // 乱発への防護（決定57）。無認証の公開エンドポイントでは、支払う気のない相手が
-  // 見積もりだけを繰り返せる。予算を使い切ったら判定器を呼ばず既定の段で売る。
-  // バケツはコンテナに 1 つで、判定器を選び直しても引き継がれる（決定58）
+  // 見積もりだけを繰り返せる。予算を使い切ったら判定モデルを呼ばず既定の価格帯で売る。
+  // バケツはコンテナに 1 つで、判定モデルを選び直しても引き継がれる（決定58）
   const judgeBudget = createJudgeBudget(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
-  // 段の判定器（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
+  // 価格帯の判定モデル（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
   // 共有する。価格表が jev を指していれば Jev に切り替える。鍵はコールド
   // スタートに一度だけ Secrets Manager から読む
   const selectJudge = createJudgeSelector({
@@ -119,7 +119,7 @@ export function createMcpFetchHandler(
   });
 
   // facilitator への /supported 照会を伴う初期化だけを使い回す。
-  // accepts の構築は段ごとに価格が変わるため毎リクエスト行う（決定56）
+  // accepts の構築は価格帯ごとに価格が変わるため毎リクエスト行う（決定56）
   let resourceServerPromise:
     | ReturnType<typeof createResourceServer>
     | undefined;
@@ -165,7 +165,7 @@ export function createMcpFetchHandler(
       return response;
     }
 
-    // 本文は一度しか読めない。段を決めるために先に読み切り、
+    // 本文は一度しか読めない。価格帯を決めるために先に読み切り、
     // transport には同じ本文で組み直した Request を渡す
     const body = await request.text();
 
@@ -174,7 +174,7 @@ export function createMcpFetchHandler(
     const table = options.loadTierTable
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
-    // 判定器は価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
+    // 判定モデルは価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
     // 予算はコンテナ共有のバケツから取る
     const judge = judgeBudget.wrap(await selectJudge(table.judge));
     const quote = await resolveQuote(body, { table, judge });
@@ -204,7 +204,7 @@ export function createMcpFetchHandler(
           ? ""
           : ` 確信度=${quote.confidence.toFixed(2)}`;
       console.info(
-        `[pricing] 段=${tierLabel(quote.tier)} 価格=${quote.price}${confidence}`,
+        `[pricing] 価格帯=${tierLabel(quote.tier)} 価格=${quote.price}${confidence}`,
       );
     }
 

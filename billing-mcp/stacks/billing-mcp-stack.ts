@@ -51,7 +51,7 @@ export interface BillingMcpStackProps extends StackProps {
 }
 
 /**
- * 鍵が未投入であることを表す目印。
+ * 鍵が未投入であることを表す仮の値。
  * server 側の `pricing/typesafe-key.ts` の UNSET_API_KEY と揃える（決定58）
  */
 const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
@@ -63,7 +63,7 @@ const DEFAULT_TIER_TABLE = {
     take: { price: "$0.15", targetTokens: 8_000 },
     matsu: { price: "$0.2", targetTokens: 12_000 },
   },
-  // 段を判ずる判定器（決定58）。既定は Bedrock の Haiku。Jev に切り替えるときは
+  // 価格帯を判定するモデル（決定58）。既定は Bedrock の Haiku。Jev に切り替えるときは
   // この値を "jev" にして AppConfig を再展開する（再デプロイは要らない）
   judge: "haiku",
 };
@@ -202,18 +202,18 @@ export function createBillingMcpStack(
     deploymentStrategyId: strategy.ref,
   });
 
-  // Jev の API キー（決定58）。器だけ作り、値は人が後から入れる（`pnpm set:jev-key`）。
+  // Jev の API キー（決定58）。仮の値を入れたシークレットだけ作り、鍵は人が後から入れる（`pnpm set:jev-key`）。
   // API キーを CDK に書くと CloudFormation テンプレートに平文で残るため。
   //
-  // 中身を目印（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
-  // 出鱈目な鍵が入っていると、判定器を jev に切り替えたときに毎回 401 になり、
-  // 全件がフォールバックの段に落ちて価格が実質固定になる。目印ならサーバーが
-  // 「未投入」と判って既定の判定器に留まる
+  // 中身を仮の値（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
+  // 出鱈目な鍵が入っていると、判定モデルを jev に切り替えたときに毎回 401 になり、
+  // 全件がフォールバックの価格帯に落ちて価格が実質固定になる。仮の値ならサーバーが
+  // 「未投入」と判って既定の判定モデルに留まる
   const typesafeApiKeySecret = new Secret(stack, "TypesafeApiKey", {
     secretStringValue: SecretValue.unsafePlainText(UNSET_TYPESAFE_API_KEY),
     secretName: `billing-mcp/typesafe-api-key-${props.envName}`,
     description:
-      "TypeSafe（Jev）の API キー。判定器を jev に切り替えるときに使う（決定58）",
+      "TypeSafe（Jev）の API キー。判定モデルを jev に切り替えるときに使う（決定58）",
     // 作り直しの余地を残す。鍵は外部サービスの発行物で、消えても再発行できる
     removalPolicy: RemovalPolicy.DESTROY,
   });
@@ -238,7 +238,7 @@ export function createBillingMcpStack(
       ...(props.price ? { PRICE: props.price } : {}),
       // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
       UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
-      // 判定器に jev が指定されたときだけ読みに行く（決定58）
+      // 判定モデルに jev が指定されたときだけ読みに行く（決定58）
       TYPESAFE_API_KEY_SECRET_ARN: typesafeApiKeySecret.secretArn,
       // 拡張を載せたときだけ AppConfig を見る。無ければ既定の表で動く（決定56）
       ...(useAppConfig

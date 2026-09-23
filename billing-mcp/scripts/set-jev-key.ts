@@ -1,6 +1,6 @@
 // Jev（TypeSafe）の API キーを Secrets Manager に入れる（DESIGN.md 決定58）。
 //
-// CDK が作るのは目印（REPLACE_ME）入りの器だけで、値は人が入れる。CDK に書くと
+// CDK が作るのは仮の値（REPLACE_ME）を入れたシークレットだけで、鍵は人が入れる。CDK に書くと
 // CloudFormation テンプレートに平文で残るため。
 //
 // 実行: pnpm set:jev-key        … parameter.ts の envName からスタックを決める
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   if (key === "REPLACE_ME") {
-    console.error("目印そのものは入れられません。実際の鍵を渡すこと");
+    console.error("仮の値そのものは入れられません。実際の鍵を渡すこと");
     process.exit(1);
   }
 
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  console.log(`入れました（${key.length} 文字）。判定器を切り替えるには AppConfig の judge を jev にすること`);
+  console.log(`入れました（${key.length} 文字）。判定モデルを切り替えるには AppConfig の judge を jev にすること`);
   console.log("");
   console.log("  AppConfig の価格表（tier-table）の例:");
   console.log('    { "tiers": { ... }, "judge": "jev" }');
