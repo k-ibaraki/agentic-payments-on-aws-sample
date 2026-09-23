@@ -60,7 +60,7 @@ const requestCounts = new KVStore(scope, 'request-count', {
 
 // エージェントの会話 API。会話に触れる経路の認可は conversation-guard.ts のとおり呼び出し側の
 // 責務で、すべて listConversations で所有を検証する。
-// 特に sendMessage は実費（0.1 テスト USDC）を発生させる書き込み経路なので検証を省けない。
+// 特に sendMessage は実費（テスト USDC）を発生させる書き込み経路なので検証を省けない。
 // 自己サインアップは決定36 で既定は閉じたが、利用者どうしの分離はそれとは別に要る
 // （管理者が作った利用者でも、他人の会話に支払わせられてはならない）
 export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({

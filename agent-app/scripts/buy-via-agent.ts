@@ -9,7 +9,7 @@
 //
 // 実行: npx tsx scripts/buy-via-agent.ts "作りたいページの指示"
 //
-// 注意: 1回の実行で実オンチェーン決済（0.1 テスト USDC）が発生する。
+// 注意: 1回の実行で実オンチェーン決済（テスト USDC。売り手の価格は依頼ごとに変わる）が発生する。
 // ローカルの LLM は既定で canned プロバイダ（モック）だが、
 // 支払い・billing-mcp 側の Bedrock 生成・オンチェーン決済はすべて本物が動く
 import { type AgentStreamChunk, Scope } from '@aws-blocks/blocks';
