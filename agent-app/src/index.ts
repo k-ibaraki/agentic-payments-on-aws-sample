@@ -11,6 +11,7 @@ import {
   BALANCE_WATCH_INTERVAL_MS,
   STRIP_EMPTY,
   balanceKey,
+  createHostSlot,
   didBalanceChange,
   findLastAssistant,
   isPaidToolCall,
@@ -63,12 +64,13 @@ type Purchase = Awaited<ReturnType<typeof buyer.listPurchases>>['purchases'][num
 type PurchaseHistory = Awaited<ReturnType<typeof buyer.listPurchaseHistory>>;
 type PurchaseGroup = PurchaseHistory['conversations'][number];
 
-// 「購入履歴」タブのプレビュー（選んだ 1 件だけを載せる。会話の中のプレビューとは別）
-let previewHost: PreviewHost | null = null;
+// 「購入履歴」タブのプレビュー（選んだ 1 件だけを載せる。会話の中のプレビューとは別）。
+// 載せている途中の二重作成と、捨てた後に出来上がったホストの置き戻しは createHostSlot が防ぐ（決定62）
+const previewHosts = createHostSlot(mountHistoryPreview);
 // プレビューに描けている購入の resultId。一覧の行の強調に使う（決定62）
 let selectedResultId: string | null = null;
 // 表示の通し番号（refreshWallet と同じ理由）。「表示」を続けて押したとき、追い越されて遅れて描けた
-// 古い 1 件で強調を巻き戻さない。捨てるときは番号を進めて、飛行中の表示の結果を無視させる
+// 古い 1 件で強調を巻き戻さない。捨てるときは番号を進めて、まだ返っていない表示の結果を無視させる
 let previewRequestSeq = 0;
 let sellerInfo: SellerInfo | null = null;
 // 画面に出ている吹き出しの数。新規会話で確認を挟むかの判断に使う（決定44）
@@ -422,7 +424,7 @@ function discardWallet() {
   stopBalanceWatch();
   balanceHistory.length = 0;
   lastBalanceKey = null;
-  // 飛行中の取得の応答を捨てる。進めないと、前の利用者の残高が遅れて帯に描き戻る
+  // まだ返っていない取得の応答を捨てる。進めないと、前の利用者の残高が遅れて帯に描き戻る
   walletRenderedSeq = ++walletRequestSeq;
   for (const id of ['strip-balance', 'strip-remaining']) {
     el(id).textContent = STRIP_EMPTY;
@@ -436,8 +438,7 @@ function discardWallet() {
 
 // 購入したページの表示を消す。MCP Apps の View は次の表示でまた載せ直す
 function discardPreview() {
-  previewHost?.destroy();
-  previewHost = null;
+  previewHosts.discard();
   selectedResultId = null;
   previewRequestSeq += 1;
   applyHistorySelection();
@@ -690,7 +691,7 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
 let historyStale = true;
 // 取得の通し番号（refreshWallet と同じ理由）。タブの切り替え・「更新」・購入の増加が並行し得るので、
 // 追い越されて遅れて返った古い一覧で新しい一覧を巻き戻さない。サインアウトでは番号を進めて
-// 飛行中の応答を捨て、前の利用者の履歴が描き戻らないようにする
+// まだ返っていない応答を捨て、前の利用者の履歴が描き戻らないようにする
 let historyRequestSeq = 0;
 let historyRenderedSeq = 0;
 
@@ -771,8 +772,9 @@ async function showPurchase(resultId: string) {
       showMessage(status, 'この購入には HTML がありません（支払い後の失敗）', 'error');
       return;
     }
-    const host = await ensurePreviewHost();
-    if (seq !== previewRequestSeq) return;
+    const host = await previewHosts.get();
+    // null は載せている途中で捨てられた印。そのときは番号も進んでいる
+    if (!host || seq !== previewRequestSeq) return;
     await host.showHtml(artifact.html, artifact.filename);
     if (seq !== previewRequestSeq) return;
     // 描けた後に強調する（失敗した 1 件を「表示中」に見せない。失敗時は前の 1 件が残って見えている）
@@ -788,16 +790,16 @@ async function showPurchase(resultId: string) {
   }
 }
 
-async function ensurePreviewHost(): Promise<PreviewHost> {
-  if (previewHost) return previewHost;
+// 購入履歴タブのプレビューに View を載せる。呼ぶのは previewHosts だけ（直接呼ぶと二重に載る）
+async function mountHistoryPreview(): Promise<PreviewHost> {
   el('preview-frame').removeAttribute('hidden');
   sellerInfo ??= await buyer.getSellerInfo();
   appendEvent(`ui:// を取得: ${sellerInfo.resourceUri}（${sellerInfo.mcpUrl}）`);
-  previewHost = await mountPreviewHost(el<HTMLIFrameElement>('preview-frame'), sellerInfo, {
+  const host = await mountPreviewHost(el<HTMLIFrameElement>('preview-frame'), sellerInfo, {
     onDownload: downloadHtml,
   });
   appendEvent('MCP Apps の View を初期化しました');
-  return previewHost;
+  return host;
 }
 
 // View からの ui/download-file 要求。会話の中のカードでも履歴のプレビューでも同じ扱い
@@ -827,7 +829,7 @@ function showTab(name: TabName) {
 // 同じブラウザで別の利用者がサインインしても前の購入が見えないよう、履歴も捨てる
 function discardHistory() {
   historyStale = true;
-  // 飛行中の取得の応答を捨てる（前の利用者の履歴が遅れて描き戻らないように）
+  // まだ返っていない取得の応答を捨てる（前の利用者の履歴が遅れて描き戻らないように）
   historyRenderedSeq = ++historyRequestSeq;
   historyRows = [];
   showMessage(el('history'), 'まだありません');
