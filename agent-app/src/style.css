@@ -673,19 +673,19 @@ h3 {
 }
 
 /*
- * 広い画面では、内部情報を本文の左の側面パネルにする（決定62）。本文（ヘッダーと main）は
- * 右の列の中で今までどおり 1280px を上限に中央へ寄り、パネルの幅のぶん細くなるのは画面が狭いときだけ。
- * パネルはヘッダーの行まで縦に通す（ヘッダーだけ全幅にすると、題名と本文の左端がずれるため）。
- * 未サインインでは #internals が display: none なので、auto の列は 0 に潰れる。
+ * 広い画面では、内部情報を本文の右の側面パネルにする（決定62。左右は 2026-09-23 追記で修正）。
+ * 本文（ヘッダーと main）は左の列の中で今までどおり 1280px を上限に中央へ寄り、パネルの幅のぶん
+ * 細くなるのは画面が狭いときだけ。パネルはヘッダーの行まで縦に通す（ヘッダーだけ全幅にすると、
+ * 題名と本文の左端がずれるため）。未サインインでは #internals が display: none なので、auto の列は 0 に潰れる。
  * 1024px は、パネル（20rem）を開いても本文に 700px ほど残る幅
  */
 @media (min-width: 1024px) {
   body {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      'side header'
-      'side main';
+      'header side'
+      'main side';
     grid-template-rows: auto 1fr;
     min-height: 100vh;
   }
@@ -700,7 +700,7 @@ h3 {
     width: 100%;
   }
 
-  /* スクロールしても画面の左に貼り付け、ログは画面の高さいっぱいまで伸ばす */
+  /* スクロールしても画面の右に貼り付け、ログは画面の高さいっぱいまで伸ばす */
   #internals {
     grid-area: side;
     position: sticky;
@@ -710,7 +710,7 @@ h3 {
     width: 20rem;
     height: 100vh;
     margin: 0;
-    border-width: 0 1px 0 0;
+    border-width: 0 0 0 1px;
     border-radius: 0;
   }
 
@@ -730,12 +730,12 @@ h3 {
     max-height: none;
   }
 
-  /* 開いているときの矢印は、左へ畳む向きにする（Pico の既定は下向き） */
+  /* 開いているときの矢印は、右へ畳む向きにする（Pico の既定は下向き） */
   #internals[open] > summary::after {
-    transform: rotate(90deg);
+    transform: rotate(-90deg);
   }
 
-  /* 閉じた姿は左端の細い帯。summary を帯いっぱいに広げ、題名を縦書きにする */
+  /* 閉じた姿は右端の細い帯。summary を帯いっぱいに広げ、題名を縦書きにする */
   #internals:not([open]) {
     width: 2.5rem;
     padding: 0.75rem 0;
@@ -751,12 +751,12 @@ h3 {
     writing-mode: vertical-rl;
   }
 
-  /* 閉じた帯の矢印は、右へ開く向き（Pico の既定の -90deg）のまま、題名の頭に置く */
+  /* 閉じた帯の矢印は、左へ開く向きにする（Pico の既定の -90deg から反転） */
   #internals:not([open]) > summary::after {
     order: -1;
     margin: 0;
     float: none;
-    transform: rotate(-90deg);
+    transform: rotate(90deg);
   }
 }
 
