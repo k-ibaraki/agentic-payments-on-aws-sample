@@ -287,7 +287,7 @@ export function registerGenerateHtmlTool(
     server,
     "generate-html",
     {
-      // 金額は書かない（PRICE 環境変数で可変。正確な額は PaymentRequired 応答が伝える）
+      // 金額は書かない（呼び出しごとに価格帯で変わる。正確な額は PaymentRequired 応答が伝える）
       description:
         "ユーザーの指示に従ってHTMLを生成する（有料: x402 決済が必要）",
       inputSchema: GENERATE_HTML_INPUT_SCHEMA,

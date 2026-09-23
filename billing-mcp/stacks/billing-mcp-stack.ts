@@ -29,8 +29,6 @@ export interface BillingMcpStackProps extends StackProps {
   readonly payToAddress: string;
   /** x402 facilitator の URL。省略時はサーバー側の既定（x402.org） */
   readonly facilitatorUrl?: string;
-  /** 価格（"$0.01" 形式）。省略時はサーバー側の既定 */
-  readonly price?: string;
   /**
    * Lambda の同時実行数の上限。
    * 無認証で公開する（決定19）ため必ず設定する。押さえられるのは瞬間的な
@@ -235,7 +233,6 @@ export function createBillingMcpStack(
     environment: {
       PAY_TO_ADDRESS: props.payToAddress,
       ...(props.facilitatorUrl ? { FACILITATOR_URL: props.facilitatorUrl } : {}),
-      ...(props.price ? { PRICE: props.price } : {}),
       // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
       UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
       // 判定モデルに jev が指定されたときだけ読みに行く（決定58）
@@ -342,15 +339,6 @@ export function createBillingMcpStack(
     description:
       "売上の受取先。agent-app の PAYMENT_PAY_TO（任意。売り手アドレスを固定する）と突き合わせる",
   });
-  // price は省略可で、省いた場合はサーバー側の既定額が効く。ここで既定値を書くと
-  // 定数が二重になるため出力しない（環境変数の渡し方と同じ扱い）
-  if (props.price) {
-    new CfnOutput(stack, "Price", {
-      value: props.price,
-      description:
-        "1 回あたりの価格。agent-app の PAYMENT_MAX_AMOUNT（USDC の最小単位。0.1 USDC = 100000）がこれを賄えるか確認する",
-    });
-  }
 
   return stack;
 }

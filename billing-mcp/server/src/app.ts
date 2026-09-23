@@ -264,7 +264,6 @@ export function optionsFromEnv(): BillingMcpServerOptions {
     facilitatorUrl:
       process.env.FACILITATOR_URL ?? "https://x402.org/facilitator",
     payTo,
-    price: process.env.PRICE,
     ...(loadTierTable ? { loadTierTable } : {}),
   };
 }

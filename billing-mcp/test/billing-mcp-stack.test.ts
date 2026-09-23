@@ -11,7 +11,6 @@ const parameter: AppParameter = {
   envName: "test",
   payToAddress: "0x2222222222222222222222222222222222222222",
   facilitatorUrl: "https://x402.org/facilitator",
-  price: "$0.01",
   reservedConcurrency: 5,
   allowedModelIds: ["jp.anthropic.claude-sonnet-4-6"],
 };
@@ -58,7 +57,6 @@ describe("billing-mcp スタック", () => {
         Variables: Match.objectLike({
           PAY_TO_ADDRESS: parameter.payToAddress,
           FACILITATOR_URL: parameter.facilitatorUrl,
-          PRICE: parameter.price,
           UI_HTML_PATH: Match.stringLikeRegexp("preview-view\\.html$"),
         }),
       },
@@ -110,21 +108,20 @@ describe("billing-mcp スタック", () => {
   });
 
   // 買い手（agent-app）が突き合わせる値。deploy 後に describe-stacks だけで揃うようにする
-  test("買い手に引き継ぐ受取先と価格を出力する", () => {
+  test("買い手に引き継ぐ受取先を出力する", () => {
     const outputs = template.findOutputs("*");
-    expect(Object.keys(outputs)).toEqual(
-      expect.arrayContaining(["PayToAddress", "Price"]),
-    );
+    expect(Object.keys(outputs)).toContain("PayToAddress");
     expect(outputs.PayToAddress?.Value).toBe(parameter.payToAddress);
-    expect(outputs.Price?.Value).toBe("$0.01");
   });
 
-  test("price を省いたら Price は出力しない（サーバー既定の額が効くため、値を二重に持たない）", () => {
-    const outputs = synth({ price: undefined }).findOutputs("*");
-    expect(Object.keys(outputs)).not.toContain("Price");
-    expect(Object.keys(outputs)).toEqual(
-      expect.arrayContaining(["McpEndpointUrl", "PayToAddress"]),
-    );
+  // 価格は段階制の価格表が決める（決定56）。単価を環境変数や出力に載せると、
+  // 値付けに効かない値を買い手の上限の目安として案内してしまう
+  test("単価を環境変数にも出力にも載せない", () => {
+    const functions = template.findResources("AWS::Lambda::Function");
+    const variables = Object.values(functions)[0].Properties.Environment
+      .Variables as Record<string, unknown>;
+    expect(variables.PRICE).toBeUndefined();
+    expect(Object.keys(template.findOutputs("*"))).not.toContain("Price");
   });
 });
 

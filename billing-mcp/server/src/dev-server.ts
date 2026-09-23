@@ -53,6 +53,6 @@ const server = createServer((req, res) => {
 
 server.listen(PORT, () =>
   console.log(
-    `billing-mcp サーバー起動: http://localhost:${PORT}${MCP_PATH}（価格 ${options.price ?? "既定"} / facilitator ${options.facilitatorUrl}）`,
+    `billing-mcp サーバー起動: http://localhost:${PORT}${MCP_PATH}（価格は段階制 / facilitator ${options.facilitatorUrl}）`,
   ),
 );

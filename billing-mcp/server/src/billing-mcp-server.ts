@@ -24,7 +24,9 @@ import {
 
 // Base Sepolia（テストネット）。DESIGN.md 決定8参照
 export const NETWORK = "eip155:84532";
-// 0.1 テスト USDC / 呼び出し。DESIGN.md 決定18参照
+// 価格を渡されなかったときの額（0.1 テスト USDC。DESIGN.md 決定18）。実際の値付けは
+// app.ts が呼び出しごとに価格表から決めて渡す（決定56）ので、ここが効くのは
+// 支払いラッパーを外から渡さずにサーバーを組む経路（テスト等）だけ
 export const DEFAULT_PRICE = "$0.1";
 // 決済（settle）をハンドラ実行前に行う。無認証の公開エンドポイントで、
 // 署名は有効だが決済が通らない支払いにより Bedrock の生成コストだけを
@@ -36,8 +38,6 @@ export interface BillingMcpServerOptions {
   facilitatorUrl: string;
   /** 売上の受取先ウォレットアドレス */
   payTo: `0x${string}`;
-  /** 価格（"$0.01" 形式）。省略時は DEFAULT_PRICE */
-  price?: string;
   /** Bedrock 呼び出し（テストでは偽物に差し替える） */
   converse?: ConverseFn;
   /** ui:// で配信する HTML のローダー（テストでは差し替える） */
@@ -176,7 +176,6 @@ export async function createBillingMcpServer(
     (await createPaidWrapper({
       facilitatorUrl: options.facilitatorUrl,
       payTo: options.payTo,
-      price: options.price,
     }));
 
   const server = new McpServer({ name: "billing-mcp", version: "0.1.0" });
