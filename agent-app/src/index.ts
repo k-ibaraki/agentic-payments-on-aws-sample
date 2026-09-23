@@ -14,6 +14,7 @@ import {
   didBalanceChange,
   findLastAssistant,
   isPaidToolCall,
+  isSelectedPurchase,
   orderChatNodes,
   purchaseDetail,
   readInternalsOpen,
@@ -64,6 +65,11 @@ type PurchaseGroup = PurchaseHistory['conversations'][number];
 
 // 「購入履歴」タブのプレビュー（選んだ 1 件だけを載せる。会話の中のプレビューとは別）
 let previewHost: PreviewHost | null = null;
+// プレビューに描けている購入の resultId。一覧の行の強調に使う（決定62）
+let selectedResultId: string | null = null;
+// 表示の通し番号（refreshWallet と同じ理由）。「表示」を続けて押したとき、追い越されて遅れて描けた
+// 古い 1 件で強調を巻き戻さない。捨てるときは番号を進めて、飛行中の表示の結果を無視させる
+let previewRequestSeq = 0;
 let sellerInfo: SellerInfo | null = null;
 // 画面に出ている吹き出しの数。新規会話で確認を挟むかの判断に使う（決定44）
 let messageCount = 0;
@@ -432,6 +438,9 @@ function discardWallet() {
 function discardPreview() {
   previewHost?.destroy();
   previewHost = null;
+  selectedResultId = null;
+  previewRequestSeq += 1;
+  applyHistorySelection();
   el('purchase-status').replaceChildren();
   const frame = el<HTMLIFrameElement>('preview-frame');
   frame.removeAttribute('srcdoc');
@@ -599,6 +608,9 @@ function purchaseRow(purchase: Purchase): HTMLElement {
   return row;
 }
 
+// 一覧に出ている履歴の行。表示中の強調（決定62）を付け替えるために持つ。一覧を描き直すたびに作り直す
+let historyRows: Array<{ purchase: Purchase; row: HTMLElement; button: HTMLButtonElement }> = [];
+
 // 履歴の行。こちらは一覧が長くなり得るので、押されたものだけをプレビューに載せる
 function renderHistoryPurchase(purchase: Purchase): HTMLElement {
   const row = purchaseRow(purchase);
@@ -607,7 +619,18 @@ function renderHistoryPurchase(purchase: Purchase): HTMLElement {
   button.disabled = !purchase.ok;
   button.addEventListener('click', () => void showPurchase(purchase.resultId));
   row.insertBefore(button, row.firstChild);
+  historyRows.push({ purchase, row, button });
   return row;
+}
+
+// 表示中の行を強調する。一覧を取り直しても、同じ resultId の行があれば強調を引き継ぐ
+function applyHistorySelection() {
+  for (const { purchase, row, button } of historyRows) {
+    const selected = isSelectedPurchase(purchase, selectedResultId);
+    row.classList.toggle('selected', selected);
+    // 押せない失敗の行には押した状態を名乗らせない
+    if (purchase.ok) button.setAttribute('aria-pressed', String(selected));
+  }
 }
 
 // 会話の中のカードに、売り手の MCP Apps UI を載せて購入済み HTML を描く（決定29・50）。
@@ -697,7 +720,9 @@ async function refreshHistory() {
   if (seq < historyRenderedSeq) return;
   historyRenderedSeq = seq;
   historyStale = false;
+  historyRows = [];
   const nodes = history.conversations.map(renderHistoryGroup);
+  applyHistorySelection();
   const note = historyNote(history);
   if (note) {
     const line = document.createElement('div');
@@ -737,17 +762,28 @@ function renderHistoryGroup(group: PurchaseGroup): HTMLElement {
 // 購入済み HTML を、売り手の MCP Apps UI（ホスト実装）に注入して描画する（決定29）。
 // こちらは購入履歴タブの 1 枚きりのプレビュー
 async function showPurchase(resultId: string) {
+  const seq = ++previewRequestSeq;
   const status = el('purchase-status');
   try {
     const artifact = await buyer.getPurchasedHtml(resultId);
+    if (seq !== previewRequestSeq) return;
     if (!artifact?.html) {
       showMessage(status, 'この購入には HTML がありません（支払い後の失敗）', 'error');
       return;
     }
     const host = await ensurePreviewHost();
+    if (seq !== previewRequestSeq) return;
     await host.showHtml(artifact.html, artifact.filename);
+    if (seq !== previewRequestSeq) return;
+    // 描けた後に強調する（失敗した 1 件を「表示中」に見せない。失敗時は前の 1 件が残って見えている）
+    selectedResultId = resultId;
+    applyHistorySelection();
     showMessage(status, `resultId ${resultId} を表示中${artifact.transaction ? `（tx ${artifact.transaction}）` : ''}`, 'success');
+    // 一覧の下にプレビューを積んだ狭い配置でだけ、画面の外のプレビューを引き寄せる（決定62）。
+    // 二段組ではプレビューが既に見えているので、nearest なら動かない
+    el('preview-frame').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch (error) {
+    if (seq !== previewRequestSeq) return;
     showError(status, `表示に失敗: ${describeError(error)}`);
   }
 }
@@ -793,6 +829,7 @@ function discardHistory() {
   historyStale = true;
   // 飛行中の取得の応答を捨てる（前の利用者の履歴が遅れて描き戻らないように）
   historyRenderedSeq = ++historyRequestSeq;
+  historyRows = [];
   showMessage(el('history'), 'まだありません');
   discardPreview();
 }
