@@ -299,7 +299,8 @@ export function createBillingMcpStack(
   // 鍵はコールドスタートに一度だけ読む。読めるのはこの Secret だけ
   typesafeApiKeySecret.grantRead(mcpFunction);
 
-  // AppConfig の拡張は関数の実行ロールで設定を取りに行く
+  // AppConfig の拡張は関数の実行ロールで設定を取りに行く。無認証で公開する関数なので、
+  // 読めるのはこのスタックの価格表だけに絞る（パーティションは Bedrock と同じく aws 固定）
   if (useAppConfig) {
     mcpFunction.addToRolePolicy(
       new iam.PolicyStatement({
@@ -307,7 +308,10 @@ export function createBillingMcpStack(
           "appconfig:StartConfigurationSession",
           "appconfig:GetLatestConfiguration",
         ],
-        resources: ["*"],
+        resources: [
+          `arn:aws:appconfig:${stack.region}:${stack.account}:application/${application.ref}` +
+            `/environment/${environment.ref}/configuration/${profile.ref}`,
+        ],
       }),
     );
   }

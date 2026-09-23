@@ -187,6 +187,38 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
       }),
     });
   });
+
+  // 無認証で公開する関数なので、読める設定をこのスタックの価格表だけに絞る
+  it("AppConfig の読み取りは、このスタックの価格表に限る", () => {
+    const withLayer = synth({
+      appConfigExtensionLayerArn:
+        "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1",
+    });
+    const statements = Object.values(
+      withLayer.findResources("AWS::IAM::Policy"),
+    ).flatMap(
+      (policy) =>
+        policy.Properties.PolicyDocument.Statement as {
+          Action: string | string[];
+          Resource: unknown;
+        }[],
+    );
+    const appConfig = statements.find((statement) =>
+      [statement.Action]
+        .flat()
+        .includes("appconfig:GetLatestConfiguration"),
+    );
+    expect(appConfig).toBeDefined();
+    expect(appConfig?.Resource).not.toBe("*");
+    const resource = JSON.stringify(appConfig?.Resource);
+    expect(resource).toMatch(
+      /application\/.*\/environment\/.*\/configuration\//,
+    );
+    const profileId = Object.keys(
+      withLayer.findResources("AWS::AppConfig::ConfigurationProfile"),
+    )[0];
+    expect(resource).toContain(profileId);
+  });
 });
 
 describe("Jev の API キー（決定58）", () => {
