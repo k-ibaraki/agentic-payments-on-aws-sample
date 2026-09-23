@@ -18,3 +18,4 @@ billing-mcp/parameter.ts
 # その他
 *.log
 .DS_Store
+*.bkp
