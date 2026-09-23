@@ -54,18 +54,6 @@ export interface BillingMcpStackProps extends StackProps {
  */
 const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
 
-/** 価格表の既定値。server 側の DEFAULT_TIER_TABLE と揃える（決定56） */
-const DEFAULT_TIER_TABLE = {
-  tiers: {
-    ume: { price: "$0.1", targetTokens: 5_000 },
-    take: { price: "$0.15", targetTokens: 8_000 },
-    matsu: { price: "$0.2", targetTokens: 12_000 },
-  },
-  // 価格帯を判定するモデル（決定58）。既定は Bedrock の Haiku。Jev に切り替えるときは
-  // この値を "jev" にして AppConfig を再展開する（再デプロイは要らない）
-  judge: "haiku",
-};
-
 /**
  * Lambda のタイムアウト。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
  * Bedrock 由来の具体的なエラーが届く前に Lambda が切れてしまう。
@@ -160,7 +148,10 @@ export function createBillingMcpStack(
   });
 
   // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く
-  // （差し替えが飛行中の取引を壊さない理由は server/pricing/tiers.ts 参照）
+  // （差し替えが飛行中の取引を壊さない理由は server/pricing/tiers.ts 参照）。
+  // 作るのは器（以下の Application / Environment / ConfigurationProfile / DeploymentStrategy）
+  // だけで、中身（版と配信）は持たない。持つと deploy のたびに運用中の表が既定値へ巻き戻る
+  // （決定64）。中身は `pnpm set:tier-table` で配る
   const application = new appconfig.CfnApplication(stack, "PricingApp", {
     name: `billing-mcp-pricing-${props.envName}`,
   });
@@ -173,16 +164,6 @@ export function createBillingMcpStack(
     name: "tier-table",
     locationUri: "hosted",
   });
-  const version = new appconfig.CfnHostedConfigurationVersion(
-    stack,
-    "PricingVersion",
-    {
-      applicationId: application.ref,
-      configurationProfileId: profile.ref,
-      contentType: "application/json",
-      content: JSON.stringify(DEFAULT_TIER_TABLE),
-    },
-  );
   // 段階的な展開は不要。設定は小さく、戻すのも同じ手順で足りる
   const strategy = new appconfig.CfnDeploymentStrategy(stack, "PricingStrategy", {
     name: `billing-mcp-pricing-${props.envName}`,
@@ -190,13 +171,6 @@ export function createBillingMcpStack(
     growthFactor: 100,
     finalBakeTimeInMinutes: 0,
     replicateTo: "NONE",
-  });
-  new appconfig.CfnDeployment(stack, "PricingDeployment", {
-    applicationId: application.ref,
-    environmentId: environment.ref,
-    configurationProfileId: profile.ref,
-    configurationVersion: version.ref,
-    deploymentStrategyId: strategy.ref,
   });
 
   // Jev の API キー（決定58）。仮の値を入れたシークレットだけ作り、鍵は人が後から入れる
@@ -312,8 +286,9 @@ export function createBillingMcpStack(
     authType: FunctionUrlAuthType.NONE,
   });
 
-  // 出力は「買い手（agent-app）に引き継ぐ値」を揃えることを狙う。deploy 後に
-  // describe-stacks だけで設定に必要な値が出るようにしておく（README「デプロイ後に値を取り出す」）
+  // 出力は、deploy 後に describe-stacks だけで要る値が揃うようにする（README「デプロイ後に値を取り出す」）。
+  // 買い手（agent-app）に引き継ぐ値（McpEndpointUrl・PayToAddress）と、売り手の運用で使う値
+  // （鍵の Secret・価格表の配り先・ロググループ）がある
   new CfnOutput(stack, "McpEndpointUrl", {
     value: `${functionUrl.url}mcp`,
     description:
@@ -323,6 +298,23 @@ export function createBillingMcpStack(
     value: typesafeApiKeySecret.secretArn,
     description:
       "Jev の API キーを入れる Secret の ARN（決定58）。仮の値（REPLACE_ME）で作られるので、使うなら pnpm set:jev-key で入れる",
+  });
+  // 価格表の配り先（決定64）。`pnpm set:tier-table` がここから引く
+  new CfnOutput(stack, "PricingApplicationId", {
+    value: application.ref,
+    description: "価格表（AppConfig）のアプリケーション ID",
+  });
+  new CfnOutput(stack, "PricingEnvironmentId", {
+    value: environment.ref,
+    description: "価格表（AppConfig）の環境 ID",
+  });
+  new CfnOutput(stack, "PricingProfileId", {
+    value: profile.ref,
+    description: "価格表（AppConfig）の設定プロファイル ID",
+  });
+  new CfnOutput(stack, "PricingDeploymentStrategyId", {
+    value: strategy.ref,
+    description: "価格表（AppConfig）の展開戦略 ID",
   });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,

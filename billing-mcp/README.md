@@ -41,7 +41,11 @@ billing-mcp/
 ├── stacks/               # 関数ベースのスタック定義
 ├── test/                 # CDK Template テスト（jest + @swc/jest）
 ├── scripts/
-│   └── verify-bundle.mjs # 合成したバンドルが読み込めるかの検証
+│   ├── verify-bundle.mjs # 合成したバンドルが読み込めるかの検証
+│   ├── outputs.ts        # deploy 済みスタックの出力を取り出す（pnpm outputs）
+│   ├── set-jev-key.ts    # Jev の API キーを Secrets Manager に入れる（pnpm set:jev-key）
+│   ├── set-tier-table.ts # 価格表を AppConfig に配る（pnpm set:tier-table）
+│   └── tier-table-input.ts # 配る前に価格表をサーバーと同じ規則で確かめる
 ├── parameter.sample.ts   # パラメータ雛形（parameter.ts は gitignore）
 └── server/               # MCP Apps サーバー
     └── src/
@@ -96,6 +100,7 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
 | `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
 | `LogGroupName` | Lambda のロググループ名 | —（調査用）|
+| `Pricing*Id`（4 つ） | 価格表（AppConfig）の配り先 | —（`pnpm set:tier-table` が使う）|
 
 **`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
 その時点の出力を取り直すこと。`PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` は売り手ではなく
@@ -120,6 +125,31 @@ pnpm outputs <名前>  # スタック名を直接指定する
 渡さなければ上の既定値で動く。設定が読めないときは直前に読めた表を使い続けるので、
 書き損じで売り手が止まることはない。
 
+CDK が作るのは AppConfig の器（Application / Environment / ConfigurationProfile / DeploymentStrategy）
+だけで、価格表の中身（版と配信）は配らない（決定64）。deploy した直後は上の既定値で動く。変えるときは表を丸ごと書いた JSON を配る（AWS コンソールで配信してもよい）。一度配った表は、
+以後の `cdk deploy` で巻き戻らない。
+
+```sh
+pnpm set:tier-table < tier-table.json
+```
+
+```json
+{
+  "tiers": {
+    "ume": { "price": "$0.1", "targetTokens": 5000 },
+    "take": { "price": "$0.15", "targetTokens": 8000 },
+    "matsu": { "price": "$0.2", "targetTokens": 12000 }
+  },
+  "judge": "haiku"
+}
+```
+
+`judge` だけを変えるときも `tiers` を含めること（`tiers` の無い表はサーバーに退けられ、直前の表のまま
+変わらない）。`pnpm set:tier-table` は送る前にサーバーと同じ規則で表を確かめ、サーバーが受け付けない表
+（価格帯の欠け・価格の書式違い・価格帯の逆転・読めない `judge` など）は AWS に触れずに止める。
+`appConfigExtensionLayerArn` を渡していない環境では、Lambda が AppConfig を読まないので、
+配っても何も変わらない。何も配っていない環境では、CloudWatch に警告が出ることがある（U13）。
+
 提示した額は見積書（決定55）として `accepts[].extra.quote` に載り、買い手がそのまま返す。
 支払いのときは判定をやり直さずその値を使うので、同じ額で決済できる。価格表を差し替えた
 直後の古い見積書は、表と食い違うため使われず、新しい額で提示し直す。
@@ -143,7 +173,7 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは標準入力で受け、
    本人しか読めない一時ファイルに書いて AWS CLI に渡し、成否によらず消す。
 
-2. **AppConfig の価格表で切り替える。** 価格表（profile `tier-table`）に `judge` の欄を足す:
+2. **価格表で切り替える。** 価格表の `judge` を `jev` にして配る（上の `pnpm set:tier-table`）:
 
    ```json
    { "tiers": { "ume": { ... }, "take": { ... }, "matsu": { ... } }, "judge": "jev" }
@@ -152,6 +182,10 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    再デプロイは要らない。`judge` を省くか読めない値を書けば `haiku` に戻る
    （価格表そのものは巻き添えにしない）。鍵が未投入のまま切り替えた場合も Haiku に留まり、
    CloudWatch に警告が出る。
+
+   `jev` を配っても確信度が付かない（Haiku のまま）なら、Lambda が `jev` を知らない古いコードのまま
+   でないかを疑う。CloudWatch に「判定モデルの指定を読み取れませんでした（"jev"）」（古いコードでは
+   「判定器の指定を…」）が出ていれば、それが原因。コードを deploy し直せばよい（2026-09-23 に実際に起きた）。
 
    **反映は即時ではない。** AppConfig の Lambda 拡張は更新を取得した回の呼び出しには旧値を返し、
    次の回から新値になる。Lambda は呼ばれていないあいだ凍結され拡張もポーリングできないので、

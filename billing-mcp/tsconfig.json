@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "types": ["node", "jest"]
   },
-  "include": ["*.ts", "stacks/**/*.ts", "test/**/*.ts"],
+  "include": ["*.ts", "stacks/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["cdk.out", "node_modules", "server"]
 }

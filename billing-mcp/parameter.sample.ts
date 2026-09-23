@@ -13,7 +13,7 @@ export const devParameter: AppParameter = {
   payToAddress: "0x0000000000000000000000000000000000000000",
   facilitatorUrl: "https://x402.org/facilitator",
   // 価格はパラメータでは決めない。段階制（決定56）の価格表が決め、既定は
-  // 梅 $0.1 / 竹 $0.15 / 松 $0.2。deploy 後は AppConfig から変えられる
+  // 梅 $0.1 / 竹 $0.15 / 松 $0.2。deploy 後は pnpm set:tier-table で AppConfig に配って変える（決定64）
   // 無認証で公開するため必ず設定する（決定19。累積コストの上限にはならない点に注意）
   reservedConcurrency: 5,
   allowedModelIds: [
@@ -22,7 +22,7 @@ export const devParameter: AppParameter = {
     // 価格帯の判定に使う（決定53）
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
   ],
-  // 価格帯の判定モデル（決定58）はパラメータではなく AppConfig の価格表で切り替える。
+  // 価格帯の判定モデル（決定58）はパラメータではなく AppConfig の価格表で切り替える（pnpm set:tier-table）。
   // Jev 用の Secret は仮の値（REPLACE_ME）で作られ、鍵は pnpm set:jev-key で入れるので、ここに書くことは無い
   // 価格表を AppConfig から読むなら、AppConfig Agent Lambda extension の
   // レイヤー ARN を渡す（決定56）。省略するとサーバー側の既定の表で動く。

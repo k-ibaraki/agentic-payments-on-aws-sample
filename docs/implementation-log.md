@@ -2,6 +2,129 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-24: PR #33 のレビュー指摘への対応（価格表を送る前にサーバーと同じ規則で確かめる、決定64）
+
+Jev を使った PR レビュー（PR には投稿せず、会話に出した）の指摘 5 件のうち、ユーザーが 2 件（1・5）を直すと決めた。
+
+### やったこと
+
+- 指摘1（`set-tier-table.ts` の確認が「JSON で `tiers` がある」だけで、サーバーが退ける表でも「配りました」と出る）:
+  確認を `scripts/tier-table-input.ts` に切り出し、サーバーの `parseTierTable` と `JUDGE_KINDS` を読み込んで、送る前に確かめる形にした。
+  サーバーが受け付けない表と読めない `judge` は、AWS に触れる前に理由を添えて止める。直し方は 2 案（送る前に確かめる／案内の文言だけ直す）を示し、
+  ユーザーが前者を選んだ。前日の判断（`parseTierTable` の import を見送る）を覆すので、DESIGN.md 決定64 を改め、理由欄に経緯を足した
+- 配ったあとの案内に「価格表の内容が妥当でないため」の警告も加えた。deploy 済みの Lambda が手元より古いと、ここで通った表でも退けられることも添えた
+- `test/tier-table-input.test.ts` を足した（8 件。赤を確認してから実装）。README の構成図と価格表の節も改めた
+- 指摘5（出力群の冒頭コメントが「買い手に引き継ぐ値」と言い切る）: `billing-mcp-stack.ts` のコメントを、買い手に引き継ぐ値と、
+  売り手の運用で使う値の両方がある旨に改めた
+
+### 確かめたこと
+
+- `pnpm typecheck`・`pnpm test`（28 件）・`pnpm synth`・`pnpm verify:bundle`
+- 偽の `aws` コマンド（`PATH` の先頭に置いたシェルスクリプト）で確かめた。不正な表（価格帯の逆転・読めない `judge`）は `aws` を一度も呼ばずに止まる。
+  正しい表は従来どおり `describe-stacks` → `create-hosted-configuration-version` → `start-deployment` の順に送られ、一時ディレクトリも残らない。
+  実際の AWS には触れていない
+
+### つまずき
+
+- 読めない `judge` を渡すと、`parseTierTable` の中の `parseJudgeKind` が「haiku を使います」と警告してから、スクリプトが止める案内を出していた。
+  止めるのに「使います」と出ると食い違うので、`judge` は先に `JUDGE_KINDS` で見る順に改め、警告が出ないことをテストで固めた
+- 前日に見送った理由の「パッケージの境界を跨ぐ」は、billing-mcp（CommonJS）から server（ESM）の `.ts` を読む形になる点だった。
+  TypeScript 6 の `module: NodeNext` は CommonJS からの ESM の読み込み（Node の `require(esm)`）を型検査で通し、tsx（Node 24）と
+  jest（@swc/jest が CommonJS に変換する）でも動いた
+
+### 直さなかったもの
+
+- 指摘 2（Issue の紐づけが無い）・3（U13 を確かめないまま進めた）・4（CDK 管理の版 1 が配信中の環境での移行が未検証）は、今回は直さない（ユーザー判断）
+
+## 2026-09-23: クラウドで Jev に切り替わらない不具合の調査と、価格表の中身を CDK から外す（決定64）
+
+ユーザー報告: クラウドに deploy して動かしているが、jev の判定が正しくないようだ。
+
+### 調査で分かったこと
+
+- Jev の判定が誤っていたのではなく、**Jev が一度も呼ばれていなかった**。毎回 Haiku が判定していた
+- deploy 済みの Lambda（`BillingMcpStack-dev`）の最終更新は 9/21 21:21（JST）で、`judge` の値を改めたコミット
+  `1206fd4`（同日 21:54）より前。Lambda から取り出したバンドルの判定モデルの値は旧名（`bedrock` / `systemone`）で、`"jev"` を知らない
+- AppConfig では配信 #6（版 7、本日 18:14 JST に CDK の外で配信）で `judge: "jev"`（目安 6,500 / 10,000 / 14,000）が配られていた
+- CloudWatch に「[pricing] 判定器の指定を読み取れませんでした（"jev"）。bedrock を使います」が出ていた（本日 18:18 JST 以降）
+- Jev の鍵（Secrets Manager）は投入済みで、仮の値ではなかった
+- 出力 `Price`・環境変数 `PRICE`・AppConfig の読み取り権限 `*` も残っており、9/21 の deploy 以降のコミットは何も反映されていなかった
+- 別件: 本日 2 回、Haiku の答えから価格帯を読めず竹に落ちていた（「段を読み取れなかったため既定の段に落とします」、18:15 と 18:19 JST）。
+  「jev の判定がおかしい」と見えた一因かもしれない。原因は未調査
+
+### 判断
+
+- 直すには deploy し直せばよい。ただし CDK が既定の表を中身に持つ版と配信を作っており、既定値を書き換えたコード（`bedrock` → `haiku`）を
+  deploy すると、人が入れた表が既定値に戻る。ユーザーが、AppConfig を上書きしない deploy の仕組みを求めた
+- 案の変遷（以下、AppConfig の Application / Environment / ConfigurationProfile / DeploymentStrategy を「器」、
+  版と配信を「中身」と呼ぶ）: ①器ごと CDK の外で作る（最初の提案）→ 初回の手間が増えるとしてユーザーが退けた。②中身だけ別スタックに分ける（ユーザー提案）
+  → スタック間の参照があると `cdk deploy <本体>` が参照先も自動で deploy するため、`--exclusively` の付け忘れに頼る形になる。名前で渡して
+  参照を切ると、IAM の読み取り権限を広げることになる。この 2 点を示して退けた。③器は CDK、中身は CDK の外（ユーザーが挙げ、採用）。
+  `pnpm set:jev-key` と同じ形で、初回は何もしなくても既定の表で動く
+- `set-tier-table.ts` での入力の検証は、JSON であることと `tiers` を含むことだけにした。サーバーの `parseTierTable` を import すると、
+  パッケージの境界（server は ESM の別パッケージ）を跨ぐうえ、検証を二か所に持つことになる。`tiers` だけは見る。`{"judge":"jev"}` だけを
+  配ると表ごと退けられ、切り替えたつもりで何も変わらないため
+
+### 検証（使い捨てスタック。いずれも確かめたあと削除した）
+
+- 版と配信を持つスタックに手で版 2 を配信したうえで、テンプレートから版と配信を外して更新: 成功。CDK 管理の配信 #1 は `COMPLETE` のまま
+  （削除ハンドラが要求する権限は `StopDeployment` だけで、完了済みの配信は巻き戻らなかった）。消えたのは CDK 管理の版 1 だけで、版 2 が配信され続けた
+- 一度も配信していないプロファイルを API で読む: `ResourceNotFoundException: Deployment not found`
+- Secret の `Description` だけを変える更新: 投入済みの値は `SecretString`（`REPLACE_ME`）で書き戻されない。今回の deploy で鍵の Secret の説明文が
+  変わる（9/21 の改名由来）ため確かめた
+- 拡張（localhost:2772）経由で未配信のプロファイルを読んだときの応答（U13）: 使い捨ての Lambda（IAM ロールを伴う）の作成が
+  自動モードの安全判定で止まったため未実施
+
+### やったこと
+
+- `stacks/billing-mcp-stack.ts`: `PricingVersion` / `PricingDeployment` と、CDK 側に写していた `DEFAULT_TIER_TABLE` を削除した。
+  器の 4 つの ID を出力（`PricingApplicationId` / `PricingEnvironmentId` / `PricingProfileId` / `PricingDeploymentStrategyId`）に足した
+- `test/billing-mcp-stack.test.ts`: 既定の表の中身を見ていた 2 件を、器が 1 つずつ・版と配信が 0 件・出力 4 つを見るテストに差し替えた
+  （赤を確認してから実装）
+- `scripts/set-tier-table.ts` と `pnpm set:tier-table` を足した。AWS に書き込む前に止まる 3 経路（JSON でない・`tiers` が無い・出力の無い
+  旧スタック）を手で確かめた。有効な表を実スタックへ配る操作はしていない
+- `set-jev-key.ts` の終わりの案内、`parameter.sample.ts`、README、CLAUDE.md、DESIGN.md（決定64・U13 を新設、決定56・58 に追記）を改めた
+- `pnpm synth` → `pnpm verify:bundle` → `pnpm cdk diff`。差分は、版と配信の削除（新規作成なし）、AppConfig の読み取り権限の絞り込み、
+  Lambda のコード更新と `PRICE` の撤去、出力 `Price` の削除と `Pricing*Id` 4 つの追加、鍵の Secret の説明文の更新だけ。
+  合成したバンドルの判定モデルの一覧は `["haiku", "jev"]`
+
+### つまずき
+
+- 9/21 の deploy に使った `parameter.ts` は worktree ごと消えていた。メインのチェックアウトにある `parameter.ts`（9/3）は `price` が残り、
+  Haiku の許可も拡張レイヤーも無い古いもので、今のコードでは型が通らない。この worktree には、deploy 済みの Lambda の設定・IAM ポリシー・
+  出力から復元したものを置いた（gitignore 対象）。`cdk diff` に意図しない差分が出ないことで、復元が合っていることを確かめた
+- バンドルを `systemone` で grep すると、Jev の SDK の API パス（`/v1/systemone`）にも当たる。判定モデルの一覧（`JUDGE_KINDS`）で見ること
+- 作業中に main へ PR #32（コメント・README の重複排除）が入り、決定63 がそちらに使われた。本件は当初「決定63」として書いていたため、
+  main に積み直したうえで決定64 に振り直した（DESIGN.md・本記録・コード・README・CLAUDE.md。PR #32 側の決定63 には触れていない）。
+  衝突は `billing-mcp-stack.ts` の価格表のコメント、`parameter.sample.ts`、DESIGN.md の決定58 の行と表の末尾、本記録の先頭の 5 か所。
+  決定58 の行は PR #32 の句点の補いを取り込んだうえで追記を足した。あわせて、PR #32 の決定63 の方針（詳しい理由は定義元に残し、
+  利用側は決定番号への参照に縮める）に合わせ、スタックのコメント・`set-tier-table.ts` の冒頭・README の追記を縮めた
+
+### 残り
+
+- `cdk deploy`（ユーザー判断で、PR のマージ後に行う）。deploy 後、間隔をあけた呼び出し 2 回ののちに、
+  判定に確信度が付くこと・「判定モデルの指定を読み取れませんでした」が止まることを CloudWatch で確かめる。AppConfig の入れ直しは要らない。
+  この deploy は AppConfig の読み取り権限を `*` から価格表に絞る変更（`aeefe16`）を初めて載せる。絞り方を誤っていると拡張が読めず、
+  既定の表（`haiku`）に落ちて元の症状と見分けが付かない。`[appconfig agent]` の ERROR と「価格表を取得できませんでした」が出ていないかも見る
+- `pnpm set:tier-table` は、実際の AWS に対しては未実行（偽の `aws` コマンドでは、引数の形・送る中身・後片付けを確かめた）。
+  deploy 後に版 7 と同じ中身を配り直せば、値を変えずに通しで確かめられる（ユーザーの確認を取ってから）
+
+### セルフレビュー（同日）
+
+6 件を指摘し、すべて直した。
+
+- `set-tier-table.ts`: `aws()` が失敗時に `process.exit` を呼んでいたため、`try/finally` の後片付けが走らず一時ディレクトリが残っていた。
+  偽の `aws` コマンド（`PATH` の先頭に置いたシェルスクリプト）で、版の作成・配信の開始のどちらで失敗しても残ることを先に確かめてから、
+  失敗を例外で返して `main().catch` で終える形に改めた。配信の開始で失敗したときは、作った版の番号を添える
+- `tsconfig.json` の `include` に `scripts/` が無く、`pnpm typecheck` が新しいスクリプトを見ていなかった。足した（既存の 2 本も通る）
+- README の構成の図に `scripts/` の中身を足し、`appConfigExtensionLayerArn` を渡していない環境では配っても効かないことを書いた
+- DESIGN.md 決定64 と本記録の「削除ハンドラは `StopDeployment` を呼ぶ」を、確かめた範囲（要求する権限と、巻き戻らなかった結果）に改めた
+- 本記録の「残り」の deploy を、マージ後に行うというユーザー判断に合わせた
+- PR を作る際のフックの指摘で、「器」を定義せずに使っていた 6 か所（CLAUDE.md・README・`set-tier-table.ts`・スタックのコメント・
+  テスト名・本記録）に、初出で指す資源を添えた（テスト名は比喩を使わない言い方に改めた）
+- Jev に切り替わると、決定58 ⑥の境界での揺れ（同じ依頼で価格帯が変わり得る）が見えるようになる。不具合ではない
+- U13（未配信の環境での拡張の応答）
+
 ## 2026-09-23: コメント・ドキュメントのテキストリファクタ（重複排除・日本語表現の是正）
 
 ユーザー依頼「ロジックには触れず、コメント・ドキュメントの重複や過剰な記載を削り、不自然な日本語を直す」に

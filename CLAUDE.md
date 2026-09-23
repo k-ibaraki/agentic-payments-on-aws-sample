@@ -38,6 +38,9 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - 価格帯の判定モデルは AppConfig の価格表（profile `tier-table`）の `judge` 欄で選ぶ。既定は `haiku`（Bedrock の Haiku）、
   `jev` で TypeSafe の Jev（DESIGN.md 決定58）。鍵が無ければ既定に留まる。AppConfig の反映は
   即時ではなく、間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取得した回には旧値を返す）
+- CDK は AppConfig の器（Application / Environment / ConfigurationProfile / DeploymentStrategy）だけを作り、
+  価格表の中身（版と配信）は持たない。中身は `pnpm set:tier-table` で配る（決定64）。CDK に中身を戻すと、
+  deploy のたびに運用中の表が巻き戻る
 
 ### agent-app/
 
@@ -73,6 +76,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   記録の値を使わずここで取り直す）
 - `pnpm set:jev-key` — 価格帯の判定に Jev を使うときの API キーを Secrets Manager に入れる（決定58）。
   鍵は標準入力で受ける（`pbpaste | pnpm set:jev-key` も可）。引数に置かない
+- `pnpm set:tier-table < tier-table.json` — 価格表（価格・目安・`judge`）を AppConfig に配る（決定64）。表は丸ごと
+  差し替える（`judge` だけ変えるときも `tiers` を含める）。**稼働中の価格が変わる。実行前に必ず確認を取ること**
 - `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**
 
 ### agent-app/

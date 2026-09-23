@@ -1,0 +1,151 @@
+// 価格表（価格帯ごとの価格と目安、判定モデル）を AppConfig に配る。CDK は AppConfig の器
+// （Application / Environment / ConfigurationProfile / DeploymentStrategy）だけを作り、
+// 中身（版と配信）はこのスクリプトで配る（DESIGN.md 決定64）。
+//
+// 実行: pnpm set:tier-table < tier-table.json        … parameter.ts の envName からスタックを決める
+//       pnpm set:tier-table <名前> < tier-table.json … スタック名を直接指定する
+//       pbpaste | pnpm set:tier-table                … クリップボードから渡す場合
+//
+// 表は丸ごと差し替える。送る前にサーバーと同じ規則で確かめ、サーバーが受け付けない表は
+// AWS に触れる前に止める（tier-table-input.ts）。
+//
+// AWS CLI を使う（outputs.ts / set-jev-key.ts と揃える）。
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { devParameter } from "../parameter";
+import { normalizeTierTable } from "./tier-table-input";
+
+const stackName = process.argv[2] ?? `BillingMcpStack-${devParameter.envName}`;
+const region = devParameter.env?.region;
+const regionArgs = region ? ["--region", region] : [];
+
+// 失敗は例外で返し、終了は main().catch に寄せる。途中で process.exit すると、
+// 一時ディレクトリを消す finally が走らない
+function aws(args: string[]): string {
+  try {
+    return execFileSync("aws", [...args, ...regionArgs, "--output", "json"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") {
+      throw new Error("aws コマンドが見つかりません。AWS CLI を入れて PATH を通すこと");
+    }
+    const stderr = (error as { stderr?: unknown }).stderr;
+    throw new Error(
+      stderr ? String(stderr).trim() : error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+interface Target {
+  applicationId: string;
+  environmentId: string;
+  profileId: string;
+  strategyId: string;
+}
+
+/** スタックの出力から配り先を引く。作り直すと変わるので記録の値は使わない */
+function target(): Target {
+  const outputs: { OutputKey?: string; OutputValue?: string }[] =
+    JSON.parse(aws(["cloudformation", "describe-stacks", "--stack-name", stackName])).Stacks?.[0]
+      ?.Outputs ?? [];
+  const get = (key: string): string => {
+    const value = outputs.find((o) => o.OutputKey === key)?.OutputValue;
+    if (!value) {
+      throw new Error(
+        `${stackName} に ${key} がありません。決定64 以降のコードで deploy 済みか確認すること`,
+      );
+    }
+    return value;
+  };
+  return {
+    applicationId: get("PricingApplicationId"),
+    environmentId: get("PricingEnvironmentId"),
+    profileId: get("PricingProfileId"),
+    strategyId: get("PricingDeploymentStrategyId"),
+  };
+}
+
+async function readInput(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+// billing-mcp の package.json は ESM 指定が無く、tsx は CJS で出力する。
+// トップレベル await が使えないため、関数に包んで呼ぶ
+async function main(): Promise<void> {
+  if (process.stdin.isTTY) {
+    throw new Error("価格表の JSON を標準入力で渡すこと（例: pnpm set:tier-table < tier-table.json）");
+  }
+  const content = normalizeTierTable(await readInput());
+  const to = target();
+
+  const dir = mkdtempSync(path.join(tmpdir(), "set-tier-table-"));
+  try {
+    const contentPath = path.join(dir, "content.json");
+    writeFileSync(contentPath, content);
+    // 最後の位置引数は、作った版の中身を書き戻す先（CLI の必須引数）。使わないので一時置き場に捨てる
+    const version = JSON.parse(
+      aws([
+        "appconfig",
+        "create-hosted-configuration-version",
+        "--application-id",
+        to.applicationId,
+        "--configuration-profile-id",
+        to.profileId,
+        "--content-type",
+        "application/json",
+        "--content",
+        `fileb://${contentPath}`,
+        path.join(dir, "echo.json"),
+      ]),
+    ).VersionNumber as number;
+
+    let deployment: { DeploymentNumber?: number; State?: string };
+    try {
+      deployment = JSON.parse(
+        aws([
+          "appconfig",
+          "start-deployment",
+          "--application-id",
+          to.applicationId,
+          "--environment-id",
+          to.environmentId,
+          "--configuration-profile-id",
+          to.profileId,
+          "--deployment-strategy-id",
+          to.strategyId,
+          "--configuration-version",
+          String(version),
+        ]),
+      );
+    } catch (error) {
+      // 版は作れているので、コンソールや CLI からその版を配れるよう番号を添える
+      throw new Error(
+        `版 ${version} は作ったが、配信を始められなかった: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
+    console.log(
+      `版 ${version} を配りました（配信 #${deployment.DeploymentNumber}、状態 ${deployment.State}）`,
+    );
+    console.log(content);
+    console.log("");
+    console.log("反映は即時ではない。間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取った回には旧値を返す）。");
+    console.log(
+      "反映後、CloudWatch Logs に「価格表の内容が妥当でないため」「判定モデルの指定を読み取れませんでした」が出ていないか確かめること",
+    );
+    console.log("（deploy 済みの Lambda が手元のコードより古いと、ここで通った表でも退けられる）");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});
