@@ -286,8 +286,9 @@ export function createBillingMcpStack(
     authType: FunctionUrlAuthType.NONE,
   });
 
-  // 出力は「買い手（agent-app）に引き継ぐ値」を揃えることを狙う。deploy 後に
-  // describe-stacks だけで設定に必要な値が出るようにしておく（README「デプロイ後に値を取り出す」）
+  // 出力は、deploy 後に describe-stacks だけで要る値が揃うようにする（README「デプロイ後に値を取り出す」）。
+  // 買い手（agent-app）に引き継ぐ値（McpEndpointUrl・PayToAddress）と、売り手の運用で使う値
+  // （鍵の Secret・価格表の配り先・ロググループ）がある
   new CfnOutput(stack, "McpEndpointUrl", {
     value: `${functionUrl.url}mcp`,
     description:
