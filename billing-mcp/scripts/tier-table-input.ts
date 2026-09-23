@@ -1,7 +1,8 @@
 // pnpm set:tier-table が送る前に価格表を確かめる（DESIGN.md 決定64）。サーバーが退ける表を
 // 配っても、サーバーは直前の表のまま動き（決定56）、配った側は気づけないため。
-// 確かめ方はサーバーの parseTierTable をそのまま使い、同じ規則を二か所に書かない。
-// スクリプトから切り出してあるのは、main を走らせずにテストするため
+// 確かめる規則はサーバーの parseTierTable と JUDGE_KINDS をそのまま使い、こちらには書き写さない。
+// この確認を set-tier-table.ts とは別のファイルに置くのは、あちらは読み込むだけで main が走り
+// AWS を呼ぶため、テストから読み込めないから
 import {
   DEFAULT_JUDGE_KIND,
   JUDGE_KINDS,
