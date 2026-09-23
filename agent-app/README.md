@@ -26,7 +26,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   npm run dev   # ポート 3000
 ```
 
-ブラウザから依頼を送ると、実際にオンチェーンの決済（0.1 テスト USDC）が起きる。
+ブラウザから依頼を送ると、実際にオンチェーンの決済（テスト USDC。売り手の価格は依頼ごとに変わる）が起きる。
 渡せる環境変数は下の「環境変数」にまとめてある。
 
 ## しくみ
@@ -52,7 +52,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
   ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）
 - Agent の応答は Markdown 表示にしている（`marked` で HTML 化し `DOMPurify` でサニタイズしてから
-  `innerHTML` へ流し込む。LLM が組み立てる信頼できない入力のため、サニタイズをその代わりの防護に据えている。決定46）
+  `innerHTML` へ流し込む。LLM が組み立てる信頼できない入力を扱うため、サニタイズだけを防護に据えている。決定46）
 - 二重支払いの防護: 有料ツールの待ち時間は売り手上限に合わせる（`BUYER_TOOL_TIMEOUT_MS`）。
   支払いが済んだのに成果物を受け取れなかった購入と、支払われたかどうか自体を確認できなかった購入
   （ウォレット API の応答が返らなかった場合。実際に払っている可能性がある）は、レシートを残して
@@ -65,15 +65,13 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - 依頼の回数も利用者ごとに制限する: 支払いに至らない依頼でも LLM の費用はかかるので、
   支出の枠とは別に依頼の回数を数える（`BUYER_RATE_LIMIT`）。承認への応答は回数制限の対象外にしている。ただし対象外になるのは、実際に未解決の承認待ちがある
   場合の応答だけなので、承認応答を装って回数制限を迂回することはできない
-- 依頼の枠にはウォレット残高と支払いの枠の残枠を帯で表示する。支払った瞬間が分かるよう、
+- 依頼の入力欄にはウォレット残高と支払いの枠の残枠を帯で表示する。支払った瞬間が分かるよう、
   有料ツール（`generateHtml`）の呼び出し中は 3 秒間隔で取り直し、値が変わるか呼び出しが終わるまで続ける（決定47）
 
 ### 運用上の注意
 
-- クラウド deploy は Amplify Gen2 + Amplify Hosting が正（下記「クラウド deploy」）。
-  手元から `cdk deploy` を走らせる経路（`npm run deploy`。以下「`cdk deploy` 経路」）は
-  退路・比較用に残している。
-  退路として使う前に次の 3 点を承知しておくこと:
+- `cdk deploy` 経路（`npm run deploy`。詳細は下記「クラウド deploy」）を退路として使う前に、
+  次の 3 点を承知しておくこと:
   - `npm run destroy` / `cdk diff` / `cdk synth` は、`aws-blocks/client.js` が無いと `Hosting` の
     フロントビルド（`npm run build`）が `Failed to resolve entry for package "aws-blocks"` で落ちる。
     `client.js` は gitignore で `npm run blocks:client` が作るので、**撤収の前に生成しておくこと**。
@@ -86,7 +84,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
     S3 のバケット名は全 AWS アカウントを通じて一意なので、同じ `stackId` のまま別のアカウントで deploy すると
     バケットの作成で失敗する（sandbox は機械ごとの乱数が付くので衝突しない。Amplify 経路はこのファイルを読まない）
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名になる。
-  Amplify のスタック名が長く、Agent 内蔵の S3 バケット名を 63 文字に収めるために短い。deploy 後は変えないこと
+  Amplify のスタック名が長いぶん、Block id を短くして Agent 内蔵の S3 バケット名を 63 文字に収めている。deploy 後は変えないこと
 
 ## コマンド
 
@@ -100,7 +98,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - `npx tsx scripts/payments-setup.ts` — ウォレットのセットアップ（冪等。上の「まず動かす」を参照）
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給する
 - `npx tsx scripts/buy-via-agent.ts "指示"` — UI を通さずに一連の流れを検証する。
-  **実オンチェーン決済（0.1 テスト USDC）が発生する**
+  **実オンチェーン決済（テスト USDC）が発生する**
 
 ### Amplify sandbox
 
@@ -200,10 +198,10 @@ Coinbase CDP の資格情報 3 点（`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `
   KVStore `payment-session` に利用者をキーに記録して使い回し、失効・削除で拒否されたら一度だけ作り直す。
   支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため）
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
-- `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `100000` = 0.1 USDC）・
+- `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `150000` = 0.15 USDC）・
   `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +
   テスト USDC に固定しており、売り手の提示がこれに合わなければ支払わない
 - `BUYER_TOOL_TIMEOUT_MS`（有料ツールの待ち時間。既定 `600000`。短くすると決済後に失敗して支払いだけが残る）
 - `BUYER_RATE_LIMIT` / `BUYER_RATE_WINDOW_MINUTES`（利用者 1 人が依頼を出せる回数と、その時間窓。
-  既定 `10` 回 / `60` 分。支払いに至らない依頼でも LLM の費用はかかるので、支出上限とは別に数える。
-  超えた依頼は受け付けず、窓が明ける時刻を返す。記録は KVStore `request-count`）
+  既定 `10` 回 / `60` 分。数える理由は上の「しくみ」参照。超えた依頼は受け付けず、窓が明ける時刻を
+  返す。記録は KVStore `request-count`）

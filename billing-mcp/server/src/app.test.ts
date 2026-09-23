@@ -128,10 +128,7 @@ describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => 
   });
 
   it("GET（SSE ストリーム要求）は 405 を返し、応答を待たせない", async () => {
-    // ステートレス + enableJsonResponse では単独の SSE ストリームを提供しない。
-    // これを SDK に渡すと終わらないストリームが返り、本文をバッファする実装が
-    // 永久に待つ。クラウドで Runtime.NodeJsExit（Promise が未解決のまま Node が
-    // 終了）として実際に発生したため、応答が返ることをテストで固定する
+    // SSE を返すと Function URL が待ち続ける不具合の固定（app.ts の isStreamingResponse 参照）
     const response = await Promise.race([
       app(
         new Request(`${ORIGIN}${MCP_PATH}`, {

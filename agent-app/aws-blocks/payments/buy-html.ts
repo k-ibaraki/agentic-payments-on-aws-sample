@@ -9,11 +9,7 @@ import type { SettleResponse } from './x402-types.js';
 
 export interface BuyHtmlOutcome {
   paymentMade: boolean;
-  /**
-   * 支払いの成否を確認できなかった（決定48）。ProcessPayment がタイムアウト等で応答を返さず、
-   * 支払いが成立したかどうか買い手からは判別できない。paymentMade とは別に持ち、
-   * 呼び出し側は「支払い済み」と同じく未解決の購入として扱う
-   */
+  /** 支払いの成否を確認できなかった（決定48。UncertainPaymentError 参照） */
   paymentUncertain?: boolean;
   paymentResponse?: SettleResponse;
   html?: string;

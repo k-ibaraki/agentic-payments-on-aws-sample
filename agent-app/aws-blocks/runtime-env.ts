@@ -36,9 +36,8 @@ export const REQUIRED_ENV_KEYS = ['PAYMENT_MANAGER_ARN', 'PAYMENT_INSTRUMENT_ID'
 export const SHARED_LAMBDA_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
- * @param options.requireAll  REQUIRED_ENV_KEYS の欠落を例外にするか。呼び出し側が
- *   「決済のできる Lambda を作ろうとしている場面か」で決める（決定34 の改訂）。
- *   sandbox と、deploy を伴わない合成（cdk destroy / diff）では false
+ * @param options.requireAll  REQUIRED_ENV_KEYS の欠落を例外にするか（決定34 の改訂）。
+ *   呼び出し側の判断基準は runtime.cdk.ts の wireRuntime 参照
  */
 export function runtimeEnvironment(
   env: Record<string, string | undefined>,

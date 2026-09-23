@@ -94,15 +94,11 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  // 乱発への防護（決定57）。無認証の公開エンドポイントでは、支払う気のない相手が
-  // 見積もりだけを繰り返せる。予算を使い切ったら判定モデルを呼ばず既定の価格帯で売る。
-  // バケツはコンテナに 1 つで、判定モデルを選び直しても引き継がれる（決定58）
+  // 乱発への防護（決定57、詳細は pricing/judge-guard.ts）。バケツはコンテナに 1 つ
   const judgeBudget = createJudgeBudget(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
-  // 価格帯の判定モデル（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
-  // 共有する。価格表が jev を指していれば Jev に切り替える。鍵は初めて使うときに
-  // Secrets Manager から読み、読めればコンテナ内に保持する（読めなければ間をおいて読み直す）
+  // 価格帯の判定モデルの選択（決定53・58、詳細は pricing/judge-select.ts）
   const selectJudge = createJudgeSelector({
     bedrock:
       options.judge ??

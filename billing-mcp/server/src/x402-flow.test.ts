@@ -121,9 +121,7 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
     );
   }
 
-  // 上流の @x402/mcp は買い手が返す accepted ブロックしか照合せず、authorization の
-  // 中身は見ずに settle へ渡す。これらが facilitator まで届くと、無認証の相手に
-  // settle 往復を無制限に作らせることになる（payment-guard.ts、U9）
+  // これらの捏造が facilitator まで届くのを防ぐのが門番（payment-guard.ts、U9）の役目
   it.each<[string, (p: PaymentPayloadShape) => void]>([
     [
       "有効期限切れ",
@@ -170,13 +168,9 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
     expect(body).toContain("支払いを受け付けられません");
   });
 
-  // 門番の限界を実行可能な形で残す（2026-09-07 のセルフレビュー）。
-  // 一度も支払わない攻撃者でも、無支払いの応答から accepts をタダで手に入れて転記し、
-  // authorization を条件どおりに手書きし、署名欄に任意の 130 桁 16 進数を入れれば、
-  // 門番を通過して settle まで届く。upfront では上流が /verify を呼ばないため、署名が
-  // 実際に検証されるのは facilitator の /settle だけになる。
-  // 塞ぐには EIP-712 署名のローカル復元（U9）が要る。塞いだときはこのテストが落ちるので、
-  // そこで期待値を「settle まで届かない」へ書き換えること
+  // 門番の限界を実行可能な形で残す（payment-guard.ts の説明、U9 参照）。
+  // 塞いだら（EIP-712 署名のローカル復元）このテストが落ちるので、
+  // 期待値を「settle まで届かない」へ書き換えること
   it("【未対応・U9】一度も支払わずに捏造したペイロードは門番を通過して settle まで届く", async () => {
     // 1) 無支払いで叩き、公開されている accepts をタダで手に入れる
     const probe = await callToolWithPayment(undefined);

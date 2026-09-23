@@ -159,9 +159,8 @@ export function createBillingMcpStack(
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
-  // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く。
-  // 差し替えても飛行中の取引は壊れない。提示済みの価格は見積書としてそのまま
-  // 往復し、価格表と食い違えば使わずに判定し直すため
+  // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く
+  // （差し替えが飛行中の取引を壊さない理由は server/pricing/tiers.ts 参照）
   const application = new appconfig.CfnApplication(stack, "PricingApp", {
     name: `billing-mcp-pricing-${props.envName}`,
   });
@@ -200,13 +199,9 @@ export function createBillingMcpStack(
     deploymentStrategyId: strategy.ref,
   });
 
-  // Jev の API キー（決定58）。仮の値を入れたシークレットだけ作り、鍵は人が後から入れる（`pnpm set:jev-key`）。
-  // API キーを CDK に書くと CloudFormation テンプレートに平文で残るため。
-  //
-  // 中身を仮の値（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
-  // 出鱈目な鍵が入っていると、判定モデルを jev に切り替えたときに毎回 401 になり、
-  // 全件がフォールバックの価格帯に落ちて価格が実質固定になる。仮の値ならサーバーが
-  // 「未投入」と判って既定の判定モデルに留まる
+  // Jev の API キー（決定58）。仮の値を入れたシークレットだけ作り、鍵は人が後から入れる
+  // （`pnpm set:jev-key`）。API キーを CDK に書くと CloudFormation テンプレートに平文で
+  // 残るため。仮の値にする理由は server 側 pricing/typesafe-key.ts の UNSET_API_KEY 参照
   const typesafeApiKeySecret = new Secret(stack, "TypesafeApiKey", {
     secretStringValue: SecretValue.unsafePlainText(UNSET_TYPESAFE_API_KEY),
     secretName: `billing-mcp/typesafe-api-key-${props.envName}`,
@@ -225,7 +220,6 @@ export function createBillingMcpStack(
     architecture: Architecture.ARM_64,
     timeout: LAMBDA_TIMEOUT,
     memorySize: 1024,
-    // 無認証の公開エンドポイントなので、瞬間的な流量を同時実行数で押さえる
     reservedConcurrentExecutions: props.reservedConcurrency,
     logGroup,
     projectRoot,

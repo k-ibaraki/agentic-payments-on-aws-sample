@@ -2,6 +2,68 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-23: コメント・ドキュメントのテキストリファクタ（重複排除・日本語表現の是正）
+
+ユーザー依頼「ロジックには触れず、コメント・ドキュメントの重複や過剰な記載を削り、不自然な日本語を直す」に
+billing-mcp・agent-app・ドキュメント3領域で対応した。事前に5本の調査（billing-mcp のコメント、agent-app の
+コメント、README群、DESIGN.md、implementation-log.md の日本語表現）を並行で走らせ、結果をユーザーに提示して
+スコープの承認を得てから着手した。ブランチ `chore/reduce-comment-doc-duplication` に、領域（billing-mcp /
+agent-app / ドキュメント）ごとのコミットと、セルフレビュー対応のコミットを分けて積んだ。
+
+### やったこと
+
+- billing-mcp: `payment-guard.ts`・`judge-guard.ts` の冒頭コメントが DESIGN.md の決定19・21・57・U9 を
+  ほぼ全文再掲していたため、非自明な WHY だけ残して圧縮。`tiers.ts`・`typesafe-key.ts`・`quote-format.ts` に
+  詳細がある内容を `config.ts`・`billing-mcp-stack.ts`・`quote.ts` で再掲していた箇所は参照へ圧縮。
+  `billing-mcp-server.ts` にリファクタの取り残しで実態とずれていたコメントがあり削除した
+- agent-app: `index.ts` と `rate-limit.ts` にあった壊れた決定番号参照（`@39@`）を「39」に直し、
+  `purchases.ts` の「このファイルは src/ui-rules.ts から読む」という依存の向きが逆だった記述を正した
+  （実際は ui-rules.ts がこちらを import している）。`buyer-agent.ts` の決定39・決定31再掲や、
+  `UncertainPaymentError`・支出上限超過（決定37）・resume の防護（interrupt-guard.ts）等の説明が
+  複数ファイルに重複していた箇所を、定義元への参照に圧縮した
+- ドキュメント: ルート README とエージェント側 README の冗長な説明を圧縮し、`agent-app/README.md` の
+  不自然な日本語（「その代わりの防護」の指示対象が無い、「依頼の枠」が別の意味で衝突、主語述語の不対応）を
+  直した。`billing-mcp/README.md` は価格帯の節の途中に無関係な3段落（`McpEndpointUrl` の注意・
+  `PAYMENT_MANAGER_ARN` の所属・`cdk deploy` の警告）が紛れ込んでいたため、それぞれ適切な節へ移した。
+  Haiku/Jev の実測データの列挙も DESIGN.md 決定58 への参照に圧縮した。`docs/agentcore-payments-considerations.md`
+  の「前者の種類」「後者の種類」という代名詞的参照（9回）に「上限型」「代行型」という短い呼び名を与えた
+- 事実の陳腐化も修正: `agent-app/README.md` が `PAYMENT_MAX_AMOUNT` の既定値を「100000 = 0.1 USDC」と
+  書いていたが、決定59 でコードの既定値は `150000`（0.15 USDC）に上がっていた。「0.1 テスト USDC」と
+  固定額で書かれていた箇所（README 2箇所、`agent-app/scripts/buy-via-agent.ts` と `aws-blocks/index.ts`
+  のコメント各1箇所）も、決定56 の価格帯制を踏まえた表現に直した。`billing-mcp-server.ts:27` の
+  「0.1 テスト USDC」は `DEFAULT_PRICE`（決定18時点の固定額。価格未指定時の fallback）の説明として
+  現在も正しいため、そのまま残した
+- DESIGN.md は「行を消さず経緯を残す」方針のため、内容の削除・要約はせず日本語の言い回しのみ5件
+  （助詞の誤り1件、文が完結しない箇所1件、句点の脱落3件）と、浮いた半角スペース6箇所を直した。
+  implementation-log.md は全文（2927行）を確認したが、文法的な問題は見つからなかった
+- 今回確立した方針（コメント・README の重複排除の粒度、記録ファイルを言い回しのみに限定する扱い）は
+  決定63 として DESIGN.md に追記した
+
+### 判断
+
+- DESIGN.md・implementation-log.md は「経緯を残す」がサンプルの目的の半分を占めるため、重複排除や要約は
+  対象外とし、言い回しの修正のみに限定した（ユーザー確認済み）
+- `agent-app/AGENTS.md`（スキャフォールド生成物）と CLAUDE.md 一式（ルート・グローバル・プロジェクト）は
+  対象外とした
+- 調査agentの指摘のうち1件は誤りと判断して不採用にした: DESIGN.md 決定53 の「値は中央へ寄って竹に着地する」を
+  「だけ」の誤変換と指摘されたが、「竹」は決定56 で定めた中間の価格帯を指す語であり、文脈上正しい
+- コメントの重複排除は「定義元・詳細な説明を持つファイルに残し、利用側は決定番号または参照先へ圧縮する」
+  方針で統一した（決定63）。セキュリティ上の脅威モデルや実測に基づく非自明な事実（例: `@x402/mcp` が
+  `accepted` ブロックしか照合しない、`Runtime.NodeJsExit` の実測）は圧縮の対象にしても削除はしていない
+- `docs/agentcore-payments-considerations.md` に新しい呼び名（「上限型」「代行型」）を **太字** で導入したが、
+  `ja-markdown-bold` スキルは適用しなかった（該当箇所は閉じ `**` の直前が「）」・直後が空白で崩れないことは
+  確認したが、手順としては省略している）
+
+### 確認したこと
+
+- 各コミット前に `git diff` を `//`・`*`・`/*` 以外の変更行だけに絞るコマンドでコメント以外の変更が
+  無いことを確認した
+- billing-mcp/server は `@typesafe-ai/sdk` と `@aws-sdk/client-secrets-manager` が package.json にはあるが
+  未インストールで、`pnpm install` が必要な状態だった。billing-mcp の gitignore 対象 `parameter.ts` にも
+  決定56 で撤去済みの `price` フィールドが残っており型検査が落ちる。どちらも今回の変更以前からの環境の
+  ずれで、`git stash` して変更前でも同じ失敗が再現することを確認した（このリファクタでは対応していない）
+- agent-app は `npm run test`（240件）・`npm run typecheck` が全て通過した
+
 ## 2026-09-23: 内部情報パネルの左右を直す（決定62 追記）
 
 ユーザー指摘: 開発者向けの内部情報パネルが左に表示されるのは取り違いで、右に表示するのが正解だった。

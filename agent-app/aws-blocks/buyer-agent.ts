@@ -1,7 +1,7 @@
 // 買い手エージェント（決定26・27）。
 // billing-mcp の有料ツールを AgentCore Payments のウォレットで支払いながら使う。
 // HTML 本体は LLM のコンテキストに流さず KVStore に置き、ID だけを会話に返す
-// （決定10 の最終形＝ブラウザへは Realtime/取得系 API で渡す、を見据えた形）。
+// （決定10 の最終形（ブラウザへは Realtime・取得系 API で渡す）を見据えた設計）。
 //
 // 接続設定は環境変数で受ける（ローカルはシェル、クラウドは aws-blocks/runtime-env.ts が Lambda に写す。決定34）:
 //   BILLING_MCP_URL       … 既定 http://localhost:8000/mcp
@@ -16,16 +16,11 @@
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
 //   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 150000 = 0.15 USDC。決定59）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
-//   BUYER_TOOL_TIMEOUT_MS … 有料ツールの応答を待つ上限。既定 600000（売り手の Lambda タイムアウトと同じ 600 秒。
-//                            売り手は Bedrock 呼び出しを 570 秒で打ち切り、その外側の Lambda が 600 秒）。
-//                            MCP SDK の既定 60 秒のままだと決済後に諦めて成果物を失う（決定31）
+//   BUYER_TOOL_TIMEOUT_MS … 有料ツールの応答を待つ上限。既定 600000（決定31。根拠は
+//                            payments/paid-tool-caller.ts の CallOptions.timeout 参照）
 //
-// 支払い主体について（決定28 → 決定39）:
-//   ProcessPayment の userId はウォレット（PaymentInstrument）の持ち主 ID であり、
-//   PAYMENTS_USER_ID の単一ウォレットを全利用者で共有している。一方、購入物の所有者と
-//   PaymentSession（支出上限・期限の枠）は Cognito の userSub（ツールコンテキスト）で分けている。
-//   利用者ごとの上限はセッション単位で効き、「誰が支払わせたか」はセッション ID と userSub の
-//   対応（KVStore の記録とログ）で追う。利用者ごとのウォレット（instrument と WalletHub 委任）は採らない
+// 支払い主体はウォレット（共有・1つ）と PaymentSession（利用者=Cognito subごと）で分けている。
+// 詳細と代替案を採らなかった理由は決定39 参照
 import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
 import { Agent, BedrockModels, KVStore, type ModelConfig, type Scope } from '@aws-blocks/blocks';
 import { randomUUID } from 'node:crypto';
@@ -233,9 +228,7 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  // 利用者ごとに残る「未解決の支払い」の記録（決定48）。会話履歴だけを見る防護は、
-  // 事故の残る会話を離れて新しい会話を作れば回避できた。ウォレットと支払いの枠は
-  // 利用者ごとで会話をまたぐので、防護の記録も利用者ごとに持つ。
+  // 利用者ごとに残る「未解決の支払い」の記録（決定48。理由は repurchase-guard.ts 参照）。
   // TTL は付けない（期限切れで防護が黙って外れるのを避ける。購入の成功時に消す）
   const unresolvedPurchases = new KVStore(scope, 'unresolved-payment', {
     schema: z.object({
@@ -263,9 +256,8 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  // id は物理名の一部。内蔵 S3 バケットは cdk deploy 経路では <スタック名>-app-buyer-sn、Amplify 経路では
-  // <Amplify のルートスタック名>-b-app-buyer-sn になる。Amplify のスタック名の長さに合わせて
-  // 短くしている（決定33）。一度 deploy したら変えないこと
+  // id は物理名の一部で、内蔵 S3 バケット名は cdk deploy 経路では <スタック名>-app-buyer-sn、
+  // Amplify 経路では <Amplify のルートスタック名>-b-app-buyer-sn になる（決定33。理由は index.ts の Scope 定義参照）
   const agent = new Agent(scope, 'buyer', {
     // ローカルでも Bedrock を使う（決定28。BUYER_LOCAL_MODEL=canned で偽 LLM に切替）。
     // 支払い〜有料ツール実行の縦串はどちらでも本物が動く
@@ -300,12 +292,9 @@ export function createBuyerAgent(scope: Scope) {
           context,
           interrupt,
         }): Promise<{ [key: string]: string | number | boolean }> => {
-          // 硬い防護（決定31・48）: 「支払い済みなのに成果物が無い」購入や「支払いの成否が
-          // 不明」な購入が残っていれば、LLM の判断だけでは次の支払いに進ませず、人の承認
-          // （interrupt）を要求する。interrupt は承認前なら処理を中断し、resume 後に
-          // このハンドラが先頭から再実行される。
-          // 会話履歴（この会話）と KVStore（この利用者）の両方を見る。会話単位だけだと、
-          // 事故の残る会話を離れて新しい会話を作れば承認を経ずに買い直せた（決定48）
+          // 硬い防護（決定31・48、理由は repurchase-guard.ts 参照）: 未解決の購入が残っていれば
+          // LLM の判断だけでは次の支払いに進ませず、人の承認（interrupt）を要求する。interrupt
+          // は承認前なら処理を中断し、resume 後にこのハンドラが先頭から再実行される
           const unresolved = pendingApprovals(
             extractPurchases(await agent.getConversation(context.conversationId)),
             await loadUnresolved(unresolvedPurchases, context.userId),

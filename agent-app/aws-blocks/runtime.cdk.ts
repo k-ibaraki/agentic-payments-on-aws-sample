@@ -8,9 +8,8 @@
  * （`*.cdk.ts`）にしか置けない。`handler.addEnvironment` は `@aws-blocks/core` の README が
  * CORS の例で示している公式の手順。
  *
- * Amplify 経路（amplify/blocks.ts）と cdk deploy 経路（index.cdk.ts）の両方から呼ぶ。以前は
- * amplify/ にだけ置いていたため、cdk deploy 経路（決定33 の退路）では決済のできない
- * Lambda が出来上がっていた。
+ * Amplify 経路（amplify/blocks.ts）と cdk deploy 経路（index.cdk.ts）の両方から呼ぶ
+ * （呼び忘れると決済のできない Lambda になっていた経緯は wiring.test.ts 参照）。
  */
 import { Stack } from 'aws-cdk-lib';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
