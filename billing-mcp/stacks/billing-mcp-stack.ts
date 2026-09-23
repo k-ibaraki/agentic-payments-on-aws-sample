@@ -149,8 +149,9 @@ export function createBillingMcpStack(
 
   // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く
   // （差し替えが飛行中の取引を壊さない理由は server/pricing/tiers.ts 参照）。
-  // 作るのは器だけで、中身（版と配信）は持たない。持つと deploy のたびに運用中の表が
-  // 既定値へ巻き戻る（決定64）。中身は `pnpm set:tier-table` で配る
+  // 作るのは器（以下の Application / Environment / ConfigurationProfile / DeploymentStrategy）
+  // だけで、中身（版と配信）は持たない。持つと deploy のたびに運用中の表が既定値へ巻き戻る
+  // （決定64）。中身は `pnpm set:tier-table` で配る
   const application = new appconfig.CfnApplication(stack, "PricingApp", {
     name: `billing-mcp-pricing-${props.envName}`,
   });

@@ -1,5 +1,6 @@
-// 価格表（価格帯ごとの価格と目安、判定モデル）を AppConfig に配る。CDK は器だけを作り、
-// 中身はこのスクリプトで配る（DESIGN.md 決定64）。
+// 価格表（価格帯ごとの価格と目安、判定モデル）を AppConfig に配る。CDK は AppConfig の器
+// （Application / Environment / ConfigurationProfile / DeploymentStrategy）だけを作り、
+// 中身（版と配信）はこのスクリプトで配る（DESIGN.md 決定64）。
 //
 // 実行: pnpm set:tier-table < tier-table.json        … parameter.ts の envName からスタックを決める
 //       pnpm set:tier-table <名前> < tier-table.json … スタック名を直接指定する

@@ -124,8 +124,8 @@ pnpm outputs <名前>  # スタック名を直接指定する
 渡さなければ上の既定値で動く。設定が読めないときは直前に読めた表を使い続けるので、
 書き損じで売り手が止まることはない。
 
-CDK が作るのは AppConfig の器だけで、価格表の中身は配らない（決定64）。deploy した直後は上の既定値で
-動く。変えるときは表を丸ごと書いた JSON を配る（AWS コンソールで配信してもよい）。一度配った表は、
+CDK が作るのは AppConfig の器（Application / Environment / ConfigurationProfile / DeploymentStrategy）
+だけで、価格表の中身（版と配信）は配らない（決定64）。deploy した直後は上の既定値で動く。変えるときは表を丸ごと書いた JSON を配る（AWS コンソールで配信してもよい）。一度配った表は、
 以後の `cdk deploy` で巻き戻らない。
 
 ```sh

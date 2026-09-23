@@ -132,7 +132,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     template = synth();
   });
 
-  it("価格表を置く AppConfig の器を作る", () => {
+  it("価格表を置く AppConfig のアプリケーション・環境・設定プロファイル・展開戦略を作る", () => {
     template.resourceCountIs("AWS::AppConfig::Application", 1);
     template.resourceCountIs("AWS::AppConfig::Environment", 1);
     template.resourceCountIs("AWS::AppConfig::ConfigurationProfile", 1);
