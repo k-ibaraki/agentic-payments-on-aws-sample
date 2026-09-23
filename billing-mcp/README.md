@@ -71,6 +71,9 @@ pnpm cdk diff                         # 差分を確認してから
 pnpm cdk deploy
 ```
 
+> **注意**: `pnpm cdk deploy` は無認証の公開エンドポイントをインターネットに出す。
+> 誰でも Bedrock を動かせる状態になるため、`reservedConcurrency` と価格の設定を確認してから実行すること。
+
 クラウド上の決済検証は接続先を差し替えるだけでよい。
 
 ```bash
@@ -93,6 +96,10 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
 | `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
 | `LogGroupName` | Lambda のロググループ名 | —（調査用）|
+
+**`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
+その時点の出力を取り直すこと。`PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` は売り手ではなく
+買い手側の資源で、agent-app の `npx tsx scripts/payments-setup.ts` が出力する（agent-app/README.md 参照）。
 
 価格は出力に出さない。価格は呼び出しごとに価格表が決めるため（次節）、agent-app の `PAYMENT_MAX_AMOUNT` は
 通したい価格帯の価格を賄えるように決める。
@@ -134,8 +141,7 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    ```
 
    鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは標準入力で受け、
-   本人しか読めない一時ファイル（0600）に書いて `--cli-input-json file://…` で AWS CLI に渡し、
-   成否によらず消す（`file:///dev/stdin` は macOS で開けなかった）。
+   本人しか読めない一時ファイルに書いて AWS CLI に渡し、成否によらず消す。
 
 2. **AppConfig の価格表で切り替える。** 価格表（profile `tier-table`）に `judge` の欄を足す:
 
@@ -154,26 +160,9 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
 
 切り替えると、買い手の依頼文が AWS の外（`api.typesafe.ai`）へ出る。
 
-2026-09-21 に 20 件で実測した範囲では、**両者の精度に差は認められない**（それぞれに合う文言で
-Haiku 17/20、Jev 16〜17/20）。同じ文言で比べた数字も出ているが、その文言はもともと Haiku 用に
-書いたものなので、比較としては公平でない。判定モデルごとに効く文言が違い、どの文言もこの 20 件を
-見ながら書かれているため、この評価から優劣は言えない。
-
-Jev のほうが速く、そして安い。応答は約 2 倍速く（540ms 対 1,010ms）、判定 1 回あたりの費用は
-13〜16 倍安い（$0.000021 対 $0.00029）。ただし判定は生成原価の 0.2% 程度でしかなく、
-Jev 経路には Secrets Manager の月額 $0.40 が付くため、費用面で釣り合うのは月 1,450 件から。
-既定を Haiku に据えているのは、この用途では速度も費用も効かないためで、Jev の出来が悪いからではない。
-
-詳細は DESIGN.md 決定58。
-
-**`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
-その時点の出力を取り直すこと。
-
-`PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` は売り手ではなく買い手側の資源で、
-agent-app の `npx tsx scripts/payments-setup.ts` が出力する（agent-app/README.md 参照）。
-
-> **注意**: `pnpm cdk deploy` は無認証の公開エンドポイントをインターネットに出す。
-> 誰でも Bedrock を動かせる状態になるため、`reservedConcurrency` と価格の設定を確認してから実行すること。
+2026-09-21 に 20 件で実測した範囲では、両者の精度に差は認められない（既定を Haiku に
+据えているのは、この用途では速度・費用の差も効かないためで、Jev の出来が悪いからではない）。
+詳細（実測値・費用の内訳）は DESIGN.md 決定58。
 
 ## 後片付け
 
