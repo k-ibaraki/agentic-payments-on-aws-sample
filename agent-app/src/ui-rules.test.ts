@@ -1,6 +1,6 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
-// 会話の中の購入カードの並び
+// 会話の中の購入カードの並び、購入履歴の表示中の行
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -281,5 +281,23 @@ describe('purchaseDetail', () => {
     expect(purchaseDetail({ ok: false, paymentMade: false, error: '売り手に接続できません' })).toBe(
       '売り手に接続できません',
     );
+  });
+});
+
+// ── 購入履歴の表示中の行（決定62） ──
+import { isSelectedPurchase } from './ui-rules.js';
+
+describe('isSelectedPurchase', () => {
+  it('表示中の resultId と同じ成功した行だけを強調する', () => {
+    expect(isSelectedPurchase({ ok: true, resultId: 'r1' }, 'r1')).toBe(true);
+    expect(isSelectedPurchase({ ok: true, resultId: 'r2' }, 'r1')).toBe(false);
+  });
+
+  it('まだ何も表示していなければ、どの行も強調しない', () => {
+    expect(isSelectedPurchase({ ok: true, resultId: 'r1' }, null)).toBe(false);
+  });
+
+  it('失敗の行は表示できないので、同じ resultId でも強調しない', () => {
+    expect(isSelectedPurchase({ ok: false, resultId: 'r1' }, 'r1')).toBe(false);
   });
 });

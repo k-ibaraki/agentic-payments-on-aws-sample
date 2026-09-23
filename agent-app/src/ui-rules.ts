@@ -194,3 +194,11 @@ export function retargetAnchor(
   }
   return null;
 }
+
+/**
+ * 購入履歴の行を「表示中」として強調するか（決定62）。強調はプレビューに描けた後に付けるので、
+ * 表示できない失敗の行は resultId が同じでも強調しない
+ */
+export function isSelectedPurchase(purchase: { ok: boolean; resultId: string }, selected: string | null): boolean {
+  return purchase.ok && purchase.resultId === selected;
+}
