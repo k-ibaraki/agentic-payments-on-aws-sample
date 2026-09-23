@@ -293,7 +293,7 @@ export function createBillingMcpStack(
     }),
   );
 
-  // 鍵はコールドスタートに一度だけ読む。読めるのはこの Secret だけ
+  // 読めるのはこの Secret だけ。鍵は初めて使うときに読み、読めればコンテナ内に保持する
   typesafeApiKeySecret.grantRead(mcpFunction);
 
   // AppConfig の拡張は関数の実行ロールで設定を取りに行く。無認証で公開する関数なので、
@@ -328,7 +328,7 @@ export function createBillingMcpStack(
   new CfnOutput(stack, "TypesafeApiKeySecretArn", {
     value: typesafeApiKeySecret.secretArn,
     description:
-      "Jev の API キーを入れる Secret の ARN（決定58）。値は空で作られるので、使うなら pnpm set:jev-key で入れる",
+      "Jev の API キーを入れる Secret の ARN（決定58）。仮の値（REPLACE_ME）で作られるので、使うなら pnpm set:jev-key で入れる",
   });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,

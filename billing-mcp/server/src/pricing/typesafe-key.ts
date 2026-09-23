@@ -1,7 +1,8 @@
 // Jev の API キーの読み手（DESIGN.md 決定58）。
 //
-// 鍵は Secrets Manager に置き、コールドスタートに一度だけ読んでコンテナ内に保持する。
-// CDK が作るのは空の Secret で、値は人が後から入れる（`pnpm set:jev-key`）。
+// 鍵は Secrets Manager に置き、初めて使うときに読んで、読めればコンテナ内に保持する。
+// 読めなければ RETRY_COOLDOWN_MS おいて読み直す（後から鍵を入れても効くように）。
+// CDK が作るのは仮の値（UNSET_API_KEY）を入れた Secret で、鍵は人が後から入れる（`pnpm set:jev-key`）。
 // ゆえに「指定はあるが値が無い」状態は通常運転の一部であり、落ちてはならない。
 //
 // ローカル開発では環境変数 `TYPESAFE_API_KEY` を優先する。Secrets Manager を

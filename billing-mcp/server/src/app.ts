@@ -101,8 +101,8 @@ export function createMcpFetchHandler(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
   // 価格帯の判定モデル（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
-  // 共有する。価格表が jev を指していれば Jev に切り替える。鍵はコールド
-  // スタートに一度だけ Secrets Manager から読む
+  // 共有する。価格表が jev を指していれば Jev に切り替える。鍵は初めて使うときに
+  // Secrets Manager から読み、読めればコンテナ内に保持する（読めなければ間をおいて読み直す）
   const selectJudge = createJudgeSelector({
     bedrock:
       options.judge ??

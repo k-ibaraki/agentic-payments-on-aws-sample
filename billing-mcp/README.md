@@ -133,8 +133,9 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    pbpaste | pnpm set:jev-key  # クリップボードから渡す場合
    ```
 
-   鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは
-   標準入力で受け、`--cli-input-json file:///dev/stdin` で AWS CLI に渡す。
+   鍵はコマンド引数に置かない（シェルの履歴と `ps` に残るため）。スクリプトは標準入力で受け、
+   本人しか読めない一時ファイル（0600）に書いて `--cli-input-json file://…` で AWS CLI に渡し、
+   成否によらず消す（`file:///dev/stdin` は macOS で開けなかった）。
 
 2. **AppConfig の価格表で切り替える。** 価格表（profile `tier-table`）に `judge` の欄を足す:
 
