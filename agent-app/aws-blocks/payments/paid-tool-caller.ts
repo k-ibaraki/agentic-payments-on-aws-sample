@@ -9,7 +9,15 @@ import {
   paymentRequiredSchema,
   type SettleResponse,
 } from './x402-types.js';
+import type { PaidAmount } from './amount.js';
 import type { X402Payer } from './x402-payer.js';
+
+/** 支払い証明から、支払った額（最小単位と資産）を読む。読めなければ undefined（決定60） */
+export function paidAmountOf(payload: PaymentPayload): PaidAmount | undefined {
+  const { amount, asset } = payload.accepted ?? {};
+  if (typeof amount !== 'string' || typeof asset !== 'string') return undefined;
+  return { amount, asset };
+}
 
 // MCP SDK の Client.callTool と互換の最小の形（テストで差し替えるため）
 export interface McpClientLike {
@@ -40,10 +48,13 @@ export class PaidToolError extends Error {
   readonly paymentMade = true as const;
   /** EIP-3009 の nonce。売り手側の清算をオンチェーンで辿る手がかり */
   readonly authorizationNonce?: string;
+  /** 支払った額（決定60）。利用者が減った残高の理由に辿り着けるよう、失敗にも添える */
+  readonly paidAmount?: PaidAmount;
 
   constructor(message: string, readonly paymentPayload: PaymentPayload, options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'PaidToolError';
+    this.paidAmount = paidAmountOf(paymentPayload);
     const inner = paymentPayload.payload as { authorization?: { nonce?: unknown } } | undefined;
     if (typeof inner?.authorization?.nonce === 'string') {
       this.authorizationNonce = inner.authorization.nonce;
@@ -56,6 +67,8 @@ export interface PaidToolOutcome {
   result: Record<string, unknown>;
   paymentMade: boolean;
   paymentResponse?: SettleResponse;
+  /** 支払った額（決定60）。支払いをしていない呼び出しには付かない */
+  paidAmount?: PaidAmount;
 }
 
 // 支払い要求かどうかを判定する。「支払い要求らしいのに解釈できない」は
@@ -119,9 +132,11 @@ export async function callPaidTool(
   }
 
   const meta = second._meta as Record<string, unknown> | undefined;
+  const paidAmount = paidAmountOf(paymentPayload);
   return {
     result: second,
     paymentMade: true,
     paymentResponse: meta?.[PAYMENT_RESPONSE_META_KEY] as SettleResponse | undefined,
+    ...(paidAmount ? { paidAmount } : {}),
   };
 }

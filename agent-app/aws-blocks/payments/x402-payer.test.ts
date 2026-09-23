@@ -305,6 +305,30 @@ describe('createAgentCorePayer', () => {
       expect(send).not.toHaveBeenCalled();
     });
 
+    // 決定60: 最小単位だけでは額の大きさが人に伝わらない。桁数を知っている資産では
+    // ドル表記を主に、最小単位を併記する
+    it('上限超過の拒否文は、ドル表記と最小単位を併記する', async () => {
+      const { client } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, { ...POLICY, maxAmount: '150000' });
+
+      await expect(
+        payer.pay({ ...PAYMENT_REQUIRED, accepts: [{ ...REQUIREMENT, amount: '200000' }] }),
+      ).rejects.toThrow('金額が1回あたりの上限を超えています（提示 $0.2 / 上限 $0.15。最小単位で 200000 / 150000）');
+    });
+
+    it('桁数を知らない資産では最小単位だけで伝える（ドル換算を推量しない）', async () => {
+      const unknownAsset = '0x1111111111111111111111111111111111111111';
+      const { client } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
+      const payer = createAgentCorePayer(client, CONTEXT, { ...POLICY, asset: unknownAsset });
+
+      await expect(
+        payer.pay({
+          ...PAYMENT_REQUIRED,
+          accepts: [{ ...REQUIREMENT, asset: unknownAsset, amount: '200000' }],
+        }),
+      ).rejects.toThrow('金額が1回あたりの上限を超えています（提示 200000 / 上限 100000。いずれも最小単位）');
+    });
+
     it('payTo を指定した場合、宛先が違えば支払わない', async () => {
       const { client, send } = fakeClient({ cryptoX402: { version: '2', payload: SIGNED } });
       const payer = createAgentCorePayer(client, CONTEXT, {
@@ -364,5 +388,22 @@ describe('購入単位の冪等キー（決定30）', () => {
     const tokens = send.mock.calls.map((c) => (c[0] as { input: { clientToken: string } }).input.clientToken);
     expect(tokens[0]).toMatch(/^[0-9a-f-]{36}$/);
     expect(tokens[0]).not.toBe(tokens[1]);
+  });
+});
+
+// 決定60: 成否不明でも「いくらの支払いだったか」は選んだ条件から分かる。
+// 減っているかもしれない額を利用者に見せるため、例外に載せて運ぶ
+describe('成否不明の失敗が運ぶ支払額', () => {
+  it('UncertainPaymentError は選んだ条件の額を持つ', async () => {
+    const send = vi.fn().mockRejectedValue(clientSideFailure('TimeoutError', 'socket timed out'));
+    const payer = createAgentCorePayer({ send }, CONTEXT, POLICY);
+
+    const error = await payer.pay(PAYMENT_REQUIRED).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UncertainPaymentError);
+    expect((error as UncertainPaymentError).paidAmount).toEqual({
+      amount: REQUIREMENT.amount,
+      asset: REQUIREMENT.asset,
+    });
   });
 });

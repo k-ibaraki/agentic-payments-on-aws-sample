@@ -30,6 +30,7 @@ import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
 import { Agent, BedrockModels, KVStore, type ModelConfig, type Scope } from '@aws-blocks/blocks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { amountFields } from './payments/amount.js';
 import { buyHtml } from './payments/buy-html.js';
 import { extractPurchases } from './purchases.js';
 import {
@@ -143,6 +144,9 @@ export interface PurchaseArtifactStore {
       transaction?: string;
       authorizationNonce?: string;
       paymentUncertain?: boolean;
+      /** 支払った額（最小単位）と資産（決定60） */
+      amount?: string;
+      asset?: string;
     },
   ): Promise<void>;
 }
@@ -171,9 +175,13 @@ export async function recordFailedPurchase(
     paymentUncertain?: boolean;
     transaction?: string;
     authorizationNonce?: string;
+    /** 支払った（支払おうとした）額。最小単位と資産をそのまま残す（決定60） */
+    amount?: string;
+    asset?: string;
   },
 ): Promise<void> {
-  const { userId, resultId, message, paymentUncertain, transaction, authorizationNonce } = purchase;
+  const { userId, resultId, message, paymentUncertain, transaction, authorizationNonce, amount, asset } =
+    purchase;
   console.error(
     paymentUncertain
       ? `[buyer-agent] 支払いの成否を確認できなかった resultId=${resultId}（ProcessPayment の clientToken と同じ値。Payments 側の記録と突き合わせること）`
@@ -194,6 +202,8 @@ export async function recordFailedPurchase(
       ...(transaction ? { transaction } : {}),
       ...(authorizationNonce ? { authorizationNonce } : {}),
       ...(paymentUncertain ? { paymentUncertain: true } : {}),
+      ...(amount ? { amount } : {}),
+      ...(asset ? { asset } : {}),
     });
   } catch (error) {
     console.error(`[buyer-agent] レシートの保存に失敗した resultId=${resultId}`, error);
@@ -209,6 +219,10 @@ export function createBuyerAgent(scope: Scope) {
       html: z.string().optional(),
       filename: z.string().optional(),
       transaction: z.string().optional(),
+      // 支払った（支払おうとした）額。最小単位の整数と資産のアドレス（決定60）。
+      // 後から履歴やオンチェーンの記録と突き合わせるために生の値で残す
+      amount: z.string().optional(),
+      asset: z.string().optional(),
       // 支払い後に応答を得られなかった場合の手がかり（tx が無いときの代わり）
       authorizationNonce: z.string().optional(),
       // 支払いの成否そのものを確認できなかった（決定48）。tx も nonce も無く、
@@ -263,6 +277,7 @@ export function createBuyerAgent(scope: Scope) {
       'あなたのウォレット（AgentCore Payments）から x402 プロトコルで支払います。',
       '金額は売り手の提示によりますが、1回あたりの上限を超える提示には応じません。',
       '結果は resultId で参照できる旨をユーザーに伝えてください。',
+      '購入できたら、支払った金額（ツールが返す amountDisplay）を必ず添えて報告してください。',
       'ツールが失敗しても自動で再試行してはいけません。支払いが済んでいる可能性があるため、',
       '失敗の内容（paymentMade・paymentUncertain と resultId）をユーザーに報告し、指示を待ってください。',
       'paymentUncertain が真の場合は、支払われたかどうか自体が分かっていません。',
@@ -341,6 +356,8 @@ export function createBuyerAgent(scope: Scope) {
             timeout: toolTimeoutMsFromEnv(),
           });
           const transaction = outcome.paymentResponse?.transaction;
+          // 支払った額。要約（LLM と画面が読む）とレシートの双方に載せる（決定60）
+          const amount = amountFields(outcome.paidAmount);
 
           if (outcome.isError || !outcome.html) {
             const message = outcome.message ?? '有料ツールの呼び出しに失敗しました';
@@ -356,6 +373,7 @@ export function createBuyerAgent(scope: Scope) {
               if (outcome.paymentUncertain) summary.paymentUncertain = true;
               if (transaction) summary.transaction = transaction;
               if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
+              if (amount) Object.assign(summary, amount);
               await recordFailedPurchase(
                 { artifacts, unresolvedPurchases },
                 {
@@ -367,6 +385,7 @@ export function createBuyerAgent(scope: Scope) {
                   ...(outcome.authorizationNonce
                     ? { authorizationNonce: outcome.authorizationNonce }
                     : {}),
+                  ...(outcome.paidAmount ?? {}),
                 },
               );
             }
@@ -377,6 +396,7 @@ export function createBuyerAgent(scope: Scope) {
             html: outcome.html,
             ...(outcome.filename ? { filename: outcome.filename } : {}),
             ...(transaction ? { transaction } : {}),
+            ...(outcome.paidAmount ?? {}),
             purchasedAt: Date.now(),
           });
           // 買えたので、この利用者の未解決は決着とみなして記録を消す（決定48）。
@@ -389,6 +409,7 @@ export function createBuyerAgent(scope: Scope) {
             htmlBytes: outcome.html.length,
           };
           if (transaction) summary.transaction = transaction;
+          if (amount) Object.assign(summary, amount);
           return summary;
         },
       }),

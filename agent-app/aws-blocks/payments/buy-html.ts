@@ -2,6 +2,7 @@
 // MCP セッションはステートレス（売り手側 決定22）なので、呼び出しごとに接続してよい
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { PaidAmount } from './amount.js';
 import { type CallOptions, callPaidTool, PaidToolError } from './paid-tool-caller.js';
 import { UncertainPaymentError, type X402Payer } from './x402-payer.js';
 import type { SettleResponse } from './x402-types.js';
@@ -22,6 +23,11 @@ export interface BuyHtmlOutcome {
   isError: boolean;
   /** 支払い後に応答を得られなかった場合の EIP-3009 nonce（清算をオンチェーンで辿る手がかり） */
   authorizationNonce?: string;
+  /**
+   * 支払った（成否不明なら支払おうとした）額（決定60）。
+   * 画面・ツール要約・レシートに出す額はすべてこれが元になる
+   */
+  paidAmount?: PaidAmount;
 }
 
 /**
@@ -37,6 +43,7 @@ export function outcomeFromError(error: unknown): BuyHtmlOutcome | undefined {
       isError: true,
       message: error.message,
       ...(error.authorizationNonce ? { authorizationNonce: error.authorizationNonce } : {}),
+      ...(error.paidAmount ? { paidAmount: error.paidAmount } : {}),
     };
   }
   if (error instanceof UncertainPaymentError) {
@@ -46,6 +53,7 @@ export function outcomeFromError(error: unknown): BuyHtmlOutcome | undefined {
       paymentUncertain: true,
       isError: true,
       message: error.message,
+      ...(error.paidAmount ? { paidAmount: error.paidAmount } : {}),
     };
   }
   return undefined;
@@ -100,6 +108,7 @@ export async function buyHtml(
     return {
       paymentMade: outcome.paymentMade,
       ...(outcome.paymentResponse ? { paymentResponse: outcome.paymentResponse } : {}),
+      ...(outcome.paidAmount ? { paidAmount: outcome.paidAmount } : {}),
       ...(artifact ?? {}),
       ...(firstText(outcome.result) !== undefined ? { message: firstText(outcome.result) } : {}),
       isError: outcome.result.isError === true,

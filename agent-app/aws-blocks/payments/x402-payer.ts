@@ -7,6 +7,7 @@
 import { ProcessPaymentCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { DocumentType } from '@smithy/types';
 import { randomUUID } from 'node:crypto';
+import { type PaidAmount, usdOf } from './amount.js';
 import {
   isSessionRejection,
   isSpendLimitRejection,
@@ -32,11 +33,21 @@ export class UncertainPaymentError extends Error {
   readonly paymentUncertain = true as const;
   /** ProcessPayment に渡した冪等キー（= 購入の resultId）。Payments 側の記録と突き合わせる手がかり */
   readonly clientToken: string;
+  /**
+   * 支払おうとした額（決定60）。成立したかは分からないが、額は選んだ支払い条件から分かる。
+   * 「減っているかもしれない額」として利用者に見せるために運ぶ
+   */
+  readonly paidAmount?: PaidAmount;
 
-  constructor(message: string, clientToken: string, options?: { cause?: unknown }) {
+  constructor(
+    message: string,
+    clientToken: string,
+    options?: { cause?: unknown; paidAmount?: PaidAmount },
+  ) {
     super(message, options);
     this.name = 'UncertainPaymentError';
     this.clientToken = clientToken;
+    if (options?.paidAmount) this.paidAmount = options.paidAmount;
   }
 }
 
@@ -60,13 +71,13 @@ function isPaymentCertainlyNotMade(error: unknown): boolean {
 }
 
 /** ProcessPayment の失敗を、成否が確定するものと不明なものに振り分ける（決定48） */
-function paymentFailure(error: unknown, clientToken: string): unknown {
+function paymentFailure(error: unknown, clientToken: string, paidAmount: PaidAmount): unknown {
   if (isPaymentCertainlyNotMade(error)) return error;
   const message = error instanceof Error ? error.message : String(error);
   return new UncertainPaymentError(
     `ProcessPayment の結果を確認できませんでした（支払いが成立した可能性があります）: ${message}`,
     clientToken,
-    { cause: error },
+    { cause: error, paidAmount },
   );
 }
 
@@ -122,7 +133,15 @@ function selectAcceptable(
       continue;
     }
     if (BigInt(a.amount) > BigInt(policy.maxAmount)) {
-      reason ||= `金額が1回あたりの上限を超えています（提示 ${a.amount} / 上限 ${policy.maxAmount}）`;
+      // 最小単位だけでは額の大小が人に伝わらない。桁数を知っている資産では
+      // ドル表記を主にし、最小単位を併記する（決定60）。ここでは資産が
+      // ポリシーと一致した後なので、提示と上限は同じ桁数で読める
+      const shown = usdOf(a.amount, a.asset);
+      const limit = usdOf(policy.maxAmount, a.asset);
+      reason ||=
+        shown && limit
+          ? `金額が1回あたりの上限を超えています（提示 ${shown} / 上限 ${limit}。最小単位で ${a.amount} / ${policy.maxAmount}）`
+          : `金額が1回あたりの上限を超えています（提示 ${a.amount} / 上限 ${policy.maxAmount}。いずれも最小単位）`;
       continue;
     }
     return { accepted: a };
@@ -142,6 +161,8 @@ export function createAgentCorePayer(
         throw new Error(selection.reason);
       }
       const { accepted } = selection;
+      // 支払った（支払おうとした）額。失敗の経路でも利用者に見せられるよう運ぶ（決定60）
+      const paidAmount: PaidAmount = { amount: accepted.amount, asset: accepted.asset };
 
       // 冪等キーは再試行でも同じ値にする（同じ購入の二重処理を Payments 側でも防ぐ）
       const clientToken = context.purchaseId ?? randomUUID();
@@ -187,7 +208,7 @@ export function createAgentCorePayer(
         }
         // セッションの失効・削除なら作り直して一度だけ再試行する。この拒否はサービスが
         // 明示的に返したもので、支払いは処理されていない（決定35）
-        if (!isSessionRejection(error)) throw paymentFailure(error, clientToken);
+        if (!isSessionRejection(error)) throw paymentFailure(error, clientToken, paidAmount);
         console.warn(
           `[x402-payer] PaymentSession が拒否されたため作り直します: ${(error as Error).name}: ${(error as Error).message}`,
         );
@@ -196,7 +217,7 @@ export function createAgentCorePayer(
         try {
           response = await process(renewedSessionId);
         } catch (retryError) {
-          throw paymentFailure(retryError, clientToken);
+          throw paymentFailure(retryError, clientToken, paidAmount);
         }
       }
 
@@ -206,6 +227,7 @@ export function createAgentCorePayer(
         throw new UncertainPaymentError(
           `ProcessPayment が支払い証明を返しませんでした（status: ${response.status ?? '不明'}）`,
           clientToken,
+          { paidAmount },
         );
       }
 
