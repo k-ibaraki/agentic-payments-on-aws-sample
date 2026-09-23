@@ -9,7 +9,8 @@
     "verify:bundle": "node scripts/verify-bundle.mjs",
     "synth": "cdk synth --quiet",
     "outputs": "tsx scripts/outputs.ts",
-    "set:jev-key": "tsx scripts/set-jev-key.ts"
+    "set:jev-key": "tsx scripts/set-jev-key.ts",
+    "set:tier-table": "tsx scripts/set-tier-table.ts"
   },
   "devDependencies": {
     "@swc/core": "^1.15.0",

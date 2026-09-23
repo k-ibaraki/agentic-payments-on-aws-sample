@@ -130,10 +130,9 @@ async function main(): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  console.log(`入れました（${key.length} 文字）。判定モデルを切り替えるには AppConfig の judge を jev にすること`);
+  console.log(`入れました（${key.length} 文字）。判定モデルを切り替えるには価格表の judge を jev にして配ること`);
   console.log("");
-  console.log("  AppConfig の価格表（tier-table）の例:");
-  console.log('    { "tiers": { ... }, "judge": "jev" }');
+  console.log('  pnpm set:tier-table < tier-table.json   # 中身は { "tiers": { ... }, "judge": "jev" }');
 }
 
 main().catch((error) => {

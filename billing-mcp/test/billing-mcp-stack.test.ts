@@ -132,27 +132,30 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     template = synth();
   });
 
-
-
-  it("価格表を AppConfig に置き、既定の3つの価格帯を載せる", () => {
+  it("価格表を置く AppConfig の器を作る", () => {
     template.resourceCountIs("AWS::AppConfig::Application", 1);
-    template.resourceCountIs("AWS::AppConfig::HostedConfigurationVersion", 1);
-    const versions = template.findResources(
-      "AWS::AppConfig::HostedConfigurationVersion",
-    );
-    const content = Object.values(versions)[0].Properties.Content as string;
-    const table = JSON.parse(content);
-    expect(Object.keys(table.tiers)).toEqual(["ume", "take", "matsu"]);
-    expect(table.tiers.take.price).toBe("$0.15");
+    template.resourceCountIs("AWS::AppConfig::Environment", 1);
+    template.resourceCountIs("AWS::AppConfig::ConfigurationProfile", 1);
+    template.resourceCountIs("AWS::AppConfig::DeploymentStrategy", 1);
   });
 
-  // 既定は Haiku。Jev へは AppConfig の同じ profile の値を書き換えて切り替える（決定58）
-  it("価格表に判定モデルの指定を載せ、既定は haiku にする", () => {
-    const versions = template.findResources(
-      "AWS::AppConfig::HostedConfigurationVersion",
+  // 中身を CDK が配ると、deploy のたびに人が入れた価格表を巻き戻す（決定64）
+  it("価格表の中身（版と配信）は CDK では持たない", () => {
+    template.resourceCountIs("AWS::AppConfig::HostedConfigurationVersion", 0);
+    template.resourceCountIs("AWS::AppConfig::Deployment", 0);
+  });
+
+  // 価格表を配る手順（pnpm set:tier-table）が配り先を引けること
+  it("価格表の配り先を出力に出す", () => {
+    const outputs = template.findOutputs("*");
+    expect(Object.keys(outputs)).toEqual(
+      expect.arrayContaining([
+        "PricingApplicationId",
+        "PricingEnvironmentId",
+        "PricingProfileId",
+        "PricingDeploymentStrategyId",
+      ]),
     );
-    const content = Object.values(versions)[0].Properties.Content as string;
-    expect(JSON.parse(content).judge).toBe("haiku");
   });
 
   it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {
