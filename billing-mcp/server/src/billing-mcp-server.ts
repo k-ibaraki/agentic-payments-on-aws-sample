@@ -92,9 +92,6 @@ function defaultLoadUiHtml(): string {
   return fs.readFileSync(resolveUiHtmlPath(), "utf-8");
 }
 
-// 支払いラッパー（有料ツール用）を作る。facilitator への /supported 照会を伴う。
-// 組み立てた accepts も返す。settle 前の門番（payment-guard）が、買い手の支払いを
-// 売り手側の条件と突き合わせるのに要る
 /**
  * facilitator への `/supported` 照会を伴う初期化。往復を伴うので使い回す。
  *

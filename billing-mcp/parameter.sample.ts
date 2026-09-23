@@ -14,7 +14,7 @@ export const devParameter: AppParameter = {
   facilitatorUrl: "https://x402.org/facilitator",
   // 価格はパラメータでは決めない。段階制（決定56）の価格表が決め、既定は
   // 梅 $0.1 / 竹 $0.15 / 松 $0.2。deploy 後は AppConfig から変えられる
-  // 無認証で公開するため必ず設定する（決定19）。同時実行数 = 瞬間的な流量の上限であり、累積コストの上限ではない
+  // 無認証で公開するため必ず設定する（決定19。累積コストの上限にはならない点に注意）
   reservedConcurrency: 5,
   allowedModelIds: [
     "jp.anthropic.claude-sonnet-4-6",
