@@ -3,13 +3,41 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   type BillingMcpServerOptions,
+  buildPaidWrapper,
   createBillingMcpServer,
-  createPaidWrapper,
+  createResourceServer,
 } from "./billing-mcp-server.js";
-import { createDefaultConverse } from "./tools/generate-html.js";
+import { tierTableLoaderFromEnv } from "./pricing/config.js";
+import { createBedrockJudge } from "./pricing/judge.js";
+import { createJudgeBudget } from "./pricing/judge-guard.js";
+import { createJudgeSelector } from "./pricing/judge-select.js";
+import { resolveQuote } from "./pricing/quote.js";
+import {
+  DEFAULT_TIER_TABLE,
+  generationBudgetOf,
+  quoteDisclosure,
+  tierLabel,
+} from "./pricing/tiers.js";
+import {
+  createApiKeyLoader,
+  createDefaultSecretReader,
+} from "./pricing/typesafe-key.js";
+import {
+  type ConverseFn,
+  createDefaultConverse,
+} from "./tools/generate-html.js";
 
 /** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
 export const MCP_PATH = "/mcp";
+
+/**
+ * 見積もりの呼び出し予算の既定値（決定57）。
+ *
+ * コンテナごとに持つので、全体の天井は「同時実行数 × この値」になる。
+ * 正規の買い手は 1 回の購入につき見積もりを 1 度しか要さないため、
+ * この程度あれば通常の売買は妨げない
+ */
+export const DEFAULT_JUDGE_BUDGET = { capacity: 20, refillPerSecond: 0.2 };
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
 // Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
@@ -66,21 +94,46 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  let paidPromise: ReturnType<typeof createPaidWrapper> | undefined;
+  // 乱発への防護（決定57）。無認証の公開エンドポイントでは、支払う気のない相手が
+  // 見積もりだけを繰り返せる。予算を使い切ったら判定モデルを呼ばず既定の価格帯で売る。
+  // バケツはコンテナに 1 つで、判定モデルを選び直しても引き継がれる（決定58）
+  const judgeBudget = createJudgeBudget(
+    options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
+  );
+  // 価格帯の判定モデル（決定53・58）。既定は Bedrock の Haiku で、Bedrock クライアントは
+  // 共有する。価格表が jev を指していれば Jev に切り替える。鍵は初めて使うときに
+  // Secrets Manager から読み、読めればコンテナ内に保持する（読めなければ間をおいて読み直す）
+  const selectJudge = createJudgeSelector({
+    bedrock:
+      options.judge ??
+      createBedrockJudge(resolvedOptions.converse as ConverseFn),
+    loadApiKey:
+      options.loadApiKey ??
+      createApiKeyLoader({
+        env: process.env,
+        read: createDefaultSecretReader(),
+      }),
+    ...(options.createSystemOne
+      ? { createSystemOne: options.createSystemOne }
+      : {}),
+  });
 
-  const getPaid = () => {
-    if (!paidPromise) {
-      const pending = createPaidWrapper({
-        facilitatorUrl: options.facilitatorUrl,
-        payTo: options.payTo,
-        price: options.price,
-      });
-      paidPromise = pending;
+  // facilitator への /supported 照会を伴う初期化だけを使い回す。
+  // accepts の構築は価格帯ごとに価格が変わるため毎リクエスト行う（決定56）
+  let resourceServerPromise:
+    | ReturnType<typeof createResourceServer>
+    | undefined;
+
+  const getResourceServer = () => {
+    if (!resourceServerPromise) {
+      const pending = createResourceServer(options.facilitatorUrl);
+      resourceServerPromise = pending;
       pending.catch(() => {
-        if (paidPromise === pending) paidPromise = undefined;
+        if (resourceServerPromise === pending)
+          resourceServerPromise = undefined;
       });
     }
-    return paidPromise;
+    return resourceServerPromise;
   };
 
   return async function handleMcpRequest(request: Request): Promise<Response> {
@@ -112,10 +165,30 @@ export function createMcpFetchHandler(
       return response;
     }
 
-    // 支払いラッパーと、それが提示する accepts の組
-    let payment: Awaited<ReturnType<typeof createPaidWrapper>>;
+    // 本文は一度しか読めない。価格帯を決めるために先に読み切り、
+    // transport には同じ本文で組み直した Request を渡す
+    const body = await request.text();
+
+    // AppConfig の読み手があればそれを優先する。読めない設定は退けられ、
+    // 直前に読めた表（無ければ既定の表）が返る
+    const table = options.loadTierTable
+      ? await options.loadTierTable()
+      : (options.tierTable ?? DEFAULT_TIER_TABLE);
+    // 判定モデルは価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
+    // 予算はコンテナ共有のバケツから取る
+    const judge = judgeBudget.wrap(await selectJudge(table.judge));
+    const quote = await resolveQuote(body, { table, judge });
+
+    let payment: Awaited<ReturnType<typeof buildPaidWrapper>>;
     try {
-      payment = await getPaid();
+      payment = await buildPaidWrapper(await getResourceServer(), {
+        payTo: options.payTo,
+        price: quote.price,
+        ...(quote.quote ? { quoteNote: quote.quote } : {}),
+        ...(quote.quote
+          ? { disclosure: quoteDisclosure(table, quote.tier) }
+          : {}),
+      });
     } catch (error) {
       // facilitator に到達できないと価格を広告できない。落ちた理由を残す
       console.error("支払いラッパーの初期化に失敗しました", error);
@@ -124,15 +197,35 @@ export function createMcpFetchHandler(
       });
     }
 
+    if (quote.quote) {
+      // 確信度は判断に使わないが、水準の記述が効いているかを実地で見るために残す
+      const confidence =
+        quote.confidence === undefined
+          ? ""
+          : ` 確信度=${quote.confidence.toFixed(2)}`;
+      console.info(
+        `[pricing] 価格帯=${tierLabel(quote.tier)} 価格=${quote.price}${confidence}`,
+      );
+    }
+
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに
     // サーバーとトランスポートを立て、応答を読み切ってから閉じる
-    const server = await createBillingMcpServer(resolvedOptions, payment);
+    const server = await createBillingMcpServer(
+      { ...resolvedOptions, generation: generationBudgetOf(table, quote.tier) },
+      payment,
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });
     try {
       await server.connect(transport);
-      const response = await transport.handleRequest(request);
+      const response = await transport.handleRequest(
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body,
+        }),
+      );
       if (isStreamingResponse(response)) {
         // ここに来る経路は塞いだつもりだが、万一残っていても待ち続けない
         await response.body?.cancel();
@@ -148,8 +241,8 @@ export function createMcpFetchHandler(
           },
         });
       }
-      const body = await response.text();
-      return new Response(body === "" ? null : body, {
+      const responseBody = await response.text();
+      return new Response(responseBody === "" ? null : responseBody, {
         status: response.status,
         headers: withCors(new Headers(response.headers)),
       });
@@ -166,10 +259,11 @@ export function optionsFromEnv(): BillingMcpServerOptions {
   if (!payTo) {
     throw new Error("環境変数 PAY_TO_ADDRESS（売上受取ウォレット）が必要です");
   }
+  const loadTierTable = tierTableLoaderFromEnv();
   return {
     facilitatorUrl:
       process.env.FACILITATOR_URL ?? "https://x402.org/facilitator",
     payTo,
-    price: process.env.PRICE,
+    ...(loadTierTable ? { loadTierTable } : {}),
   };
 }

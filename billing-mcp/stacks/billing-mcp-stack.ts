@@ -4,13 +4,17 @@ import {
   CfnOutput,
   Duration,
   RemovalPolicy,
+  SecretValue,
   Stack,
   type StackProps,
 } from "aws-cdk-lib";
+import * as appconfig from "aws-cdk-lib/aws-appconfig";
 import * as iam from "aws-cdk-lib/aws-iam";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
   Architecture,
   FunctionUrlAuthType,
+  LayerVersion,
   Runtime,
 } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
@@ -25,8 +29,6 @@ export interface BillingMcpStackProps extends StackProps {
   readonly payToAddress: string;
   /** x402 facilitator の URL。省略時はサーバー側の既定（x402.org） */
   readonly facilitatorUrl?: string;
-  /** 価格（"$0.01" 形式）。省略時はサーバー側の既定 */
-  readonly price?: string;
   /**
    * Lambda の同時実行数の上限。
    * 無認証で公開する（決定19）ため必ず設定する。押さえられるのは瞬間的な
@@ -35,7 +37,34 @@ export interface BillingMcpStackProps extends StackProps {
   readonly reservedConcurrency: number;
   /** 呼び出しを許可する Bedrock 推論プロファイル ID（jp. プレフィックス） */
   readonly allowedModelIds: string[];
+  /**
+   * AppConfig の Lambda 拡張レイヤーの ARN（決定56）。
+   *
+   * 指定すると価格表を AppConfig から読む。省略するとサーバー側の既定の表で動く。
+   * ARN はリージョンとアーキテクチャごとに異なり、AWS が随時更新するため、
+   * ここでは固定せず利用者に渡してもらう
+   * （AWS の「AppConfig Agent Lambda extension」の一覧を参照）
+   */
+  readonly appConfigExtensionLayerArn?: string;
 }
+
+/**
+ * 鍵が未投入であることを表す仮の値。
+ * server 側の `pricing/typesafe-key.ts` の UNSET_API_KEY と揃える（決定58）
+ */
+const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
+
+/** 価格表の既定値。server 側の DEFAULT_TIER_TABLE と揃える（決定56） */
+const DEFAULT_TIER_TABLE = {
+  tiers: {
+    ume: { price: "$0.1", targetTokens: 5_000 },
+    take: { price: "$0.15", targetTokens: 8_000 },
+    matsu: { price: "$0.2", targetTokens: 12_000 },
+  },
+  // 価格帯を判定するモデル（決定58）。既定は Bedrock の Haiku。Jev に切り替えるときは
+  // この値を "jev" にして AppConfig を再展開する（再デプロイは要らない）
+  judge: "haiku",
+};
 
 /**
  * Lambda のタイムアウト。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
@@ -130,6 +159,65 @@ export function createBillingMcpStack(
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
+  // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く。
+  // 差し替えても飛行中の取引は壊れない。提示済みの価格は見積書としてそのまま
+  // 往復し、価格表と食い違えば使わずに判定し直すため
+  const application = new appconfig.CfnApplication(stack, "PricingApp", {
+    name: `billing-mcp-pricing-${props.envName}`,
+  });
+  const environment = new appconfig.CfnEnvironment(stack, "PricingEnv", {
+    applicationId: application.ref,
+    name: props.envName,
+  });
+  const profile = new appconfig.CfnConfigurationProfile(stack, "PricingProfile", {
+    applicationId: application.ref,
+    name: "tier-table",
+    locationUri: "hosted",
+  });
+  const version = new appconfig.CfnHostedConfigurationVersion(
+    stack,
+    "PricingVersion",
+    {
+      applicationId: application.ref,
+      configurationProfileId: profile.ref,
+      contentType: "application/json",
+      content: JSON.stringify(DEFAULT_TIER_TABLE),
+    },
+  );
+  // 段階的な展開は不要。設定は小さく、戻すのも同じ手順で足りる
+  const strategy = new appconfig.CfnDeploymentStrategy(stack, "PricingStrategy", {
+    name: `billing-mcp-pricing-${props.envName}`,
+    deploymentDurationInMinutes: 0,
+    growthFactor: 100,
+    finalBakeTimeInMinutes: 0,
+    replicateTo: "NONE",
+  });
+  new appconfig.CfnDeployment(stack, "PricingDeployment", {
+    applicationId: application.ref,
+    environmentId: environment.ref,
+    configurationProfileId: profile.ref,
+    configurationVersion: version.ref,
+    deploymentStrategyId: strategy.ref,
+  });
+
+  // Jev の API キー（決定58）。仮の値を入れたシークレットだけ作り、鍵は人が後から入れる（`pnpm set:jev-key`）。
+  // API キーを CDK に書くと CloudFormation テンプレートに平文で残るため。
+  //
+  // 中身を仮の値（UNSET_API_KEY）にしているのは、CDK の既定がランダム生成だから。
+  // 出鱈目な鍵が入っていると、判定モデルを jev に切り替えたときに毎回 401 になり、
+  // 全件がフォールバックの価格帯に落ちて価格が実質固定になる。仮の値ならサーバーが
+  // 「未投入」と判って既定の判定モデルに留まる
+  const typesafeApiKeySecret = new Secret(stack, "TypesafeApiKey", {
+    secretStringValue: SecretValue.unsafePlainText(UNSET_TYPESAFE_API_KEY),
+    secretName: `billing-mcp/typesafe-api-key-${props.envName}`,
+    description:
+      "TypeSafe（Jev）の API キー。判定モデルを jev に切り替えるときに使う（決定58）",
+    // 作り直しの余地を残す。鍵は外部サービスの発行物で、消えても再発行できる
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+
+  const useAppConfig = Boolean(props.appConfigExtensionLayerArn);
+
   const mcpFunction = new NodejsFunction(stack, "McpFunction", {
     entry: path.join(projectRoot, "server/src/handler.ts"),
     handler: "handler",
@@ -145,10 +233,30 @@ export function createBillingMcpStack(
     environment: {
       PAY_TO_ADDRESS: props.payToAddress,
       ...(props.facilitatorUrl ? { FACILITATOR_URL: props.facilitatorUrl } : {}),
-      ...(props.price ? { PRICE: props.price } : {}),
       // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
       UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
+      // 判定モデルに jev が指定されたときだけ読みに行く（決定58）
+      TYPESAFE_API_KEY_SECRET_ARN: typesafeApiKeySecret.secretArn,
+      // 拡張を載せたときだけ AppConfig を見る。無ければ既定の表で動く（決定56）
+      ...(useAppConfig
+        ? {
+            APPCONFIG_APPLICATION: application.ref,
+            APPCONFIG_ENVIRONMENT: environment.ref,
+            APPCONFIG_PROFILE: profile.ref,
+          }
+        : {}),
     },
+    ...(props.appConfigExtensionLayerArn
+      ? {
+          layers: [
+            LayerVersion.fromLayerVersionArn(
+              stack,
+              "AppConfigExtension",
+              props.appConfigExtensionLayerArn,
+            ),
+          ],
+        }
+      : {}),
     bundling: {
       // server の package.json は type: module。import.meta を使うため ESM で出す
       format: OutputFormat.ESM,
@@ -185,6 +293,26 @@ export function createBillingMcpStack(
     }),
   );
 
+  // 読めるのはこの Secret だけ。鍵は初めて使うときに読み、読めればコンテナ内に保持する
+  typesafeApiKeySecret.grantRead(mcpFunction);
+
+  // AppConfig の拡張は関数の実行ロールで設定を取りに行く。無認証で公開する関数なので、
+  // 読めるのはこのスタックの価格表だけに絞る（パーティションは Bedrock と同じく aws 固定）
+  if (useAppConfig) {
+    mcpFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "appconfig:StartConfigurationSession",
+          "appconfig:GetLatestConfiguration",
+        ],
+        resources: [
+          `arn:aws:appconfig:${stack.region}:${stack.account}:application/${application.ref}` +
+            `/environment/${environment.ref}/configuration/${profile.ref}`,
+        ],
+      }),
+    );
+  }
+
   // 認証は掛けない。認可は x402 の支払いが単独で担う（決定19）
   const functionUrl = mcpFunction.addFunctionUrl({
     authType: FunctionUrlAuthType.NONE,
@@ -197,6 +325,11 @@ export function createBillingMcpStack(
     description:
       "MCP エンドポイント（無認証。認可は x402 の支払いのみ）。agent-app の BILLING_MCP_URL に設定する。作り直すと変わる",
   });
+  new CfnOutput(stack, "TypesafeApiKeySecretArn", {
+    value: typesafeApiKeySecret.secretArn,
+    description:
+      "Jev の API キーを入れる Secret の ARN（決定58）。仮の値（REPLACE_ME）で作られるので、使うなら pnpm set:jev-key で入れる",
+  });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,
     description: "Lambda のロググループ名",
@@ -206,15 +339,6 @@ export function createBillingMcpStack(
     description:
       "売上の受取先。agent-app の PAYMENT_PAY_TO（任意。売り手アドレスを固定する）と突き合わせる",
   });
-  // price は省略可で、省いた場合はサーバー側の既定額が効く。ここで既定値を書くと
-  // 定数が二重になるため出力しない（環境変数の渡し方と同じ扱い）
-  if (props.price) {
-    new CfnOutput(stack, "Price", {
-      value: props.price,
-      description:
-        "1 回あたりの価格。agent-app の PAYMENT_MAX_AMOUNT（USDC の最小単位。0.1 USDC = 100000）がこれを賄えるか確認する",
-    });
-  }
 
   return stack;
 }

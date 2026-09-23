@@ -20,6 +20,11 @@ export interface PurchaseSummary {
   transaction?: string;
   htmlBytes?: number;
   error?: string;
+  /**
+   * 支払った額の表記（決定60。例 `$0.15（150000）`）。売り手の価格が変動するため、
+   * いくら払ったかは購入ごとに違う。生の額ではなく人が読む形で運ぶ
+   */
+  amountDisplay?: string;
 }
 
 /** 購入ツールの名前（buyer-agent.ts の tools のキーと一致させる） */
@@ -68,6 +73,7 @@ function toPurchase(summary: Record<string, unknown>): PurchaseSummary | undefin
     ...(summary.paymentUncertain === true ? { paymentUncertain: true } : {}),
     ...(typeof summary.transaction === 'string' ? { transaction: summary.transaction } : {}),
     ...(typeof summary.htmlBytes === 'number' ? { htmlBytes: summary.htmlBytes } : {}),
+    ...(typeof summary.amountDisplay === 'string' ? { amountDisplay: summary.amountDisplay } : {}),
     ...(summary.ok !== true && typeof summary.message === 'string' ? { error: summary.message } : {}),
   };
 }

@@ -15,7 +15,7 @@ import {
   findLastAssistant,
   isPaidToolCall,
   orderChatNodes,
-  purchaseFailurePrefix,
+  purchaseDetail,
   readInternalsOpen,
   retargetAnchor,
   shouldConfirmNewConversation,
@@ -585,9 +585,7 @@ function purchaseRow(purchase: Purchase): HTMLElement {
 
   const detail = document.createElement('span');
   detail.className = purchase.ok ? 'success' : 'error';
-  detail.textContent = purchase.ok
-    ? `${purchase.paymentMade ? '支払い済み' : '無課金'} ${purchase.htmlBytes ?? '?'} バイト`
-    : `${purchaseFailurePrefix(purchase)}${purchase.error ?? '失敗'}`;
+  detail.textContent = purchaseDetail(purchase);
   row.appendChild(detail);
 
   if (purchase.transaction) {

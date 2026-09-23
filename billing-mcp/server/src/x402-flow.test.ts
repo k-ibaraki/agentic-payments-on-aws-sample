@@ -41,6 +41,9 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
       facilitatorUrl: facilitator.url,
       payTo: PAY_TO,
       converse,
+      // 価格帯の判定処理を固定する。既定のままだと生成用の偽 Converse を判定処理も使い、
+      // 「生成が呼ばれていないこと」の検査が誤って落ちる（決定56 の結線後）
+      judge: async () => ({ tier: "take" }),
       loadUiHtml: () => "<html></html>",
     });
   });

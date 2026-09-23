@@ -112,17 +112,38 @@ export function didBalanceChange(prev: string | null, next: string | null): bool
 }
 
 /**
- * 失敗した購入に添える見出し（決定48）。金が動いたのか、動いたかどうかも分からないのかを
- * 利用者に見せる。paymentUncertain は ProcessPayment の応答が確認できなかった購入で、
- * 支払われた可能性が残るため「失敗」とだけ見せてはいけない
+ * 失敗した購入に添える見出し（決定48・60）。金が動いたのか、動いたかどうかも分からないのかを、
+ * 分かるなら額とともに利用者に見せる。paymentUncertain は ProcessPayment の応答が確認できなかった
+ * 購入で、支払われた可能性が残るため「失敗」とだけ見せてはいけない
  */
 export function purchaseFailurePrefix(purchase: {
   paymentMade: boolean;
   paymentUncertain?: boolean;
+  amountDisplay?: string;
 }): string {
-  if (purchase.paymentMade) return '支払い済み・';
-  if (purchase.paymentUncertain) return '支払いの成否不明・';
+  const amount = purchase.amountDisplay ? ` ${purchase.amountDisplay}` : '';
+  if (purchase.paymentMade) return `支払い済み${amount}・`;
+  if (purchase.paymentUncertain) return `支払いの成否不明${amount}・`;
   return '';
+}
+
+/**
+ * 購入 1 件の説明文（決定60）。売り手の価格は依頼ごとに変わるので、いくら払ったかを
+ * 購入そのものに添えて見せる。額が分からない購入（古い記録・支払い前の失敗）は
+ * これまでどおり支払いの状況だけを見せる
+ */
+export function purchaseDetail(purchase: {
+  ok: boolean;
+  paymentMade: boolean;
+  paymentUncertain?: boolean;
+  amountDisplay?: string;
+  htmlBytes?: number;
+  error?: string;
+}): string {
+  if (!purchase.ok) return `${purchaseFailurePrefix(purchase)}${purchase.error ?? '失敗'}`;
+  const paid = purchase.paymentMade ? '支払い済み' : '無課金';
+  const amount = purchase.amountDisplay ? ` ${purchase.amountDisplay}` : '';
+  return `${paid}${amount} ${purchase.htmlBytes ?? '?'} バイト`;
 }
 
 // ── チャットの中に購入したページを差し込む並び（決定50） ──

@@ -11,7 +11,6 @@ const parameter: AppParameter = {
   envName: "test",
   payToAddress: "0x2222222222222222222222222222222222222222",
   facilitatorUrl: "https://x402.org/facilitator",
-  price: "$0.01",
   reservedConcurrency: 5,
   allowedModelIds: ["jp.anthropic.claude-sonnet-4-6"],
 };
@@ -58,7 +57,6 @@ describe("billing-mcp スタック", () => {
         Variables: Match.objectLike({
           PAY_TO_ADDRESS: parameter.payToAddress,
           FACILITATOR_URL: parameter.facilitatorUrl,
-          PRICE: parameter.price,
           UI_HTML_PATH: Match.stringLikeRegexp("preview-view\\.html$"),
         }),
       },
@@ -110,20 +108,159 @@ describe("billing-mcp スタック", () => {
   });
 
   // 買い手（agent-app）が突き合わせる値。deploy 後に describe-stacks だけで揃うようにする
-  test("買い手に引き継ぐ受取先と価格を出力する", () => {
+  test("買い手に引き継ぐ受取先を出力する", () => {
     const outputs = template.findOutputs("*");
-    expect(Object.keys(outputs)).toEqual(
-      expect.arrayContaining(["PayToAddress", "Price"]),
-    );
+    expect(Object.keys(outputs)).toContain("PayToAddress");
     expect(outputs.PayToAddress?.Value).toBe(parameter.payToAddress);
-    expect(outputs.Price?.Value).toBe("$0.01");
   });
 
-  test("price を省いたら Price は出力しない（サーバー既定の額が効くため、値を二重に持たない）", () => {
-    const outputs = synth({ price: undefined }).findOutputs("*");
-    expect(Object.keys(outputs)).not.toContain("Price");
-    expect(Object.keys(outputs)).toEqual(
-      expect.arrayContaining(["McpEndpointUrl", "PayToAddress"]),
+  // 価格は段階制の価格表が決める（決定56）。単価を環境変数や出力に載せると、
+  // 値付けに効かない値を買い手の上限の目安として案内してしまう
+  test("単価を環境変数にも出力にも載せない", () => {
+    const functions = template.findResources("AWS::Lambda::Function");
+    const variables = Object.values(functions)[0].Properties.Environment
+      .Variables as Record<string, unknown>;
+    expect(variables.PRICE).toBeUndefined();
+    expect(Object.keys(template.findOutputs("*"))).not.toContain("Price");
+  });
+});
+
+describe("段階制の値付けに要る資源（決定55・56）", () => {
+  let template: Template;
+
+  beforeAll(() => {
+    template = synth();
+  });
+
+
+
+  it("価格表を AppConfig に置き、既定の3つの価格帯を載せる", () => {
+    template.resourceCountIs("AWS::AppConfig::Application", 1);
+    template.resourceCountIs("AWS::AppConfig::HostedConfigurationVersion", 1);
+    const versions = template.findResources(
+      "AWS::AppConfig::HostedConfigurationVersion",
     );
+    const content = Object.values(versions)[0].Properties.Content as string;
+    const table = JSON.parse(content);
+    expect(Object.keys(table.tiers)).toEqual(["ume", "take", "matsu"]);
+    expect(table.tiers.take.price).toBe("$0.15");
+  });
+
+  // 既定は Haiku。Jev へは AppConfig の同じ profile の値を書き換えて切り替える（決定58）
+  it("価格表に判定モデルの指定を載せ、既定は haiku にする", () => {
+    const versions = template.findResources(
+      "AWS::AppConfig::HostedConfigurationVersion",
+    );
+    const content = Object.values(versions)[0].Properties.Content as string;
+    expect(JSON.parse(content).judge).toBe("haiku");
+  });
+
+  it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {
+    const functions = template.findResources("AWS::Lambda::Function");
+    const variables = Object.values(functions)[0].Properties.Environment
+      .Variables as Record<string, unknown>;
+    expect(variables.APPCONFIG_APPLICATION).toBeUndefined();
+  });
+
+  it("拡張レイヤーを渡せば AppConfig を参照し、読み取りを許す", () => {
+    const layerArn =
+      "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1";
+    const withLayer = synth({ appConfigExtensionLayerArn: layerArn });
+    withLayer.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          APPCONFIG_APPLICATION: Match.anyValue(),
+        }),
+      },
+      Layers: Match.arrayWith([layerArn]),
+    });
+    withLayer.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["appconfig:GetLatestConfiguration"]),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  // 無認証で公開する関数なので、読める設定をこのスタックの価格表だけに絞る
+  it("AppConfig の読み取りは、このスタックの価格表に限る", () => {
+    const withLayer = synth({
+      appConfigExtensionLayerArn:
+        "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1",
+    });
+    const statements = Object.values(
+      withLayer.findResources("AWS::IAM::Policy"),
+    ).flatMap(
+      (policy) =>
+        policy.Properties.PolicyDocument.Statement as {
+          Action: string | string[];
+          Resource: unknown;
+        }[],
+    );
+    const appConfig = statements.find((statement) =>
+      [statement.Action]
+        .flat()
+        .includes("appconfig:GetLatestConfiguration"),
+    );
+    expect(appConfig).toBeDefined();
+    expect(appConfig?.Resource).not.toBe("*");
+    const resource = JSON.stringify(appConfig?.Resource);
+    expect(resource).toMatch(
+      /application\/.*\/environment\/.*\/configuration\//,
+    );
+    const profileId = Object.keys(
+      withLayer.findResources("AWS::AppConfig::ConfigurationProfile"),
+    )[0];
+    expect(resource).toContain(profileId);
+  });
+});
+
+describe("Jev の API キー（決定58）", () => {
+  let template: Template;
+
+  beforeAll(() => {
+    template = synth();
+  });
+
+  // 値は人が後から入れる。CDK に書くと CloudFormation テンプレートに平文で残る。
+  // ランダム生成に任せると、出鱈目な鍵で 401 になり全件が中央の価格帯へ落ちる
+  it("鍵ではなく仮の値を入れて作る", () => {
+    template.resourceCountIs("AWS::SecretsManager::Secret", 1);
+    const secrets = template.findResources("AWS::SecretsManager::Secret");
+    const props = Object.values(secrets)[0].Properties as Record<string, unknown>;
+    expect(props.SecretString).toBe("REPLACE_ME");
+    expect(props.GenerateSecretString).toBeUndefined();
+  });
+
+  it("Secret の場所を Lambda に環境変数で渡す", () => {
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          TYPESAFE_API_KEY_SECRET_ARN: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it("その Secret だけを読める権限を与える", () => {
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["secretsmanager:GetSecretValue"]),
+            Resource: Match.anyValue(),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  // 鍵を入れる手順（pnpm set:jev-key）が ARN を引けること
+  it("Secret の ARN を出力に出す", () => {
+    const outputs = template.findOutputs("*");
+    expect(Object.keys(outputs)).toContain("TypesafeApiKeySecretArn");
   });
 });

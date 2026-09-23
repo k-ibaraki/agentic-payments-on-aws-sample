@@ -67,6 +67,24 @@ describe('recordFailedPurchase', () => {
     });
   });
 
+  // 決定60: 後から履歴を辿ったときにも額が分かるよう、レシートには生の額を残す
+  it('支払った額と資産をレシートに残す', async () => {
+    const stores = memoryStores();
+
+    await recordFailedPurchase(stores, {
+      userId: USER,
+      resultId: RESULT_ID,
+      message: '支払い後のツール呼び出しに失敗しました',
+      amount: '150000',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    });
+
+    expect(stores.receipts.get(purchasedHtmlKey(USER, RESULT_ID))).toMatchObject({
+      amount: '150000',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    });
+  });
+
   it('成否不明の購入はレシートにもその印を残す', async () => {
     const stores = memoryStores();
 

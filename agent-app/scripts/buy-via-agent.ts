@@ -57,7 +57,7 @@ const messages = await agent.getConversation(conversationId);
 const toolResult = messages.find((m: { role: string }) => m.role === 'tool-result') as
   | { content?: unknown }
   | undefined;
-let body: { resultId?: string; transaction?: string } = {};
+let body: { resultId?: string; transaction?: string; amountDisplay?: string } = {};
 let raw: unknown = toolResult?.content;
 if (typeof raw === 'string' && raw.length > 0) {
   const text = raw;
@@ -84,6 +84,8 @@ if (body.resultId) {
   const stored = await artifacts.get(purchasedHtmlKey(userId, body.resultId));
   console.log('');
   console.log(`resultId: ${body.resultId}`);
+  // 売り手の価格は依頼ごとに変わる（売り手側 決定56）。いくら払ったかを必ず出す（決定60）
+  console.log(`支払額: ${body.amountDisplay ?? '(不明)'}`);
   console.log(`決済トランザクション: ${body.transaction ?? '(なし)'}`);
   console.log(`保存された HTML: ${stored?.html?.slice(0, 120) ?? '(なし)'}...`);
   if (stored?.html) {

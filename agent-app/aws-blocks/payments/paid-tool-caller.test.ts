@@ -86,6 +86,30 @@ describe('callPaidTool', () => {
     expect(outcome.paymentResponse).toEqual(PAID_RESULT._meta['x402/payment-response']);
   });
 
+  // 決定60: 買い手は支払った額をどこにも残していなかった。accepted から取って結果に載せる
+  it('支払った額（最小単位と資産）を結果に載せる', async () => {
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequiredResult())
+      .mockResolvedValueOnce(structuredClone(PAID_RESULT));
+
+    const outcome = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer());
+
+    expect(outcome.paidAmount).toEqual({ amount: REQUIREMENT.amount, asset: REQUIREMENT.asset });
+  });
+
+  it('支払いをしていない呼び出しには額を載せない', async () => {
+    const free = { content: [{ type: 'text', text: 'ok' }], structuredContent: { html: '<p>a</p>' } };
+    const outcome = await callPaidTool(
+      { callTool: vi.fn().mockResolvedValue(free) },
+      'generate-html',
+      { prompt: 'x' },
+      fakePayer(),
+    );
+
+    expect(outcome.paidAmount).toBeUndefined();
+  });
+
   it('支払い後にまた支払い要求が返ったら失敗させる（無限ループ防止）', async () => {
     const callTool = vi
       .fn()
@@ -120,6 +144,23 @@ describe('callPaidTool', () => {
     expect(paid.paymentMade).toBe(true);
     expect(paid.authorizationNonce).toBe('0xnonce2');
     expect(paid.message).toContain('settle failed: invalid_signature');
+  });
+
+  // 支払い済みの失敗こそ額を残す。利用者が減った残高の理由に辿り着けるようにする（決定60）
+  it('PaidToolError にも支払った額を持たせる', async () => {
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequiredResult())
+      .mockResolvedValueOnce(paymentRequiredResult());
+
+    const error = await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer()).catch(
+      (e: unknown) => e,
+    );
+
+    expect((error as PaidToolError).paidAmount).toEqual({
+      amount: REQUIREMENT.amount,
+      asset: REQUIREMENT.asset,
+    });
   });
 
   it('支払い要求でない isError はそのまま返す（支払いはしない）', async () => {

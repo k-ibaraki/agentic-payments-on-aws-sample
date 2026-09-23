@@ -15,8 +15,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.800.0",
+    "@aws-sdk/client-secrets-manager": "^3.1136.0",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "@x402/core": "~2.24.0",
     "@x402/evm": "~2.24.0",
     "@x402/mcp": "~2.24.0",

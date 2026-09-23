@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   buildAttachmentBlock,
   buildUserMessage,
+  createGenerateHtmlHandler,
   GENERATE_HTML_INPUT_SCHEMA,
   generateHtmlWithBedrock,
   sanitizeDocumentName,
@@ -134,5 +135,72 @@ describe("generateHtmlWithBedrock", () => {
         modelId: "jp.anthropic.claude-sonnet-4-6",
       }),
     ).rejects.toThrow(/empty/i);
+  });
+});
+
+describe("価格帯に応じた規模の指示（決定56）", () => {
+  it("sizeHint を渡すとシステムプロンプトに足される", async () => {
+    const converse = fakeConverse("<html></html>");
+    await generateHtmlWithBedrock(converse, {
+      prompt: "案内ページ",
+      modelId: "m",
+      sizeHint: "このページは概ね 8000 トークン程度の規模が適切です。",
+    });
+    const system = JSON.stringify(converse.mock.calls[0][0].system);
+    expect(system).toContain("8000");
+    // 元のシステムプロンプトは残す
+    expect(system).toContain("HTMLのみを返し");
+  });
+
+  it("sizeHint を渡さなければシステムプロンプトは従来どおり", async () => {
+    const converse = fakeConverse("<html></html>");
+    await generateHtmlWithBedrock(converse, {
+      prompt: "案内ページ",
+      modelId: "m",
+    });
+    const system = converse.mock.calls[0][0].system;
+    expect(system).toHaveLength(1);
+    expect(system[0].text).not.toContain("トークン程度");
+  });
+
+  it("maxTokens を渡せばその値を使う", async () => {
+    const converse = fakeConverse("<html></html>");
+    await generateHtmlWithBedrock(converse, {
+      prompt: "案内ページ",
+      modelId: "m",
+      maxTokens: 24_000,
+    });
+    expect(converse.mock.calls[0][0].inferenceConfig.maxTokens).toBe(24_000);
+  });
+
+  it("maxTokens を渡さなければ従来どおり上限いっぱいを使う", async () => {
+    const converse = fakeConverse("<html></html>");
+    await generateHtmlWithBedrock(converse, {
+      prompt: "案内ページ",
+      modelId: "m",
+    });
+    expect(converse.mock.calls[0][0].inferenceConfig.maxTokens).toBe(64_000);
+  });
+});
+
+describe("createGenerateHtmlHandler に価格帯の予算を渡す", () => {
+  it("予算を渡すと規模の指示と天井が生成に伝わる", async () => {
+    const converse = fakeConverse("<html></html>");
+    const handler = createGenerateHtmlHandler(converse, {
+      sizeHint: "このページは概ね 12000 トークン程度の規模が適切です。",
+      maxTokens: 36_000,
+    });
+    await handler({ prompt: "予約システム", modelId: "m" });
+    const input = converse.mock.calls[0][0];
+    expect(JSON.stringify(input.system)).toContain("12000");
+    expect(input.inferenceConfig.maxTokens).toBe(36_000);
+  });
+
+  it("予算を渡さなければ従来どおり", async () => {
+    const converse = fakeConverse("<html></html>");
+    const handler = createGenerateHtmlHandler(converse);
+    await handler({ prompt: "連絡先", modelId: "m" });
+    expect(converse.mock.calls[0][0].system).toHaveLength(1);
+    expect(converse.mock.calls[0][0].inferenceConfig.maxTokens).toBe(64_000);
   });
 });

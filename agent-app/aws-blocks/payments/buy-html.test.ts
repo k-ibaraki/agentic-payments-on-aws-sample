@@ -63,3 +63,33 @@ describe('outcomeFromError', () => {
     expect(outcomeFromError(new Error('売り手に接続できません'))).toBeUndefined();
   });
 });
+
+// 決定60: 支払った額を失敗の結果にも載せる。画面とレシートに額を出すのはこの値が元になる
+describe('outcomeFromError（支払った額）', () => {
+  const PAID_AMOUNT = { amount: '150000', asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' };
+
+  it('支払い済みの失敗は支払った額を伴う', () => {
+    const error = new PaidToolError('支払い後のツール呼び出しに失敗しました', {
+      x402Version: 2,
+      accepted: { ...PAID_AMOUNT, scheme: 'exact' },
+      payload: {},
+    } as never);
+    expect(outcomeFromError(error)?.paidAmount).toEqual(PAID_AMOUNT);
+  });
+
+  it('成否不明の失敗も、支払おうとした額を伴う（減っているかもしれない額として見せる）', () => {
+    const error = new UncertainPaymentError('確認できませんでした', 'result-1', {
+      paidAmount: PAID_AMOUNT,
+    });
+    expect(outcomeFromError(error)?.paidAmount).toEqual(PAID_AMOUNT);
+  });
+
+  it('額が読み取れない支払い証明では額を載せない', () => {
+    const error = new PaidToolError('失敗', {
+      x402Version: 2,
+      accepted: { scheme: 'exact' },
+      payload: {},
+    } as never);
+    expect(outcomeFromError(error)?.paidAmount).toBeUndefined();
+  });
+});

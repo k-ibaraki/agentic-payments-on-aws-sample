@@ -144,11 +144,28 @@ export interface GenerateHtmlParams {
   modelId: string;
   previousHtml?: string;
   attachments?: Attachment[];
+  /**
+   * 価格帯に応じた規模の指示（決定56）。システムプロンプトに足す。
+   * 省略時は従来どおり規模を指示しない
+   */
+  sizeHint?: string;
+  /**
+   * 出力の天井。省略時はモデルの出力上限。
+   * 価格帯の目安ではなく、打ち切りを避けるための余裕込みの値を渡すこと
+   */
+  maxTokens?: number;
 }
 
 export async function generateHtmlWithBedrock(
   converse: ConverseFn,
-  { prompt, modelId, previousHtml, attachments }: GenerateHtmlParams,
+  {
+    prompt,
+    modelId,
+    previousHtml,
+    attachments,
+    sizeHint,
+    maxTokens,
+  }: GenerateHtmlParams,
 ): Promise<string> {
   const userMessage = buildUserMessage(prompt, previousHtml);
   const attachmentBlocks = (attachments ?? []).map(buildAttachmentBlock);
@@ -156,11 +173,16 @@ export async function generateHtmlWithBedrock(
 
   const response = await converse({
     modelId,
-    system: [{ text: SYSTEM_PROMPT }],
+    // 価格帯の指示は別のブロックに分ける。元のシステムプロンプトを書き換えないことで、
+    // 価格帯を渡さない経路（テストやローカル起動）の挙動を従来のまま保つ
+    system: sizeHint
+      ? [{ text: SYSTEM_PROMPT }, { text: sizeHint }]
+      : [{ text: SYSTEM_PROMPT }],
     messages: [{ role: "user", content }],
     // 未指定だとモデル既定値で出力が打ち切られ、長いHTMLが閉じタグ欠落の
-    // まま黙って返るため、モデルの出力上限に合わせる
-    inferenceConfig: { maxTokens: 64_000 },
+    // まま黙って返るため、モデルの出力上限に合わせる。価格帯を渡す場合も、
+    // 目安そのものではなく余裕を含んだ天井を受け取る（決定56）
+    inferenceConfig: { maxTokens: maxTokens ?? 64_000 },
   });
 
   const text = response.output?.message?.content?.[0]?.text;
@@ -189,8 +211,17 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
     ),
 };
 
+/** 価格帯から決まる生成の予算（DESIGN.md 決定56）。省略時は規模を指示しない */
+export interface GenerationBudget {
+  sizeHint: string;
+  maxTokens: number;
+}
+
 // ツール本体のハンドラ。x402 の支払いラッパーで包めるよう register とは分離する
-export function createGenerateHtmlHandler(converse?: ConverseFn) {
+export function createGenerateHtmlHandler(
+  converse?: ConverseFn,
+  budget?: GenerationBudget,
+) {
   const converseFn = converse ?? createDefaultConverse();
   return async ({
     prompt,
@@ -209,6 +240,9 @@ export function createGenerateHtmlHandler(converse?: ConverseFn) {
         modelId,
         previousHtml,
         attachments,
+        ...(budget
+          ? { sizeHint: budget.sizeHint, maxTokens: budget.maxTokens }
+          : {}),
       });
       return {
         content: [{ type: "text" as const, text: "HTMLを生成しました" }],
@@ -253,7 +287,7 @@ export function registerGenerateHtmlTool(
     server,
     "generate-html",
     {
-      // 金額は書かない（PRICE 環境変数で可変。正確な額は PaymentRequired 応答が伝える）
+      // 金額は書かない（呼び出しごとに価格帯で変わる。正確な額は PaymentRequired 応答が伝える）
       description:
         "ユーザーの指示に従ってHTMLを生成する（有料: x402 決済が必要）",
       inputSchema: GENERATE_HTML_INPUT_SCHEMA,
