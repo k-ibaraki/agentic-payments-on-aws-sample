@@ -41,7 +41,10 @@ billing-mcp/
 ├── stacks/               # 関数ベースのスタック定義
 ├── test/                 # CDK Template テスト（jest + @swc/jest）
 ├── scripts/
-│   └── verify-bundle.mjs # 合成したバンドルが読み込めるかの検証
+│   ├── verify-bundle.mjs # 合成したバンドルが読み込めるかの検証
+│   ├── outputs.ts        # deploy 済みスタックの出力を取り出す（pnpm outputs）
+│   ├── set-jev-key.ts    # Jev の API キーを Secrets Manager に入れる（pnpm set:jev-key）
+│   └── set-tier-table.ts # 価格表を AppConfig に配る（pnpm set:tier-table）
 ├── parameter.sample.ts   # パラメータ雛形（parameter.ts は gitignore）
 └── server/               # MCP Apps サーバー
     └── src/
@@ -141,7 +144,8 @@ pnpm set:tier-table < tier-table.json
 ```
 
 `judge` だけを変えるときも `tiers` を含めること（`tiers` の無い表はサーバーに退けられ、直前の表のまま
-変わらない）。何も配っていない環境では、CloudWatch に警告が出ることがある（U13）。
+変わらない）。`appConfigExtensionLayerArn` を渡していない環境では、Lambda が AppConfig を読まないので、
+配っても何も変わらない。何も配っていない環境では、CloudWatch に警告が出ることがある（U13）。
 
 提示した額は見積書（決定55）として `accepts[].extra.quote` に載り、買い手がそのまま返す。
 支払いのときは判定をやり直さずその値を使うので、同じ額で決済できる。価格表を差し替えた

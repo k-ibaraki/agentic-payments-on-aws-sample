@@ -20,6 +20,8 @@ const stackName = process.argv[2] ?? `BillingMcpStack-${devParameter.envName}`;
 const region = devParameter.env?.region;
 const regionArgs = region ? ["--region", region] : [];
 
+// 失敗は例外で返し、終了は main().catch に寄せる。途中で process.exit すると、
+// 一時ディレクトリを消す finally が走らない
 function aws(args: string[]): string {
   try {
     return execFileSync("aws", [...args, ...regionArgs, "--output", "json"], {
@@ -28,14 +30,12 @@ function aws(args: string[]): string {
     });
   } catch (error) {
     if ((error as { code?: string }).code === "ENOENT") {
-      console.error("aws コマンドが見つかりません。AWS CLI を入れて PATH を通すこと");
-      process.exit(1);
+      throw new Error("aws コマンドが見つかりません。AWS CLI を入れて PATH を通すこと");
     }
     const stderr = (error as { stderr?: unknown }).stderr;
-    console.error(
+    throw new Error(
       stderr ? String(stderr).trim() : error instanceof Error ? error.message : String(error),
     );
-    process.exit(1);
   }
 }
 
@@ -54,10 +54,9 @@ function target(): Target {
   const get = (key: string): string => {
     const value = outputs.find((o) => o.OutputKey === key)?.OutputValue;
     if (!value) {
-      console.error(
+      throw new Error(
         `${stackName} に ${key} がありません。決定64 以降のコードで deploy 済みか確認すること`,
       );
-      process.exit(1);
     }
     return value;
   };
@@ -81,15 +80,13 @@ function normalize(text: string): string {
   try {
     table = JSON.parse(text);
   } catch (error) {
-    console.error(`JSON として読めません: ${error instanceof Error ? error.message : error}`);
-    process.exit(1);
+    throw new Error(`JSON として読めません: ${error instanceof Error ? error.message : error}`);
   }
   const tiers = (table as { tiers?: unknown } | null)?.tiers;
   if (typeof tiers !== "object" || tiers === null) {
-    console.error(
+    throw new Error(
       "tiers がありません。価格表は丸ごと差し替えるので、judge だけを変えるときも tiers を含めること",
     );
-    process.exit(1);
   }
   return JSON.stringify(table);
 }
@@ -98,8 +95,7 @@ function normalize(text: string): string {
 // トップレベル await が使えないため、関数に包んで呼ぶ
 async function main(): Promise<void> {
   if (process.stdin.isTTY) {
-    console.error("価格表の JSON を標準入力で渡すこと（例: pnpm set:tier-table < tier-table.json）");
-    process.exit(1);
+    throw new Error("価格表の JSON を標準入力で渡すこと（例: pnpm set:tier-table < tier-table.json）");
   }
   const content = normalize(await readInput());
   const to = target();
@@ -125,22 +121,30 @@ async function main(): Promise<void> {
       ]),
     ).VersionNumber as number;
 
-    const deployment = JSON.parse(
-      aws([
-        "appconfig",
-        "start-deployment",
-        "--application-id",
-        to.applicationId,
-        "--environment-id",
-        to.environmentId,
-        "--configuration-profile-id",
-        to.profileId,
-        "--deployment-strategy-id",
-        to.strategyId,
-        "--configuration-version",
-        String(version),
-      ]),
-    ) as { DeploymentNumber?: number; State?: string };
+    let deployment: { DeploymentNumber?: number; State?: string };
+    try {
+      deployment = JSON.parse(
+        aws([
+          "appconfig",
+          "start-deployment",
+          "--application-id",
+          to.applicationId,
+          "--environment-id",
+          to.environmentId,
+          "--configuration-profile-id",
+          to.profileId,
+          "--deployment-strategy-id",
+          to.strategyId,
+          "--configuration-version",
+          String(version),
+        ]),
+      );
+    } catch (error) {
+      // 版は作れているので、コンソールや CLI からその版を配れるよう番号を添える
+      throw new Error(
+        `版 ${version} は作ったが、配信を始められなかった: ${error instanceof Error ? error.message : error}`,
+      );
+    }
 
     console.log(
       `版 ${version} を配りました（配信 #${deployment.DeploymentNumber}、状態 ${deployment.State}）`,
