@@ -9,7 +9,7 @@ import {
   TIER_CRITERIA,
   TIER_QUESTION,
 } from "./judge.js";
-import type { Tier } from "./quote-seal.js";
+import type { Tier } from "./quote-format.js";
 
 /** Converse の戻りを、本文だけ差し替えて作る */
 function converseReturning(text: string) {

@@ -18,7 +18,7 @@ import type {
   ConverseCommandOutput,
 } from "@aws-sdk/client-bedrock-runtime";
 import { APIError, TypeSafeClient } from "@typesafe-ai/sdk";
-import type { Tier } from "./quote-seal.js";
+import type { Tier } from "./quote-format.js";
 import { TIER_ORDER } from "./tiers.js";
 
 /** 判定に迷ったときに寄せる価格帯。誤りの向きを一方に固定しないため中央を選ぶ */

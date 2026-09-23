@@ -8,7 +8,7 @@
 // 価格と目安は AppConfig から差し替える前提で、ここに置くのは既定値。
 // 差し替えが飛行中の取引を壊さないのは、提示済みの価格が見積書（`accepts[].extra.quote`、
 // 決定55）としてそのまま往復し、価格表と食い違えば使わずに判定し直すため。
-import type { Tier } from "./quote-seal.js";
+import type { Tier } from "./quote-format.js";
 
 export const TIER_ORDER = ["ume", "take", "matsu"] as const;
 

@@ -9,7 +9,7 @@
 // 依頼文は、実際に生成させてトークン数を測った 20 件から採った。`measuredTokens` は
 // Sonnet 4.6 に素で生成させたときの出力トークン数である。これは価格帯の正解ではない。
 // 出力量は依頼文から予測できないと分かっており、価格帯は予測ではなく指定だからである。
-import type { Tier } from "./quote-seal.js";
+import type { Tier } from "./quote-format.js";
 
 export interface EvalCase {
   prompt: string;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Judge } from "./judge.js";
 import { PAID_TOOL_NAME, resolveQuote } from "./quote.js";
-import { decodeQuote } from "./quote-seal.js";
+import { decodeQuote } from "./quote-format.js";
 import { DEFAULT_TIER_TABLE } from "./tiers.js";
 
 const judgeReturning = (tier: "ume" | "take" | "matsu"): Judge =>

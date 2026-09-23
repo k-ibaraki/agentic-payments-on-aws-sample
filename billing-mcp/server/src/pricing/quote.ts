@@ -16,7 +16,7 @@ import {
   encodeQuote,
   matchesTable,
   type Tier,
-} from "./quote-seal.js";
+} from "./quote-format.js";
 import { priceOf, type TierTable } from "./tiers.js";
 
 /** 値付けの対象となる有料ツール */

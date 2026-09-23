@@ -4,7 +4,7 @@ import {
   encodeQuote,
   matchesTable,
   type Quote,
-} from "./quote-seal.js";
+} from "./quote-format.js";
 import { DEFAULT_TIER_TABLE } from "./tiers.js";
 
 const QUOTE: Quote = { tier: "take", price: "$0.15" };
