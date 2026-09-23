@@ -6,9 +6,8 @@
 //       pnpm set:tier-table <名前> < tier-table.json … スタック名を直接指定する
 //       pbpaste | pnpm set:tier-table                … クリップボードから渡す場合
 //
-// 表は丸ごと差し替える。中身の検証はサーバーに任せ（決定56）、ここでは JSON であることと
-// `tiers` を含むことだけを見る。`{"judge":"jev"}` だけを配ると表ごと退けられ、
-// 切り替えたつもりで何も変わらないため。
+// 表は丸ごと差し替える。送る前にサーバーと同じ規則で確かめ、サーバーが受け付けない表は
+// AWS に触れる前に止める（tier-table-input.ts）。
 //
 // AWS CLI を使う（outputs.ts / set-jev-key.ts と揃える）。
 import { execFileSync } from "node:child_process";
@@ -16,6 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { devParameter } from "../parameter";
+import { normalizeTierTable } from "./tier-table-input";
 
 const stackName = process.argv[2] ?? `BillingMcpStack-${devParameter.envName}`;
 const region = devParameter.env?.region;
@@ -75,30 +75,13 @@ async function readInput(): Promise<string> {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-/** 送る前に JSON であることと `tiers` を含むことだけを見て、詰めた形にする */
-function normalize(text: string): string {
-  let table: unknown;
-  try {
-    table = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`JSON として読めません: ${error instanceof Error ? error.message : error}`);
-  }
-  const tiers = (table as { tiers?: unknown } | null)?.tiers;
-  if (typeof tiers !== "object" || tiers === null) {
-    throw new Error(
-      "tiers がありません。価格表は丸ごと差し替えるので、judge だけを変えるときも tiers を含めること",
-    );
-  }
-  return JSON.stringify(table);
-}
-
 // billing-mcp の package.json は ESM 指定が無く、tsx は CJS で出力する。
 // トップレベル await が使えないため、関数に包んで呼ぶ
 async function main(): Promise<void> {
   if (process.stdin.isTTY) {
     throw new Error("価格表の JSON を標準入力で渡すこと（例: pnpm set:tier-table < tier-table.json）");
   }
-  const content = normalize(await readInput());
+  const content = normalizeTierTable(await readInput());
   const to = target();
 
   const dir = mkdtempSync(path.join(tmpdir(), "set-tier-table-"));
@@ -153,7 +136,10 @@ async function main(): Promise<void> {
     console.log(content);
     console.log("");
     console.log("反映は即時ではない。間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取った回には旧値を返す）。");
-    console.log("反映後、CloudWatch Logs に「判定モデルの指定を読み取れませんでした」が出ていないか確かめること");
+    console.log(
+      "反映後、CloudWatch Logs に「価格表の内容が妥当でないため」「判定モデルの指定を読み取れませんでした」が出ていないか確かめること",
+    );
+    console.log("（deploy 済みの Lambda が手元のコードより古いと、ここで通った表でも退けられる）");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
