@@ -47,6 +47,9 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   `src/mcp-apps-host.ts` が売り手の `ui://` リソース（空の表示器。生成物は含まない）を無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
   として sandbox iframe に描画する。買えたページは会話の中のカードに描き（決定50）、再開した会話の買い置きと
   購入履歴タブの一覧は「表示」を押したものだけを載せる
+- 支払額は購入 1 件ごとに見せる（決定60）。売り手の価格は依頼の規模で変わるため（売り手側 決定56）、
+  購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
+  ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）
 - Agent の応答は Markdown 表示にしている（`marked` で HTML 化し `DOMPurify` でサニタイズしてから
   `innerHTML` へ流し込む。LLM が組み立てる信頼できない入力のため、サニタイズをその代わりの防護に据えている。決定46）
 - 二重支払いの防護: 有料ツールの待ち時間は売り手上限に合わせる（`BUYER_TOOL_TIMEOUT_MS`）。
