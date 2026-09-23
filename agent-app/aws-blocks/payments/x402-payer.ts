@@ -197,8 +197,7 @@ export function createAgentCorePayer(
       try {
         response = await process(sessionId);
       } catch (error) {
-        // 上限超過は作り直さない。作り直すと上限に当たった支払いがその場で通り、
-        // セッションの支出上限が上限として機能しなくなる（決定37）
+        // 上限超過は作り直さない（決定37。理由は payment-session.ts の isSpendLimitRejection 参照）
         if (isSpendLimitRejection(error)) {
           throw new Error(
             'PaymentSession の支出上限に達しました。作り直しでの自動的な回避はしません' +

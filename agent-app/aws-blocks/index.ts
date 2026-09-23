@@ -52,16 +52,14 @@ const auth = new AuthCognito(scope, 'auth', {
 const { agent: buyerAgent, artifacts: purchasedHtml, paymentSessions, spendLimits } = createBuyerAgent(scope);
 const walletStores = { paymentSessions, spendLimits };
 
-// 利用者ごとの依頼回数の記録（決定40）。キーは「利用者/時間窓の開始」で、窓が過ぎた記録は TTL で消える。
-// 支払いに至らない依頼でも Bedrock の費用は掛かるため、支出上限（決定37・@39@）とは別に数える
+// 利用者ごとの依頼回数の記録（決定40。詳細は rate-limit.ts 参照）
 const requestCounts = new KVStore(scope, 'request-count', {
   schema: z.object({ count: z.number() }),
   ttl: true,
 });
 
-// エージェントの会話 API。
-// Agent BB は conversationId / channelId の認可を呼び出し側に委ねる仕様なので、
-// 会話に触れる経路（読み書き・購読）はすべて listConversations で所有を検証する。
+// エージェントの会話 API。会話に触れる経路の認可は conversation-guard.ts のとおり呼び出し側の
+// 責務で、すべて listConversations で所有を検証する。
 // 特に sendMessage は実費（0.1 テスト USDC）を発生させる書き込み経路なので検証を省けない。
 // 自己サインアップは決定36 で既定は閉じたが、利用者どうしの分離はそれとは別に要る
 // （管理者が作った利用者でも、他人の会話に支払わせられてはならない）
@@ -88,7 +86,7 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
       conversationId,
       channelId: conversationId,
       userId: user.userSub,
-      // 購入物の紐づけと利用者ごとの防護の記録に使う userId と、会話単位の防護に使う conversationId（決定31・48）
+      // userId・conversationId の役割は buyer-agent.ts の toolContextSchema 参照
       context: { userId: user.userSub, conversationId },
     });
     return { accepted: true, channelId: conversationId };
@@ -101,9 +99,7 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   ) {
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
-    // resume は依頼回数に数えない。数えない代わりに、承認待ちが実在する応答だけを通す。
-    // Agent BB の resume() 自体はこれを検証せず、応答さえ渡せばジョブを投入するため、
-    // ここで塞がないと上限を通らずにモデルを起動できる経路が残る
+    // resume は依頼回数に数えない代わりに、承認待ちの実在を強制する（理由は interrupt-guard.ts 参照）
     assertPendingInterrupts(await buyerAgent.getPendingInterrupts(conversationId), responses);
     await buyerAgent.resume(conversationId, responses, {
       conversationId,

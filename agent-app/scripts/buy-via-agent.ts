@@ -34,8 +34,7 @@ console.log(`エージェントへの依頼: generateHtml ツールで ${prompt}
 const result = await agent.stream(`generateHtml ツールを使ってください: ${prompt}`, {
   conversationId,
   userId,
-  // toolContextSchema が userId（購入物の紐づけ）と conversationId（二重支払いの防護。決定31）を
-  // 必須にしている
+  // toolContextSchema（buyer-agent.ts）が userId・conversationId を必須にしている
   context: { userId, conversationId },
 });
 

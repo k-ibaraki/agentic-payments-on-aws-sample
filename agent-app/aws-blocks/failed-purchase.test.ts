@@ -1,7 +1,5 @@
-// 金が動いた（かもしれない）失敗の記録（決定31・48）。
-// ここが例外を外に出すと、ツールが要約を返せず tool-result が会話に残らない。
-// すると KVStore の記録（利用者単位）と会話履歴の判定（会話単位）が同時に失われ、
-// 次の購入が何の抵抗もなく通ってしまう。「投げない」ことと書き込みの順序を固定する
+// recordFailedPurchase が例外を外に出さない理由は本体（buyer-agent.ts）の JSDoc 参照。
+// ここでは「投げない」ことと書き込みの順序を固定する
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { purchasedHtmlKey, recordFailedPurchase, type FailedPurchaseStores } from './buyer-agent.js';
 import type { UnresolvedPaymentRecord } from './repurchase-guard.js';

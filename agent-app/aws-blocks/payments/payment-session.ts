@@ -91,11 +91,9 @@ export function paymentSessionSource(
   // 別の購入が作り直していた場合に、相手の記録を残せる（キーはアプリ全体で共有のため）。
   //
   // 記録を読めなかったときは条件を付けない。`ifNotExists` を使うと本番だけで壊れるためである。
-  // KVStore の get は、期限切れの記録を null で返す。ただし実体は消さない
-  // （DynamoDB が実際に掃除するまで最大 48 時間かかる）。
-  // 一方 `ifNotExists` が見るのは、その実体の有無である。
-  // つまり期限切れの実体が残っている間は、何を書こうとしても必ず条件不一致になる。
-  // そうなると記録を保存できないまま、購入のたびに新しいセッションを切り続けることになる
+  // KVStore の get は期限切れの記録を null で返すが実体は消さず（TTL 掃除は最大 48 時間）、
+  // 一方 `ifNotExists` は実体の有無を見るため、期限切れの実体が残っている間（最大 48 時間）は
+  // 何を書いても条件不一致になり、記録を保存できないまま新しいセッションを切り続けてしまう
   async function create(previous: PaymentSessionRecord | null): Promise<string> {
     const createdAt = now();
     const maxSpendUsd =
