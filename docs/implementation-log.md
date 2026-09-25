@@ -2,6 +2,38 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-25: 依頼 1 回の途中経過をチャット欄に流す（決定65）
+
+### やったこと
+
+- ユーザー依頼（デモで魅せるため、売り手を含めた細かい動きを、普通の人にも分かる形で随時チャット欄に流したい）を
+  grill-me で詰めた。決めたことは決定65 の理由欄にまとめた
+- 売り手（billing-mcp）: 依頼に `progressToken` が付いていれば SSE で応え、`notifications/progress` で経過を流すようにした
+  （`server/src/progress.ts`）。判定モデルは判定の結果に自分の名前（`Haiku` / `Jev`）を添え、見積もりが運ぶ。
+  Lambda の入口はレスポンスストリーミング（`awslambda.streamifyResponse`）にし、Function URL を `RESPONSE_STREAM` にした。
+  ローカルの `dev-server.ts` も本文を読み切らずに流す
+- 買い手（agent-app）: 有料ツールの呼び出し（`paid-tool-caller.ts`）が見積もり・署名・売り手の経過・決済の確定を知らせ、
+  ツールの処理（`buyer-agent.ts`）が受け取りと失敗を足して、経過専用の Realtime で会話ごとに送る（`aws-blocks/progress.ts`）。
+  buyer API に `getProgressChannel`（所有検証つき）を足した。画面は依頼の吹き出しの直後に折りたたみを置き、
+  チャンクと経過から行を積む（`src/timeline.ts`、並びは `orderChatNodes` に途中経過を足した）
+- TDD で進めた。売り手 196 件（うち経過の通知の往復を本物の署名と偽の facilitator で通す結合テスト 4 件）、CDK 29 件、
+  買い手 272 件、ローカルの e2e 4 件（経過チャンネルの所有検証を追加）が通る
+
+### 判断・つまずき
+
+- `@x402/mcp` の支払いラッパーは、内側のハンドラに `{ toolName, arguments, meta }` しか渡さない。MCP SDK の `extra`
+  （`sendNotification` を持つ）が落ちるため、生成の前後の通知が送れなかった（結合テストで判明）。外側の包みが作った
+  報告の口を `AsyncLocalStorage` で内側へ引き継いで解いた
+- 応答の形は依頼ごとに選ぶ。トランスポートは依頼ごとに作り直しているので、`enableJsonResponse` を
+  `progressToken` の有無で切り替えられる。これで通知を求めないクライアントの見え方は変わらず、既存のテストもそのまま通る
+- 判定モデル名は `accepts[].extra` に載せない。2 往復目は判定しないので名前が分からず、照合が崩れる（決定55）。
+  照合の対象外である経過の通知に載せた
+- 一度の依頼で二回買うと、購入ごとに 1 から振る通し番号がぶつかり、二回目の経過が「二重に届いたもの」として捨てられる。
+  経過に購入 ID（`resultId`）を持たせ、重複の判定と並べ替えを購入ごとにした（advisor の指摘）
+- SSE の本文を流し終えたら後始末する（`closeWhenDone`）。閉じてから後始末すると、読み手の `pipeline` が先に終わって
+  Lambda が止まり、後始末が途中で切れ得るので、後始末を済ませてから閉じる
+- 手元の `billing-mcp/parameter.ts`（gitignore）に古い `price` 欄が残っていて `pnpm typecheck` が落ちる。今回の変更とは無関係なので触っていない
+
 ## 2026-09-24: PR #33（決定64）のマージ後、売り手を本番に deploy する
 
 ### やったこと
