@@ -1,6 +1,6 @@
 // 購入の経過（決定65）の送信処理のテスト。順序と「飾りなので止めない」ことを固定する
 import { describe, expect, it, vi } from 'vitest';
-import { createProgressPublisher, progressEventSchema, SELLER_MESSAGE_LIMIT, sellerStep } from './progress.js';
+import { createProgressPublisher, progressEventSchema, failedStep, MESSAGE_LIMIT, sellerStep } from './progress.js';
 
 describe('createProgressPublisher', () => {
   it('送った順に通し番号を振って届ける', async () => {
@@ -66,12 +66,24 @@ describe('createProgressPublisher', () => {
 describe('sellerStep', () => {
   // 売り手の文は相手方の言葉。長すぎるものは切り、空は捨てる（画面では textContent で入れる）
   it('売り手の文を上限で切る', () => {
-    const long = 'あ'.repeat(SELLER_MESSAGE_LIMIT + 10);
-    expect(sellerStep(long)).toEqual({ step: 'seller', message: 'あ'.repeat(SELLER_MESSAGE_LIMIT) });
+    const long = 'あ'.repeat(MESSAGE_LIMIT + 10);
+    expect(sellerStep(long)).toEqual({ step: 'seller', message: 'あ'.repeat(MESSAGE_LIMIT) });
   });
 
   it('空や文字列でないものは捨てる', () => {
     expect(sellerStep('   ')).toBeUndefined();
     expect(sellerStep(undefined)).toBeUndefined();
+  });
+});
+
+describe('failedStep', () => {
+  // 失敗の文は売り手の応答や例外の文をそのまま運ぶ。長いと送信が弾かれて失敗の行ごと消えるので、同じ上限で切る
+  it('失敗の文を上限で切る', () => {
+    const long = 'い'.repeat(MESSAGE_LIMIT + 10);
+    expect(failedStep(long)).toEqual({ step: 'failed', message: 'い'.repeat(MESSAGE_LIMIT) });
+  });
+
+  it('短い文はそのまま運ぶ', () => {
+    expect(failedStep('支払いを受け付けられません')).toEqual({ step: 'failed', message: '支払いを受け付けられません' });
   });
 });

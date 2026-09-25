@@ -257,3 +257,11 @@ export function createHostSlot<T extends { destroy(): void }>(create: () => Prom
     },
   };
 }
+
+/**
+ * 会話と途中経過の購読を両方待つ（決定65）。待たないと、確立する前に届いた途中経過を取りこぼす。
+ * 途中経過は飾りなので、その購読の失敗では会話を止めない（失敗の知らせは購読した側が出す）
+ */
+export async function establishedTogether(chat: Promise<void>, progress: Promise<void> | undefined): Promise<void> {
+  await Promise.all([chat, progress?.catch(() => undefined)]);
+}

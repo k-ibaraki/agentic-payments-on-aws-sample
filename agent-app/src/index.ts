@@ -23,6 +23,7 @@ import {
   balanceKey,
   createHostSlot,
   didBalanceChange,
+  establishedTogether,
   findLastAssistant,
   isPaidToolCall,
   isSelectedPurchase,
@@ -327,7 +328,7 @@ function onProgress(event: ProgressEvent) {
 }
 
 // 経過のチャンネルの購読（決定65）。経過は飾りなので、購読に失敗しても会話は止めない（内部情報に残すだけ）
-async function subscribeProgress(conversationId: string): Promise<{ unsubscribe(): void } | null> {
+async function subscribeProgress(conversationId: string): Promise<{ established: Promise<void>; unsubscribe(): void } | null> {
   try {
     const channel = await buyer.getProgressChannel(conversationId);
     const subscription = channel.subscribe((event) => onProgress(event as ProgressEvent));
@@ -381,10 +382,10 @@ function createChat() {
     subscribe: async (channelId, handler) => {
       const channel = await buyer.getChannel(channelId);
       const chunks = channel.subscribe(handler);
-      // 途中経過（決定65）も同じ会話 ID で購読する。useChat が待つのは会話の購読（established）だけ
+      // 途中経過（決定65）も同じ会話 ID で購読し、useChat には両方の確立を待たせる
       const progress = await subscribeProgress(channelId);
       const subscription = {
-        established: chunks.established,
+        established: establishedTogether(chunks.established, progress?.established),
         unsubscribe() {
           chunks.unsubscribe();
           progress?.unsubscribe();

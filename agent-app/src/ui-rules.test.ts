@@ -414,3 +414,44 @@ describe('createHostSlot', () => {
     expect(calls).toBe(2);
   });
 });
+
+import { establishedTogether } from './ui-rules.js';
+
+describe('establishedTogether', () => {
+  // 会話と途中経過の購読を両方待ってから送る。途中経過の最初の数件を取りこぼさないため（決定65）
+  function deferred() {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it('途中経過の購読が確立するまで待つ', async () => {
+    const progress = deferred();
+    let done = false;
+    const together = establishedTogether(Promise.resolve(), progress.promise).then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(done).toBe(false);
+    progress.resolve();
+    await together;
+    expect(done).toBe(true);
+  });
+
+  it('途中経過の購読に失敗しても、会話は止めない', async () => {
+    await expect(establishedTogether(Promise.resolve(), Promise.reject(new Error('購読できない')))).resolves.toBeUndefined();
+  });
+
+  it('途中経過の購読が無ければ、会話の購読だけを待つ', async () => {
+    await expect(establishedTogether(Promise.resolve(), undefined)).resolves.toBeUndefined();
+  });
+
+  it('会話の購読の失敗はそのまま伝える', async () => {
+    await expect(establishedTogether(Promise.reject(new Error('会話を購読できない')), Promise.resolve())).rejects.toThrow('会話を購読できない');
+  });
+});

@@ -1,11 +1,14 @@
 // 購入の経過（決定65）。有料ツールの中で起きたことを、会話ごとの Realtime チャンネルで画面へ届ける。
 // Agent ブロックのチャンネルは流せる種類が固定（agentStreamChunkSchema）なので、経過専用の Realtime を
 // 別に持つ。WebSocket API と接続表はスタックに 1 つで、Agent のものを共有する。
-// ここで送るのは「何が起きたか」だけで、画面の言葉づかいは src/ui-rules.ts が決める
+// ここで送るのは「何が起きたか」だけで、画面の言葉づかいは src/timeline.ts が決める
 import { z } from 'zod';
 
-/** 売り手から届いた文の長さの上限。相手方の言葉なので、画面を押し流す長さは切る */
-export const SELLER_MESSAGE_LIMIT = 200;
+/**
+ * 経過に載せる文の長さの上限。売り手の文は相手方の言葉なので、画面を押し流す長さは切る。
+ * 失敗の文も売り手の応答や例外の文をそのまま運ぶので同じく切る（長いと送信が弾かれ、失敗の行ごと消える）
+ */
+export const MESSAGE_LIMIT = 200;
 
 const tierSchema = z.enum(['ume', 'take', 'matsu']);
 
@@ -50,7 +53,12 @@ export function sellerStep(message: unknown): PurchaseStep | undefined {
   if (typeof message !== 'string') return undefined;
   const trimmed = message.trim();
   if (!trimmed) return undefined;
-  return { step: 'seller', message: trimmed.slice(0, SELLER_MESSAGE_LIMIT) };
+  return { step: 'seller', message: trimmed.slice(0, MESSAGE_LIMIT) };
+}
+
+/** 購入の失敗を経過にする。文は上限で切る */
+export function failedStep(message: string): PurchaseStep {
+  return { step: 'failed', message: message.slice(0, MESSAGE_LIMIT) };
 }
 
 export interface ProgressPublisher {

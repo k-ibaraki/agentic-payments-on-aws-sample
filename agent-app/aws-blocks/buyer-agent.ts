@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { amountFields } from './payments/amount.js';
 import { buyHtml } from './payments/buy-html.js';
-import { createProgressPublisher, progressEventSchema } from './progress.js';
+import { createProgressPublisher, failedStep, progressEventSchema } from './progress.js';
 import { extractPurchases } from './purchases.js';
 import {
   clearUnresolved,
@@ -391,7 +391,7 @@ export function createBuyerAgent(scope: Scope) {
                   },
                 );
               }
-              publisher.report({ step: 'failed', message });
+              publisher.report(failedStep(message));
               return summary;
             }
 
@@ -416,8 +416,9 @@ export function createBuyerAgent(scope: Scope) {
             publisher.report({ step: 'received', htmlBytes: outcome.html.length });
             return summary;
           } catch (error) {
-            // 支払いに至る前の失敗（設定の欠け・ProcessPayment の拒否など）。記録は購入の側が持つ
-            publisher.report({ step: 'failed', message: error instanceof Error ? error.message : String(error) });
+            // buyHtml が投げた失敗（設定の欠け・ProcessPayment の拒否など。支払いの記録は購入の側が持つ）と、
+            // 決済の後の成果物の保存・未解決の消去の失敗。後者は決済済みだが、ここでは記録せずに投げ直す
+            publisher.report(failedStep(error instanceof Error ? error.message : String(error)));
             throw error;
           } finally {
             await publisher.flush();
