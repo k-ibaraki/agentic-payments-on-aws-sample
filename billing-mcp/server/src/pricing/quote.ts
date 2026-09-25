@@ -40,6 +40,10 @@ export interface ResolvedQuote {
    * 見積書を読んだ 2 往復目では付かない
    */
   confidence?: number;
+  /** 判定した判定モデルの表示名（決定65）。判定した往復で、既定へ落ちなかったときだけ */
+  judgedBy?: string;
+  /** 判定できずに既定の価格帯へ落ちたか（決定65）。判定した往復でだけ付く */
+  fellBack?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,7 +116,7 @@ export async function resolveQuote(
     );
   }
 
-  const { tier, confidence } = await judge({
+  const { tier, confidence, model, fellBack } = await judge({
     toolName: PAID_TOOL_NAME,
     state: call.prompt,
   });
@@ -122,5 +126,6 @@ export async function resolveQuote(
     price,
     quote: encodeQuote({ tier, price }),
     ...(confidence === undefined ? {} : { confidence }),
+    ...(fellBack ? { fellBack: true } : model ? { judgedBy: model } : {}),
   };
 }

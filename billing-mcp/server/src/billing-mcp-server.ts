@@ -15,6 +15,11 @@ import type { JudgeBudgetOptions } from "./pricing/judge-guard.js";
 import type { TierTable } from "./pricing/tiers.js";
 import type { ApiKeyLoader } from "./pricing/typesafe-key.js";
 import {
+  announceGeneration,
+  announcePricing,
+  type PricingProgress,
+} from "./progress.js";
+import {
   type ConverseFn,
   createGenerateHtmlHandler,
   type GenerationBudget,
@@ -47,6 +52,11 @@ export interface BillingMcpServerOptions {
    * リクエストごとに価格帯が変わるため、サーバーを組むたびに渡す
    */
   generation?: GenerationBudget;
+  /**
+   * この往復で判定した価格帯（決定65）。買い手が progressToken を付けていれば、判定の結果を
+   * 経過として知らせる。リクエストごとに変わるため、サーバーを組むたびに渡す
+   */
+  pricing?: PricingProgress;
   /** 価格帯の判定処理（決定53）。省略時は Bedrock の Haiku を使う */
   judge?: Judge;
   /**
@@ -179,11 +189,20 @@ export async function createBillingMcpServer(
 
   // 支払いラッパーの外側を門番で包む。上流は authorization の中身を見ずに settle へ
   // 渡すため、明らかに要求に合わない支払いをここで止める（payment-guard.ts、U9）
+  // 経過の通知（決定65、progress.ts）は門番の外と、支払いラッパーの内側に挟む。
+  // 内側の包みに来た時点で決済は確定している（upfront。決定21）
   registerGenerateHtmlTool(
     server,
-    guardPayment(
-      paid(createGenerateHtmlHandler(options.converse, options.generation)),
-      accepts,
+    announcePricing(
+      guardPayment(
+        paid(
+          announceGeneration(
+            createGenerateHtmlHandler(options.converse, options.generation),
+          ),
+        ),
+        accepts,
+      ),
+      options.pricing,
     ),
   );
 

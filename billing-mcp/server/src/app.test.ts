@@ -1,7 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMcpFetchHandler, isStreamingResponse, MCP_PATH } from "./app.js";
+import {
+  closeWhenDone,
+  createMcpFetchHandler,
+  isStreamingResponse,
+  MCP_PATH,
+} from "./app.js";
 import { startFakeFacilitator } from "./testing/fake-facilitator.js";
 import { PREVIEW_VIEW_RESOURCE_URI } from "./tools/generate-html.js";
 
@@ -155,6 +160,45 @@ describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => 
         new Response("{}", { headers: { "content-type": "application/json" } }),
       ),
     ).toBe(false);
+  });
+
+  // 決定65: progressToken 付きの依頼には SSE で応え、応答を送り終えたらストリームが閉じる
+  it("progressToken 付きの依頼は SSE で返り、最後まで読み切れる", async () => {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/list",
+      params: { _meta: { progressToken: "p-1" } },
+    });
+    const response = await app(
+      mcpRequest(body, { "mcp-protocol-version": "2025-11-25" }),
+    );
+    expect(isStreamingResponse(response)).toBe(true);
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    const text = await Promise.race([
+      response.text(),
+      new Promise<string>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("ストリームが閉じませんでした")),
+          5000,
+        ),
+      ),
+    ]);
+    expect(text).toContain('"id":5');
+    expect(text).toContain("generate-html");
+  });
+
+  it("closeWhenDone は読み切ったとき・取りやめたときに 1 度だけ後始末する", async () => {
+    const onDone = vi.fn().mockResolvedValue(undefined);
+    await new Response(
+      closeWhenDone(new Response("abc").body as ReadableStream, onDone),
+    ).text();
+    expect(onDone).toHaveBeenCalledOnce();
+
+    const cancelled = vi.fn().mockResolvedValue(undefined);
+    const never = new ReadableStream<Uint8Array>({ pull() {} });
+    await closeWhenDone(never, cancelled).cancel();
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 
   it("MCP エンドポイント以外のパスは 404", async () => {

@@ -37,6 +37,11 @@ export interface JudgeResult {
   fellBack?: boolean;
   /** 判定モデルが確信度を返す場合のみ */
   confidence?: number;
+  /**
+   * 判定した判定モデルの表示名（買い手の画面に出す。決定65）。
+   * 既定へ落とした（判定していない）ときは付けない
+   */
+  model?: string;
 }
 
 export type Judge = (request: JudgeRequest) => Promise<JudgeResult>;
@@ -136,7 +141,7 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
         );
         return { tier: FALLBACK_TIER, fellBack: true };
       }
-      return { tier };
+      return { tier, model: "Haiku" };
     } catch (error) {
       console.warn(
         "[pricing] 価格帯の判定に失敗したため既定の価格帯に落とします",
@@ -248,6 +253,7 @@ export function createSystemOneJudge(options: SystemOneOptions): Judge {
       }
       return {
         tier: scoreToTier(answer.score),
+        model: "Jev",
         ...(typeof answer.confidence === "number"
           ? { confidence: answer.confidence }
           : {}),

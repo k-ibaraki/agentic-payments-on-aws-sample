@@ -22,6 +22,7 @@ import {
   createApiKeyLoader,
   createDefaultSecretReader,
 } from "./pricing/typesafe-key.js";
+import { wantsProgress } from "./progress.js";
 import {
   type ConverseFn,
   createDefaultConverse,
@@ -62,7 +63,8 @@ function withCors(headers: Headers): Headers {
  *
  * SSE ストリームに対して `response.text()` を呼ぶと永久に解決しない Promise が
  * でき、Lambda では Runtime.NodeJsExit（Promise が未解決のまま Node が終了）に
- * なって実行環境ごと落ちる。クラウドで実際に踏んだため防護を残す
+ * なって実行環境ごと落ちる。クラウドで実際に踏んだ。経過の通知（決定65）で SSE を
+ * 返すようになってからは、バッファせずに流す応答の見分けに使う
  */
 export function isStreamingResponse(response: Response): boolean {
   return (
@@ -205,14 +207,30 @@ export function createMcpFetchHandler(
     }
 
     // ステートレス（sessionIdGenerator 未指定）。1 リクエストごとに
-    // サーバーとトランスポートを立て、応答を読み切ってから閉じる
+    // サーバーとトランスポートを立て、応答を読み切ってから閉じる。
+    // 経過の通知（決定65）を求める依頼（progressToken 付き）にだけ SSE で応え、
+    // それ以外は従来どおり JSON で返す（通知を求めないクライアントの見え方を変えない）
     const server = await createBillingMcpServer(
-      { ...resolvedOptions, generation: generationBudgetOf(table, quote.tier) },
+      {
+        ...resolvedOptions,
+        generation: generationBudgetOf(table, quote.tier),
+        pricing: {
+          tier: quote.tier,
+          ...(quote.judgedBy ? { judgedBy: quote.judgedBy } : {}),
+          ...(quote.fellBack ? { fellBack: true } : {}),
+        },
+      },
       payment,
     );
     const transport = new WebStandardStreamableHTTPServerTransport({
-      enableJsonResponse: true,
+      enableJsonResponse: !wantsProgress(body),
     });
+    const cleanup = async () => {
+      await server.close().catch(() => {});
+      await transport.close().catch(() => {});
+    };
+    // SSE の本文は呼び出し側が読み進める。閉じるのは流し終えてから（closeWhenDone）
+    let handedOff = false;
     try {
       await server.connect(transport);
       const response = await transport.handleRequest(
@@ -222,19 +240,11 @@ export function createMcpFetchHandler(
           body,
         }),
       );
-      if (isStreamingResponse(response)) {
-        // ここに来る経路は塞いだつもりだが、万一残っていても待ち続けない
-        await response.body?.cancel();
-        console.error(
-          "ストリーミング応答は Function URL のバッファ応答では返せません",
-        );
-        return jsonResponse(500, {
-          jsonrpc: "2.0",
-          id: null,
-          error: {
-            code: -32603,
-            message: "Streaming responses are not supported",
-          },
+      if (isStreamingResponse(response) && response.body) {
+        handedOff = true;
+        return new Response(closeWhenDone(response.body, cleanup), {
+          status: response.status,
+          headers: withCors(new Headers(response.headers)),
         });
       }
       const responseBody = await response.text();
@@ -243,10 +253,48 @@ export function createMcpFetchHandler(
         headers: withCors(new Headers(response.headers)),
       });
     } finally {
-      await server.close().catch(() => {});
-      await transport.close().catch(() => {});
+      if (!handedOff) await cleanup();
     }
   };
+}
+
+/**
+ * SSE の本文を読み切るか、読み手が取りやめたときに onDone を 1 度だけ呼ぶ本文に包み直す。
+ * ステートレスのトランスポートは、依頼への応答を送り終えると自分でストリームを閉じる
+ */
+export function closeWhenDone(
+  body: ReadableStream<Uint8Array>,
+  onDone: () => Promise<void>,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let finished = false;
+  const finish = async () => {
+    if (finished) return;
+    finished = true;
+    await onDone();
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          // 閉じる前に後始末を済ませる。閉じた時点で読み手（Lambda の pipeline）は終わり、
+          // 実行環境が止められて後始末が途中で切れ得るため
+          await finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        await finish();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {});
+      await finish();
+    },
+  });
 }
 
 /** 環境変数から売り手の設定を読む。PAY_TO_ADDRESS は必須 */

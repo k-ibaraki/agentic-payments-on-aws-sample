@@ -1,5 +1,9 @@
-// Lambda Function URL のエントリポイント（DESIGN.md 決定19・22）。
-// 認証は掛けない。認可は x402 の支払いが単独で担う
+// Lambda Function URL のエントリポイント（DESIGN.md 決定19・22・65）。
+// 認証は掛けない。認可は x402 の支払いが単独で担う。
+// 経過の通知（決定65）を途中で届けるため、Function URL はレスポンスストリーミング（RESPONSE_STREAM）で返す
+import { Readable, type Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type {
   LambdaFunctionURLEvent,
   LambdaFunctionURLResult,
@@ -37,13 +41,56 @@ async function toResult(
   response.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  // enableJsonResponse で応答は JSON に収まるため、常にバッファして返す
+  // バッファ版は SSE を返せない（読み切れない）。ストリーミングの無い実行環境向けの退路
   const body = await response.text();
   return {
     statusCode: response.status,
     headers,
     body,
     isBase64Encoded: false,
+  };
+}
+
+function headersOf(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  return headers;
+}
+
+/** awslambda.HttpResponseStream.from と同じ形（テストで差し替えるため） */
+export type ResponseStreamFactory = (
+  writable: Writable,
+  metadata: Record<string, unknown>,
+) => Writable;
+
+/**
+ * fetch ハンドラを、レスポンスストリーミングの Function URL ハンドラに変換する。
+ * 応答の頭（ステータス・ヘッダ）を先に渡し、本文は届いた順に流す。SSE の途中の通知が
+ * 生成の終わりを待たずに買い手へ届く
+ */
+export function createStreamingLambdaHandler(
+  fetchHandler: FetchHandler,
+  from: ResponseStreamFactory,
+) {
+  return async (
+    event: LambdaFunctionURLEvent,
+    responseStream: Writable,
+  ): Promise<void> => {
+    const response = await fetchHandler(toRequest(event));
+    const stream = from(responseStream, {
+      statusCode: response.status,
+      headers: headersOf(response),
+    });
+    if (!response.body) {
+      stream.end();
+      return;
+    }
+    await pipeline(
+      Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+      stream,
+    );
   };
 }
 
@@ -63,4 +110,14 @@ const lazyFetchHandler: FetchHandler = (request) => {
   return fetchHandler(request);
 };
 
-export const handler = createLambdaHandler(lazyFetchHandler);
+// awslambda.streamifyResponse はストリーミング対応の Lambda 実行環境だけが持つ。手元でバンドルを
+// 読み込む検証（verify-bundle.mjs）やテストでは無いので、そのときはバッファ版を書き出す
+const streaming = typeof globalThis.awslambda?.streamifyResponse === "function";
+
+export const handler = !streaming
+  ? createLambdaHandler(lazyFetchHandler)
+  : awslambda.streamifyResponse(
+      createStreamingLambdaHandler(lazyFetchHandler, (writable, metadata) =>
+        awslambda.HttpResponseStream.from(writable, metadata),
+      ),
+    );

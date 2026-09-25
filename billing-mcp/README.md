@@ -33,6 +33,15 @@ reserved concurrency と関数タイムアウトで瞬間的な流量に上限�
 
 添付ファイルは最大 1 件。Function URL のリクエスト上限 6MB（base64 後）に収めるため。
 
+## 途中の経過を知らせる
+
+買い手が `tools/call` の `_meta.progressToken` を付けてきたときだけ、応答を SSE にし、
+MCP 標準の `notifications/progress` で売り手の中の経過を途中に流す（DESIGN.md 決定65）。
+流すのは、価格帯の判定の結果（どの判定モデルが何と判定したか）、支払いの署名の受け取り、
+決済の確定と生成の開始、生成の終わり。取引 ID は従来どおり最終結果の `_meta["x402/payment-response"]` に載る。
+`progressToken` を付けない依頼への応答は、従来どおり JSON のまま。
+SSE を途中で届けるため、Function URL はレスポンスストリーミング（`RESPONSE_STREAM`）で返す。
+
 ## 構成
 
 ```
@@ -50,7 +59,8 @@ billing-mcp/
 └── server/               # MCP Apps サーバー
     └── src/
         ├── app.ts        # MCP の fetch ハンドラ（ローカルと Lambda で共通）
-        ├── handler.ts    # Lambda Function URL のエントリ
+        ├── handler.ts    # Lambda Function URL のエントリ（レスポンスストリーミング）
+        ├── progress.ts   # 途中の経過の通知（notifications/progress）
         ├── dev-server.ts # ローカル開発用の薄い node:http エントリ
         ├── tools/        # generate-html（有料ツール、x402 で課金）
         └── ui/           # ui:// で配信する単一 HTML（vite singlefile）

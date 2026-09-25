@@ -14,6 +14,7 @@ import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
   Architecture,
   FunctionUrlAuthType,
+  InvokeMode,
   LayerVersion,
   Runtime,
 } from "aws-cdk-lib/aws-lambda";
@@ -281,9 +282,12 @@ export function createBillingMcpStack(
     );
   }
 
-  // 認証は掛けない。認可は x402 の支払いが単独で担う（決定19）
+  // 認証は掛けない。認可は x402 の支払いが単独で担う（決定19）。
+  // 応答は流す（決定65）。経過の通知（SSE）を、生成の終わりを待たずに買い手へ届けるため。
+  // 通知を求めない依頼は従来どおり JSON で返り、流しても見え方は変わらない
   const functionUrl = mcpFunction.addFunctionUrl({
     authType: FunctionUrlAuthType.NONE,
+    invokeMode: InvokeMode.RESPONSE_STREAM,
   });
 
   // 出力は、deploy 後に describe-stacks だけで要る値が揃うようにする（README「デプロイ後に値を取り出す」）。
