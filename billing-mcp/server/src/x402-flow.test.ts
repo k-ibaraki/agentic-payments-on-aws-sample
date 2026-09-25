@@ -280,7 +280,8 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
       ]);
     });
 
-    // 経過の通知は門番より外にある。門番が弾く支払いに「決済が確定した」とは言わない
+    // 支払い付きの呼び出しで最初に流す通知（announcePricing）は、門番の検査より先に送られる。
+    // そのため、門番が弾く支払いにも届くこの通知では、決済が確定したとは言わない
     it("門番が弾いた支払いには、決済の確定を知らせない", async () => {
       const payment = await capturePaymentPayload();
       payment.payload.authorization.validBefore = "1000000000";
