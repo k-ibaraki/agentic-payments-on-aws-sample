@@ -2,6 +2,42 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-09-25: PR #35（決定65）のマージ後の deploy と、構成図・文書の最新化
+
+### 買い手（Amplify Hosting）の deploy で踏んだこと
+
+- マージで走った Amplify のビルドが、いつもの 5 分ほどで終わらず 20 分かかった。バックエンドの更新そのものは
+  完了していたが、CloudFormation の後始末（cleanup）で古いリソースの削除が失敗し続け、その間ビルドが待たされた
+- 原因: bb-realtime は、共有の接続表とトークンの秘密値を、スタックの中で最初に作られた Realtime の配下に置く。
+  途中経過用の Realtime `progress` を Agent より先に作ったため、持ち主が Agent 内蔵の `buyer/rt` から `progress` へ移り、
+  接続表（`…-b-app-progress-connections`）とトークンの秘密値が新しく作られた。古い接続表は保持の設定で消されずに
+  スタックから外れた。古い表に付いた GSI を片付けるカスタムリソースは、担当ロールの権限がすでに新しい表へ向け直されて
+  いたため `dynamodb:DescribeTable` を拒まれ、3 回失敗したところで CloudFormation が諦めて `UPDATE_COMPLETE` になった
+- 影響: 接続表の中身はその時々の WebSocket の接続だけで、会話・購入履歴・支払いの記録には触れていない。実行時も
+  合成時と同じ順で Realtime が作られる（`progress` が先）ので、Lambda が見る接続表は新しい表と一致する
+- 後始末: スタックから外れた古い接続表（`…-b-app-buyer-rt-connections`。中身 0 件）と古い秘密値の SSM パラメータ
+  （`…-b-app-buyer-rt-token-secret`。`BlocksSecretsBulk` の管理外）が残っている。削除は自動モードの権限判定で
+  止められたため、消すかどうかはユーザーの判断を待っている
+- DESIGN.md 決定26 の追記「足しても資源は増えない」は誤りだったので、訂正を書き足した。Realtime を作る順は
+  deploy 後に変えないことを、CLAUDE.md・`buyer-agent.ts` のコメント・agent-app/README.md に書いた
+
+### 売り手の deploy（ユーザーの指示で）
+
+- PR #35 のレビューで直した文言（支払い付きの呼び出しの最初の通知を「中身を確かめています」にした）を入れるため、
+  `main` から売り手を deploy した。差分は Lambda のコードの差し替えだけで、URL は変わらない（出力の説明文の差分は、
+  deploy 済みのテンプレートで日本語が化けて見えるためのもので、値は同じ）
+- 支払いを伴わない呼び出しで確かめた: OPTIONS は `204` と CORS ヘッダ。`progressToken` 付きで中身の無い支払いを
+  載せた `tools/call` は、SSE で「支払いの署名を受け取りました。中身を確かめています」が先に届き、続けて支払い要求が
+  返った（決済は起きていない）
+
+### 構成図と文書の最新化
+
+- 構成図（`docs/architecture.drawio.png`）: 途中経過用の Realtime「progress」の枠を足し、WebSocket API と接続表を
+  そこへ移した（接続表は `progress-connections`）。途中経過の経路を ⑫ として処理の流れに足し、⑤ に SSE での受け取りを
+  書いた。売り手に `RESPONSE_STREAM` と SSE の経過を書き、価格を価格帯（既定 0.1 / 0.15 / 0.2）に直した。
+  KVStore に `spend-limit` と `unresolved-payment` を足した（今回より前からの漏れ）。合成時点の注記を今日にした
+- README.md: 「何が起きるか」に途中経過の表示を足し、ステータスに「クラウドでは実決済での確認がまだ」を書いた
+
 ## 2026-09-25: 依頼 1 回の途中経過をチャット欄に流す（決定65）
 
 ### やったこと

@@ -50,6 +50,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33）。`ampx` は必ず
   `NODE_OPTIONS="--conditions=cdk"` で動かす（npm スクリプトが付ける）。手元から `cdk deploy` を走らせる経路
   （`npm run deploy`。以下「`cdk deploy` 経路」）は退路として残す
+- Realtime を作る順も deploy 後は変えない。共有の接続表とトークンの秘密値は最初に作られた Realtime が持つので、
+  順を変えると作り直される（いまは `progress` が先。DESIGN.md 決定26 の訂正）
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
   合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）。`.blocks/config.json` の
   `stackId` も `cdk deploy` 経路のスタック名と S3 バケット名の元になる（gitignore しない。fork 先で使うなら書き換える）

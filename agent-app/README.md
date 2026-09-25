@@ -38,7 +38,8 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   AWS CDK の構成を生成するので、AWS へ載せるときは中身が CDK になる（deploy の経路は下記「クラウド deploy」）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime の5つ。
   Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する。
-  これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（決定65。WebSocket API は共有）
+  これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（決定65。WebSocket API は共有）。
+  共有の接続表とトークンの秘密値は、最初に作られた `progress` の配下に置かれる。作る順は deploy 後に変えない（決定26 の訂正）
 - ウォレット（AgentCore Payments）は ap-southeast-1（AgentCore Payments が東京リージョン非対応のため、ここだけクロスリージョン呼び出し）
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く）
