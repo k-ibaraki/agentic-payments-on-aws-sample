@@ -258,7 +258,9 @@ export function createBuyerAgent(scope: Scope) {
   });
 
   // 購入の経過（決定65。progress.ts 参照）。チャンネルは会話 ID ごと。購読の取っ手は
-  // buyer API が会話の所有を検証してから返す（index.ts の getProgressChannel）
+  // buyer API が会話の所有を検証してから返す（index.ts の getProgressChannel）。
+  // 共有の接続表とトークンの秘密値は最初に作られた Realtime が持つので、Agent（内蔵の Realtime）より先に
+  // 作るこの順は deploy 後に変えない。変えると作り直される（決定26 の訂正）
   const progress = new Realtime(scope, 'progress', {
     namespaces: { steps: Realtime.namespace(progressEventSchema) },
   });

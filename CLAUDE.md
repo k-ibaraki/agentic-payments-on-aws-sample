@@ -14,6 +14,13 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - 設計判断をしたら `docs/DESIGN.md` の設計決定録に番号付きで追記・更新する（行は消さず、変更経緯は理由欄に残す）
 - 作業のたびに `docs/implementation-log.md` へ日付見出しで記録する（やったこと・判断・つまずき）
 - 未決論点（U 番号）に触れる実装は、先に検証して結果を DESIGN.md に反映してから進める
+- 決定番号（決定N）と未決論点の番号（U N）を使ってよいのは、DESIGN.md・implementation-log・CLAUDE.md・
+  AGENTS.md・コードのコメントの中だけ。**README（ルート・各アプリ）と構成図には書かない**。読み手はそのファイル
+  だけを読むので、理由が要るなら番号ではなく本文に書く。決定録への案内は、ルート README の「もっと詳しく」の
+  節にだけ置く（決定32・38）。この取り決めの後も作業のたびに番号が入り込み、2026-09-26 に 24 か所を外した
+- README か構成図を変えたら、コミットの前に番号が無いことを確かめる:
+  `grep -nE '決定[0-9]|\bU[0-9]+\b' README.md agent-app/README.md billing-mcp/README.md`。
+  構成図は XML が PNG に圧縮して埋め込まれており grep が効かないので、編集に使う `.drawio`（XML）の段階で同じ語を探す
 
 ## 言語
 
@@ -50,6 +57,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - クラウド deploy は Amplify Gen2 + Amplify Hosting が正（決定33）。`ampx` は必ず
   `NODE_OPTIONS="--conditions=cdk"` で動かす（npm スクリプトが付ける）。手元から `cdk deploy` を走らせる経路
   （`npm run deploy`。以下「`cdk deploy` 経路」）は退路として残す
+- Realtime を作る順も deploy 後は変えない。共有の接続表とトークンの秘密値は最初に作られた Realtime が持つので、
+  順を変えると作り直される（いまは `progress` が先。DESIGN.md 決定26 の訂正）
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
   合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）。`.blocks/config.json` の
   `stackId` も `cdk deploy` 経路のスタック名と S3 バケット名の元になる（gitignore しない。fork 先で使うなら書き換える）

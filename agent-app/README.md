@@ -38,26 +38,28 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   AWS CDK の構成を生成するので、AWS へ載せるときは中身が CDK になる（deploy の経路は下記「クラウド deploy」）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime の5つ。
   Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する。
-  これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（決定65。WebSocket API は共有）
+  これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（WebSocket API は共有）。
+  共有の接続表とトークンの秘密値は、最初に作られた `progress` の配下に置かれる。作る順を deploy 後に変えると、
+  接続表とトークンの秘密値が作り直されるので変えない
 - ウォレット（AgentCore Payments）は ap-southeast-1（AgentCore Payments が東京リージョン非対応のため、ここだけクロスリージョン呼び出し）
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く）
-- ブラウザ UI は `index.html` + `src/index.ts`（認証・チャット・ウォレット・購入履歴）。構成は決定44・50・51・62:
+- ブラウザ UI は `index.html` + `src/index.ts`（認証・チャット・ウォレット・購入履歴）。構成:
   ヘッダーの下にタブを3枚並べる（依頼タブは会話、ウォレットタブは残高と支払いの枠、購入履歴タブは会話をまたいだ一覧と右のプレビューを表示する）、
   内部情報の折りたたみは広い画面では右の側面パネル、狭い画面では本文の下。見た目は `src/style.css`
   （Pico.css を `@import` し、淡いブルーのテーマと独自要素のスタイルを重ねる）。生成 HTML は
   `src/mcp-apps-host.ts` が売り手の `ui://` リソース（空の表示器。生成物は含まない）を無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
-  として sandbox iframe に描画する。買えたページは会話の中のカードに描き（決定50）、再開した会話の買い置きと
+  として sandbox iframe に描画する。買えたページは会話の中のカードに描き、再開した会話の買い置きと
   購入履歴タブの一覧は「表示」を押したものだけを載せる
-- 依頼 1 回ごとに、依頼の吹き出しの直後へ途中経過の折りたたみを出す（決定65）。エージェントの動き・見積もり・署名・
+- 依頼 1 回ごとに、依頼の吹き出しの直後へ途中経過の折りたたみを出す。エージェントの動き・見積もり・署名・
   売り手の経過（MCP の `notifications/progress`）・決済の確定（取引へのリンク）・受け取りを平易な文で積み、待ち時間を数える。
   進行中は開き、終われば閉じて要約だけを残す。その場限りで、読み込み直すと消える。規則は `src/timeline.ts`、
   購入の経過の形と送信処理は `aws-blocks/progress.ts`
-- 支払額は購入 1 件ごとに見せる（決定60）。売り手の価格は依頼の規模で変わるため（売り手側 決定56）、
+- 支払額は購入 1 件ごとに見せる。売り手の価格は依頼の規模で変わるため、
   購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
   ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）
 - Agent の応答は Markdown 表示にしている（`marked` で HTML 化し `DOMPurify` でサニタイズしてから
-  `innerHTML` へ流し込む。LLM が組み立てる信頼できない入力を扱うため、サニタイズだけを防護に据えている。決定46）
+  `innerHTML` へ流し込む。LLM が組み立てる信頼できない入力を扱うため、サニタイズだけを防護に据えている）
 - 二重支払いの防護: 有料ツールの待ち時間は売り手上限に合わせる（`BUYER_TOOL_TIMEOUT_MS`）。
   支払いが済んだのに成果物を受け取れなかった購入と、支払われたかどうか自体を確認できなかった購入
   （ウォレット API の応答が返らなかった場合。実際に払っている可能性がある）は、レシートを残して
@@ -71,7 +73,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   支出の枠とは別に依頼の回数を数える（`BUYER_RATE_LIMIT`）。承認への応答は回数制限の対象外にしている。ただし対象外になるのは、実際に未解決の承認待ちがある
   場合の応答だけなので、承認応答を装って回数制限を迂回することはできない
 - 依頼の入力欄にはウォレット残高と支払いの枠の残枠を帯で表示する。支払った瞬間が分かるよう、
-  有料ツール（`generateHtml`）の呼び出し中は 3 秒間隔で取り直し、値が変わるか呼び出しが終わるまで続ける（決定47）
+  有料ツール（`generateHtml`）の呼び出し中は 3 秒間隔で取り直し、値が変わるか呼び出しが終わるまで続ける
 
 ### 運用上の注意
 
@@ -83,7 +85,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
     「deploy はできたのに畳めない」の原因になりやすい
   - `@aws-blocks/core` の `destroy()` は `cdk destroy` を sandbox 扱いせず `.env.production` も読まない
     （`deploy()` は読む）。合成時のガードを足すときは、撤収の経路も塞いでいないか確かめること。
-    実行時設定の必須チェックはこの理由で deploy のときだけに絞ってある（決定34 の改訂）
+    実行時設定の必須チェックはこの理由で deploy のときだけに絞ってある
   - このリポジトリを fork して `cdk deploy` 経路を使うなら、先に `.blocks/config.json` の `stackId` を
     書き換えること。スタック名は `<stackId>-prod` に固定で、Agent 内蔵の S3 バケット名もそこから決まる。
     S3 のバケット名は全 AWS アカウントを通じて一意なので、同じ `stackId` のまま別のアカウントで deploy すると
@@ -144,7 +146,7 @@ AWS Blocks が生成するのは CDK の構成なので、AWS へ載せる作業
   バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
 - Amplify コンソールでアプリを作ると、SPA 用の書き換え規則 `/<*> → /index.html (404-200)` が自動で付き、
   どんなパスでもアプリが返ってしまう。この画面はトップページだけで動くので、規則を `/<*> → /404.html (404)` に
-  差し替える（アプリ単位の設定でリポジトリでは管理できない。決定45）:
+  差し替える（アプリ単位の設定でリポジトリでは管理できない）:
   `aws amplify update-app --region ap-northeast-1 --app-id <appId> --custom-rules '[{"source":"/<*>","target":"/404.html","status":"404"}]'`
 - 名前の制約: S3 バケット名が `<Amplify のスタック名>-b-app-buyer-sn` になるため、ブランチ名は 7 文字以内
   （`main` / `develop` / `staging` は可）、sandbox の識別子（既定は OS ユーザー名。`--identifier` で指定）は 12 文字以内
