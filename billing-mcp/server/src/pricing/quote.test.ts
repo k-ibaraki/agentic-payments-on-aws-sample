@@ -48,6 +48,23 @@ describe("支払いの無い呼び出し", () => {
     expect(result.confidence).toBe(0.73);
   });
 
+  // 買い手の画面で「どの判定モデルが決めたか」「判定できずに既定へ落ちたか」を見せる（決定65）
+  it("判定モデルの名前と、既定へ落ちたかを見積もりに載せる", async () => {
+    const named = await resolveQuote(toolCall("FAQページ"), {
+      ...base,
+      judge: vi.fn().mockResolvedValue({ tier: "take", model: "Jev" }),
+    });
+    expect(named.judgedBy).toBe("Jev");
+    expect(named.fellBack).toBeUndefined();
+
+    const fallen = await resolveQuote(toolCall("FAQページ"), {
+      ...base,
+      judge: vi.fn().mockResolvedValue({ tier: "take", fellBack: true }),
+    });
+    expect(fallen.judgedBy).toBeUndefined();
+    expect(fallen.fellBack).toBe(true);
+  });
+
   it("確信度を返さない判定モデルなら載せない", async () => {
     const result = await resolveQuote(toolCall("FAQページ"), {
       ...base,
@@ -78,6 +95,8 @@ describe("支払い付きの呼び出し", () => {
     expect(result.tier).toBe("matsu");
     expect(result.price).toBe("$0.2");
     expect(judge).not.toHaveBeenCalled();
+    // 判定していない往復では、判定の出所を名乗らない
+    expect(result.judgedBy).toBeUndefined();
   });
 
   // 価格表を差し替えた直後の古い見積書

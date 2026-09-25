@@ -1,5 +1,9 @@
-// Lambda Function URL のエントリポイント（DESIGN.md 決定19・22）。
-// 認証は掛けない。認可は x402 の支払いが単独で担う
+// Lambda Function URL のエントリポイント（DESIGN.md 決定19・22・65）。
+// 認証は掛けない。認可は x402 の支払いが単独で担う。
+// 経過の通知（決定65）を途中で届けるため、Function URL はレスポンスストリーミング（RESPONSE_STREAM）で返す
+import { Readable, type Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type {
   LambdaFunctionURLEvent,
   LambdaFunctionURLResult,
@@ -37,13 +41,61 @@ async function toResult(
   response.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  // enableJsonResponse で応答は JSON に収まるため、常にバッファして返す
+  // バッファ版は SSE を最後まで溜めてから一度に返す（途中の経過は逐次には届かない）。
+  // ストリーミングの無い実行環境向けの退路
   const body = await response.text();
   return {
     statusCode: response.status,
     headers,
     body,
     isBase64Encoded: false,
+  };
+}
+
+function headersOf(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  return headers;
+}
+
+/** awslambda.HttpResponseStream.from と同じ形（テストで差し替えるため） */
+export type ResponseStreamFactory = (
+  writable: Writable,
+  metadata: Record<string, unknown>,
+) => Writable;
+
+/**
+ * fetch ハンドラを、レスポンスストリーミングの Function URL ハンドラに変換する。
+ * ステータスとヘッダを先に渡し、本文は届いた順に流す。SSE の途中の通知が
+ * 生成の終わりを待たずに買い手へ届く
+ */
+export function createStreamingLambdaHandler(
+  fetchHandler: FetchHandler,
+  from: ResponseStreamFactory,
+) {
+  return async (
+    event: LambdaFunctionURLEvent,
+    responseStream: Writable,
+  ): Promise<void> => {
+    const response = await fetchHandler(toRequest(event));
+    const stream = from(responseStream, {
+      statusCode: response.status,
+      headers: headersOf(response),
+    });
+    if (!response.body) {
+      // 実行環境はステータスとヘッダを最初の write のときに送る。write 無しに end すると
+      // それらが送られず、OPTIONS の 204 と CORS ヘッダが消える（2026-09-25 にクラウドで実測）。
+      // 空の書き込みを 1 度行って、ステータスとヘッダを確実に送らせる
+      stream.write("");
+      stream.end();
+      return;
+    }
+    await pipeline(
+      Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+      stream,
+    );
   };
 }
 
@@ -63,4 +115,14 @@ const lazyFetchHandler: FetchHandler = (request) => {
   return fetchHandler(request);
 };
 
-export const handler = createLambdaHandler(lazyFetchHandler);
+// awslambda.streamifyResponse はストリーミング対応の Lambda 実行環境だけが持つ。手元でバンドルを
+// 読み込む検証（verify-bundle.mjs）やテストでは無いので、そのときはバッファ版を書き出す
+const streaming = typeof globalThis.awslambda?.streamifyResponse === "function";
+
+export const handler = !streaming
+  ? createLambdaHandler(lazyFetchHandler)
+  : awslambda.streamifyResponse(
+      createStreamingLambdaHandler(lazyFetchHandler, (writable, metadata) =>
+        awslambda.HttpResponseStream.from(writable, metadata),
+      ),
+    );

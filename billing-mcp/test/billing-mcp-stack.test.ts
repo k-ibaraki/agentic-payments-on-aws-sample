@@ -51,6 +51,13 @@ describe("billing-mcp スタック", () => {
     });
   });
 
+  // 経過の通知（決定65）を生成の終わりを待たずに届けるため、応答を流す
+  test("Function URL はレスポンスストリーミングで返す（決定65）", () => {
+    template.hasResourceProperties("AWS::Lambda::Url", {
+      InvokeMode: "RESPONSE_STREAM",
+    });
+  });
+
   test("環境変数に売り手の設定と UI の場所が入る", () => {
     template.hasResourceProperties("AWS::Lambda::Function", {
       Environment: {

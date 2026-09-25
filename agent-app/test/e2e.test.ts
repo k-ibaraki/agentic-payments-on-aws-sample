@@ -122,6 +122,8 @@ test('サインインした利用者は会話を作り、依頼を送り、履�
   // 会話の Realtime チャンネルは所有者なら取れる
   const channel = await buyer.getChannel(conversationA);
   assert.ok(channel);
+  // 途中経過（決定65）のチャンネルも所有者なら取れる
+  assert.ok(await buyer.getProgressChannel(conversationA));
 
   // 存在しない購入物は null
   assert.strictEqual(await buyer.getPurchasedHtml('no-such-result'), null);
@@ -161,6 +163,8 @@ test('他人の会話には発注・閲覧・購読・購入一覧・承認の�
   await assert.rejects(buyer.sendMessage(conversationA, 'generateHtml で何か作って'));
   await assert.rejects(buyer.getMessages(conversationA));
   await assert.rejects(buyer.getChannel(conversationA));
+  // 途中経過（決定65）のチャンネルも同じ所有検証を通す
+  await assert.rejects(buyer.getProgressChannel(conversationA));
   await assert.rejects(buyer.listPurchases(conversationA));
   // 再購入の承認（決定31）は実費に直結するため、読み取り系と同じく所有者に限る
   await assert.rejects(

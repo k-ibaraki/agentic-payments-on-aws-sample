@@ -8,11 +8,22 @@ import { useChat, type AgentStreamChunk, type ChatMessage } from '@aws-blocks/bb
 import { mountPreviewHost, type PreviewHost, type SellerInfo } from './mcp-apps-host.js';
 import { renderAssistantMarkdown } from './markdown.js';
 import {
+  actorLabel,
+  applyChunk,
+  applyProgress,
+  startTimeline,
+  timelineSummary,
+  waitingLabel,
+  type Timeline,
+} from './timeline.js';
+import type { ProgressEvent } from '../aws-blocks/progress.js';
+import {
   BALANCE_WATCH_INTERVAL_MS,
   STRIP_EMPTY,
   balanceKey,
   createHostSlot,
   didBalanceChange,
+  establishedTogether,
   findLastAssistant,
   isPaidToolCall,
   isSelectedPurchase,
@@ -93,6 +104,22 @@ const purchaseCards = new Map<
 // 会話の作り直しをまたいだ非同期処理を捨てるための世代。mount の途中で会話が変わったら片付ける
 let conversationGeneration = 0;
 
+// 依頼 1 回ごとの途中経過（決定65）。その場限りで、読み込み直しや会話の破棄で消える。
+// 錨はその依頼の吹き出し。送った時点ではまだ吹き出しが無いので、送る前の依頼の数を控えて後で結ぶ
+interface TimelineView {
+  model: Timeline;
+  node: HTMLDetailsElement;
+  afterMessageId: string | null;
+  userCountAtStart: number;
+  /** 最後に画面側で開閉した状態。これと食い違う toggle は利用者の操作とみなす */
+  autoOpen: boolean;
+  userToggled: boolean;
+}
+const timelines = new Map<string, TimelineView>();
+let currentTimelineId: string | null = null;
+let timelineCount = 0;
+let timelineTimer: ReturnType<typeof setInterval> | null = null;
+
 function assistantHtml(content: string): string {
   let html = markdownCache.get(content);
   if (html === undefined) {
@@ -118,11 +145,25 @@ function renderMessages(messages: ChatMessage[]) {
     for (const card of purchaseCards.values()) {
       if (card.afterMessageId === id) card.afterMessageId = fallback;
     }
+    for (const view of timelines.values()) {
+      if (view.afterMessageId === id) view.afterMessageId = fallback;
+    }
     bubble.node.remove();
     bubbles.delete(id);
   }
   messages.forEach((message, i) => updateBubble(message, i !== streamingIndex));
+  bindTimelineAnchors(messages);
   layoutChatLog(messages.map((m) => m.id));
+}
+
+// まだ錨の無い途中経過を、その依頼の吹き出し（送る前の依頼の数から数えて次のもの）に結ぶ
+function bindTimelineAnchors(messages: ChatMessage[]) {
+  const users = messages.filter((m) => m.role === 'user');
+  for (const view of timelines.values()) {
+    if (view.afterMessageId !== null) continue;
+    const own = users[view.userCountAtStart];
+    if (own) view.afterMessageId = own.id;
+  }
 }
 
 // 中身が変わったときだけ書き込む（毎回書くと、選択やスクロールの位置が飛ぶ）
@@ -142,8 +183,15 @@ function updateBubble(message: ChatMessage, done: boolean) {
 // 吹き出しの順は会話（messages）の順であって、作った順ではない
 function layoutChatLog(messageIds: readonly string[]) {
   const cards = [...purchaseCards].map(([resultId, card]) => ({ resultId, afterMessageId: card.afterMessageId }));
-  const nodes = orderChatNodes(messageIds, cards)
-    .map((key) => (key.kind === 'message' ? bubbles.get(key.id)?.node : purchaseCards.get(key.id)?.node))
+  const steps = [...timelines].map(([id, view]) => ({ id, afterMessageId: view.afterMessageId }));
+  const nodes = orderChatNodes(messageIds, cards, steps)
+    .map((key) =>
+      key.kind === 'message'
+        ? bubbles.get(key.id)?.node
+        : key.kind === 'timeline'
+          ? timelines.get(key.id)?.node
+          : purchaseCards.get(key.id)?.node,
+    )
     .filter((node): node is HTMLElement => node !== undefined);
   const log = el('chat-log');
   placeChildren(log, nodes);
@@ -157,6 +205,144 @@ function placeChildren(container: HTMLElement, nodes: readonly HTMLElement[]) {
     if (container.childNodes[i] !== node) container.insertBefore(node, container.childNodes[i] ?? null);
   });
   while (container.childNodes.length > nodes.length) container.lastChild?.remove();
+}
+
+// ── 依頼 1 回の途中経過（決定65。規則は timeline.ts） ──────────────────
+function beginTimeline() {
+  finishTimeline();
+  const id = `t-${++timelineCount}`;
+  const node = document.createElement('details');
+  node.className = 'timeline';
+  node.open = true;
+  const view: TimelineView = {
+    model: startTimeline(Date.now()),
+    node,
+    afterMessageId: null,
+    userCountAtStart: lastMessages.filter((m) => m.role === 'user').length,
+    autoOpen: true,
+    userToggled: false,
+  };
+  // 画面側の開閉でも toggle は飛ぶ。最後に画面側で決めた状態と食い違うときだけ、利用者の操作とみなす
+  node.addEventListener('toggle', () => {
+    if (node.open !== view.autoOpen) view.userToggled = true;
+  });
+  timelines.set(id, view);
+  currentTimelineId = id;
+  renderTimeline(view);
+  layoutChatLog(lastMessages.map((m) => m.id));
+  timelineTimer ??= setInterval(() => {
+    const current = currentTimeline();
+    if (current) renderTimelineHead(current);
+  }, 1000);
+}
+
+function currentTimeline(): TimelineView | null {
+  return currentTimelineId ? (timelines.get(currentTimelineId) ?? null) : null;
+}
+
+// 終わった経過は閉じて要約だけ残す。利用者が手で開け閉めしていれば、その状態に従う
+function finishTimeline() {
+  const view = currentTimeline();
+  currentTimelineId = null;
+  if (timelineTimer) {
+    clearInterval(timelineTimer);
+    timelineTimer = null;
+  }
+  if (!view) return;
+  if (!view.userToggled) {
+    view.autoOpen = false;
+    view.node.open = false;
+  }
+  renderTimelineHead(view);
+}
+
+// 見出し（要約）と待ち時間の行だけを書き換える。1 秒ごとに呼ぶので、行の一覧には触らない
+function renderTimelineHead(view: TimelineView) {
+  const now = Date.now();
+  const summary = view.node.querySelector('summary');
+  if (summary) summary.textContent = timelineSummary(view.model, now);
+  const waiting = view.node.querySelector<HTMLElement>('.timeline-waiting');
+  if (waiting) waiting.textContent = waitingLabel(view.model, now) ?? '';
+}
+
+// 文字列は textContent で入れる（売り手の経過は相手方の言葉）
+function renderTimeline(view: TimelineView) {
+  const summary = document.createElement('summary');
+  const list = document.createElement('ol');
+  list.className = 'timeline-rows';
+  for (const row of view.model.rows) {
+    const item = document.createElement('li');
+    item.className = `timeline-row${row.tone === 'error' ? ' error' : ''}`;
+    const actor = document.createElement('span');
+    actor.className = `timeline-actor actor-${row.actor}`;
+    actor.textContent = actorLabel(row.actor);
+    const text = document.createElement('span');
+    text.className = 'timeline-text';
+    text.textContent = row.text;
+    item.append(actor, text);
+    if (row.link) {
+      const link = document.createElement('a');
+      link.href = row.link.href;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = row.link.label;
+      item.append(' ', link);
+    }
+    if (row.term) {
+      const term = document.createElement('small');
+      term.className = 'timeline-term';
+      term.textContent = row.term;
+      item.append(' ', term);
+    }
+    list.appendChild(item);
+  }
+  const waiting = document.createElement('div');
+  waiting.className = 'timeline-waiting hint';
+  waiting.setAttribute('aria-live', 'off');
+  view.node.replaceChildren(summary, list, waiting);
+  renderTimelineHead(view);
+}
+
+// 行が増えたときの描き直し。末尾まで送って、流れを目で追えるようにする。
+// 折りたたみを丸ごと作り直すが、行は十数件に収まる。text-delta ごとにも呼ばれるので、Agent の
+// streamingMode を 'token' に変えるなら差分の描き直しにすること（既定の 'block' ではまとまって届く）
+function refreshTimeline(view: TimelineView) {
+  renderTimeline(view);
+  const log = el('chat-log');
+  log.scrollTop = log.scrollHeight;
+}
+
+function onTimelineChunk(chunk: AgentStreamChunk) {
+  const view = currentTimeline();
+  if (!view) return;
+  applyChunk(view.model, chunk, Date.now());
+  refreshTimeline(view);
+  if (chunk.type === 'done' || chunk.type === 'error') finishTimeline();
+}
+
+function onProgress(event: ProgressEvent) {
+  const view = currentTimeline();
+  if (!view) return;
+  applyProgress(view.model, event, Date.now());
+  refreshTimeline(view);
+}
+
+// 経過のチャンネルの購読（決定65）。経過は飾りなので、購読に失敗しても会話は止めない（内部情報に残すだけ）
+async function subscribeProgress(conversationId: string): Promise<{ established: Promise<void>; unsubscribe(): void } | null> {
+  try {
+    const channel = await buyer.getProgressChannel(conversationId);
+    const subscription = channel.subscribe((event) => onProgress(event as ProgressEvent));
+    subscription.established.catch((error) => appendEvent(`途中経過を購読できませんでした: ${describeError(error)}`));
+    return subscription;
+  } catch (error) {
+    appendEvent(`途中経過を購読できませんでした: ${describeError(error)}`);
+    return null;
+  }
+}
+
+function discardTimelines() {
+  finishTimeline();
+  timelines.clear();
 }
 
 function describeChunk(chunk: AgentStreamChunk): string {
@@ -195,7 +381,17 @@ function createChat() {
     },
     subscribe: async (channelId, handler) => {
       const channel = await buyer.getChannel(channelId);
-      return channel.subscribe(handler);
+      const chunks = channel.subscribe(handler);
+      // 途中経過（決定65）も同じ会話 ID で購読し、useChat には両方の確立を待たせる
+      const progress = await subscribeProgress(channelId);
+      const subscription = {
+        established: establishedTogether(chunks.established, progress?.established),
+        unsubscribe() {
+          chunks.unsubscribe();
+          progress?.unsubscribe();
+        },
+      };
+      return subscription;
     },
     onMessagesChange: renderMessages,
     onLoadingChange: (loading) => {
@@ -207,6 +403,7 @@ function createChat() {
     },
     onChunk: (chunk) => {
       appendEvent(describeChunk(chunk));
+      onTimelineChunk(chunk);
       // 支払いは有料ツールの呼び出しの中で起きる。返るまで数秒おきに取り直し、減った瞬間を帯に出す（決定47）
       if (chunk.type === 'tool-call' && isPaidToolCall(chunk.toolName)) startBalanceWatch();
       // interrupt は決定31 の再購入確認。中断中は done も tool-result も出ないので、ここで止めないと承認待ちの間ずっと回る
@@ -225,6 +422,12 @@ function createChat() {
       // ストリームが落ちるとチャンクは以後届かない。取り直しもここで止める（決定47）
       appendEvent(`エラー: ${error}`);
       stopBalanceWatch();
+      const view = currentTimeline();
+      if (view) {
+        applyChunk(view.model, { type: 'error', error: String(error) }, Date.now());
+        refreshTimeline(view);
+        finishTimeline();
+      }
     },
     onInterrupt: renderInterrupts,
   });
@@ -246,6 +449,7 @@ function discardConversation() {
   bubbles.clear();
   for (const card of purchaseCards.values()) card.host?.destroy();
   purchaseCards.clear();
+  discardTimelines();
   purchasesLoaded = false;
   el('chat-log').replaceChildren();
   el('chat-status').replaceChildren();
@@ -493,6 +697,7 @@ async function sendCurrentInput() {
   // 再開した会話で買い置きを読めていなければ、購入が届く前に読み直す。読めないままだと
   // 次の購入の取り直し（autoShow）で買い置きまで自動で載ってしまう。ここでも失敗したら諦める
   if (chat.getConversationId() && !purchasesLoaded) await refreshPurchases(false).catch(() => {});
+  beginTimeline();
   try {
     await chat.sendMessage(text);
     const conversationId = chat.getConversationId();
@@ -500,6 +705,12 @@ async function sendCurrentInput() {
     if (conversationId) localStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
   } catch (error) {
     appendEvent(`送信に失敗: ${describeError(error)}`);
+    const view = currentTimeline();
+    if (view) {
+      applyChunk(view.model, { type: 'error', error: '送信できませんでした' }, Date.now());
+      refreshTimeline(view);
+      finishTimeline();
+    }
   }
 }
 

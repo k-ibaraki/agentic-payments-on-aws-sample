@@ -22,11 +22,12 @@
 // 支払い主体はウォレット（共有・1つ）と PaymentSession（利用者=Cognito subごと）で分けている。
 // 詳細と代替案を採らなかった理由は決定39 参照
 import { BedrockAgentCoreClient } from '@aws-sdk/client-bedrock-agentcore';
-import { Agent, BedrockModels, KVStore, type ModelConfig, type Scope } from '@aws-blocks/blocks';
+import { Agent, BedrockModels, KVStore, type ModelConfig, Realtime, type Scope } from '@aws-blocks/blocks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { amountFields } from './payments/amount.js';
 import { buyHtml } from './payments/buy-html.js';
+import { createProgressPublisher, failedStep, progressEventSchema } from './progress.js';
 import { extractPurchases } from './purchases.js';
 import {
   clearUnresolved,
@@ -256,6 +257,12 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
+  // 購入の経過（決定65。progress.ts 参照）。チャンネルは会話 ID ごと。購読の取っ手は
+  // buyer API が会話の所有を検証してから返す（index.ts の getProgressChannel）
+  const progress = new Realtime(scope, 'progress', {
+    namespaces: { steps: Realtime.namespace(progressEventSchema) },
+  });
+
   // id は物理名の一部で、内蔵 S3 バケット名は cdk deploy 経路では <スタック名>-app-buyer-sn、
   // Amplify 経路では <Amplify のルートスタック名>-b-app-buyer-sn になる（決定33。理由は index.ts の Scope 定義参照）
   const agent = new Agent(scope, 'buyer', {
@@ -341,71 +348,87 @@ export function createBuyerAgent(scope: Scope) {
             { userId, paymentManagerArn, paymentSession, paymentInstrumentId, purchaseId: resultId },
             paymentPolicyFromEnv(),
           );
-          const outcome = await buyHtml(sellerInfoFromEnv().mcpUrl, input.prompt, payer, {
-            timeout: toolTimeoutMsFromEnv(),
-          });
-          const transaction = outcome.paymentResponse?.transaction;
-          // 支払った額。要約（LLM と画面が読む）とレシートの双方に載せる（決定60）
-          const amount = amountFields(outcome.paidAmount);
+          // 購入の経過を画面へ流す（決定65）。送信は待たずに順に行い、ツールを返す前に出揃うのを待つ
+          const publisher = createProgressPublisher(resultId, (event) =>
+            progress.publish('steps', context.conversationId, event),
+          );
+          try {
+            const outcome = await buyHtml(sellerInfoFromEnv().mcpUrl, input.prompt, payer, {
+              timeout: toolTimeoutMsFromEnv(),
+              progress: publisher,
+            });
+            const transaction = outcome.paymentResponse?.transaction;
+            // 支払った額。要約（LLM と画面が読む）とレシートの双方に載せる（決定60）
+            const amount = amountFields(outcome.paidAmount);
 
-          if (outcome.isError || !outcome.html) {
-            const message = outcome.message ?? '有料ツールの呼び出しに失敗しました';
-            const summary: { [key: string]: string | number | boolean } = {
-              ok: false,
-              paymentMade: outcome.paymentMade,
-              message,
-            };
-            // 金が動いた、または動いたかもしれない失敗（決定31・48）。記録は投げない
-            // （recordFailedPurchase 参照）ので、summary は必ず返る
-            if (outcome.paymentMade || outcome.paymentUncertain) {
-              summary.resultId = resultId;
-              if (outcome.paymentUncertain) summary.paymentUncertain = true;
-              if (transaction) summary.transaction = transaction;
-              if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
-              if (amount) Object.assign(summary, amount);
-              await recordFailedPurchase(
-                { artifacts, unresolvedPurchases },
-                {
-                  userId: context.userId,
-                  resultId,
-                  message,
-                  ...(outcome.paymentUncertain ? { paymentUncertain: true } : {}),
-                  ...(transaction ? { transaction } : {}),
-                  ...(outcome.authorizationNonce
-                    ? { authorizationNonce: outcome.authorizationNonce }
-                    : {}),
-                  ...(outcome.paidAmount ?? {}),
-                },
-              );
+            if (outcome.isError || !outcome.html) {
+              const message = outcome.message ?? '有料ツールの呼び出しに失敗しました';
+              const summary: { [key: string]: string | number | boolean } = {
+                ok: false,
+                paymentMade: outcome.paymentMade,
+                message,
+              };
+              // 金が動いた、または動いたかもしれない失敗（決定31・48）。記録は投げない
+              // （recordFailedPurchase 参照）ので、summary は必ず返る
+              if (outcome.paymentMade || outcome.paymentUncertain) {
+                summary.resultId = resultId;
+                if (outcome.paymentUncertain) summary.paymentUncertain = true;
+                if (transaction) summary.transaction = transaction;
+                if (outcome.authorizationNonce) summary.authorizationNonce = outcome.authorizationNonce;
+                if (amount) Object.assign(summary, amount);
+                await recordFailedPurchase(
+                  { artifacts, unresolvedPurchases },
+                  {
+                    userId: context.userId,
+                    resultId,
+                    message,
+                    ...(outcome.paymentUncertain ? { paymentUncertain: true } : {}),
+                    ...(transaction ? { transaction } : {}),
+                    ...(outcome.authorizationNonce
+                      ? { authorizationNonce: outcome.authorizationNonce }
+                      : {}),
+                    ...(outcome.paidAmount ?? {}),
+                  },
+                );
+              }
+              publisher.report(failedStep(message));
+              return summary;
             }
-            return summary;
-          }
 
-          await artifacts.put(purchasedHtmlKey(context.userId, resultId), {
-            html: outcome.html,
-            ...(outcome.filename ? { filename: outcome.filename } : {}),
-            ...(transaction ? { transaction } : {}),
-            ...(outcome.paidAmount ?? {}),
-            purchasedAt: Date.now(),
-          });
-          // 買えたので、この利用者の未解決は決着とみなして記録を消す（決定48）。
-          // 承認だけでは消さない（承認 → 再び失敗、で防護が外れてしまうため）
-          await clearUnresolved(unresolvedPurchases, context.userId);
-          const summary: { [key: string]: string | number | boolean } = {
-            ok: true,
-            resultId,
-            paymentMade: outcome.paymentMade,
-            htmlBytes: outcome.html.length,
-          };
-          if (transaction) summary.transaction = transaction;
-          if (amount) Object.assign(summary, amount);
-          return summary;
+            await artifacts.put(purchasedHtmlKey(context.userId, resultId), {
+              html: outcome.html,
+              ...(outcome.filename ? { filename: outcome.filename } : {}),
+              ...(transaction ? { transaction } : {}),
+              ...(outcome.paidAmount ?? {}),
+              purchasedAt: Date.now(),
+            });
+            // 買えたので、この利用者の未解決は決着とみなして記録を消す（決定48）。
+            // 承認だけでは消さない（承認 → 再び失敗、で防護が外れてしまうため）
+            await clearUnresolved(unresolvedPurchases, context.userId);
+            const summary: { [key: string]: string | number | boolean } = {
+              ok: true,
+              resultId,
+              paymentMade: outcome.paymentMade,
+              htmlBytes: outcome.html.length,
+            };
+            if (transaction) summary.transaction = transaction;
+            if (amount) Object.assign(summary, amount);
+            publisher.report({ step: 'received', htmlBytes: outcome.html.length });
+            return summary;
+          } catch (error) {
+            // buyHtml が投げた失敗（設定の欠け・ProcessPayment の拒否など。支払いの記録は購入の側が持つ）と、
+            // 決済の後の成果物の保存・未解決の消去の失敗。後者は決済済みだが、ここでは記録せずに投げ直す
+            publisher.report(failedStep(error instanceof Error ? error.message : String(error)));
+            throw error;
+          } finally {
+            await publisher.flush();
+          }
         },
       }),
     }),
   });
 
-  return { agent, artifacts, paymentSessions, spendLimits, unresolvedPurchases };
+  return { agent, artifacts, paymentSessions, spendLimits, unresolvedPurchases, progress };
 }
 
 // ── ウォレットと支払いの枠（決定42・43）。buyer API から利用者ごとに呼ぶ ──────────────

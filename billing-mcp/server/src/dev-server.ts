@@ -2,6 +2,9 @@
 // 本番（Lambda Function URL）と同じ fetch ハンドラを node:http に載せるだけで、
 // MCP の処理そのものは app.ts に集約する
 import { createServer, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { createMcpFetchHandler, MCP_PATH, optionsFromEnv } from "./app.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8000", 10);
@@ -42,9 +45,22 @@ const server = createServer((req, res) => {
         headers[key] = value;
       });
       res.writeHead(response.status, headers);
-      res.end(await response.text());
+      // SSE（経過の通知。決定65）を届いた順に流すため、本文は読み切らずに流す
+      if (!response.body) {
+        res.end();
+        return;
+      }
+      await pipeline(
+        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+        res,
+      );
     } catch (error) {
       console.error("リクエスト処理に失敗しました", error);
+      // 流している途中で落ちたときは、ステータスとヘッダを送り終えているので、接続を打ち切るだけにする
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "Internal Server Error" }));
     }

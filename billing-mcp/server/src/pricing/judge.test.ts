@@ -28,6 +28,12 @@ describe("Bedrock を使う判定処理", () => {
     expect(result.tier).toBe("take");
   });
 
+  // 買い手の画面に「どの判定モデルが決めたか」を見せるため（決定65）
+  it("判定できたら判定モデルの名前を添える", async () => {
+    const judge = createBedrockJudge(converseReturning("take"));
+    expect((await judge({ toolName: "t", state: "s" })).model).toBe("Haiku");
+  });
+
   it("前後に空白や改行があっても読み取れる", async () => {
     const judge = createBedrockJudge(converseReturning("  matsu\n"));
     expect((await judge({ toolName: "t", state: "s" })).tier).toBe("matsu");
@@ -39,6 +45,8 @@ describe("Bedrock を使う判定処理", () => {
     const result = await judge({ toolName: "t", state: "s" });
     expect(result.tier).toBe("take");
     expect(result.fellBack).toBe(true);
+    // 判定していないので、判定モデルの名前は名乗らない
+    expect(result.model).toBeUndefined();
   });
 
   it("呼び出しが失敗しても投げずに中央の価格帯へ落とす", async () => {
@@ -152,6 +160,7 @@ describe("System One（Jev）を使う判定処理", () => {
     const result = await judge({ toolName: "t", state: "s" });
     expect(result.tier).toBe("take");
     expect(result.fellBack).toBe(true);
+    expect(result.model).toBeUndefined();
     expect(warn.mock.calls.flat().join(" ")).toContain("401");
     warn.mockRestore();
   });
@@ -166,6 +175,7 @@ describe("System One（Jev）を使う判定処理", () => {
     const result = await judge({ toolName: "t", state: "s" });
     expect(result.tier).toBe("ume");
     expect(result.fellBack).toBeUndefined();
+    expect(result.model).toBe("Jev");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

@@ -49,7 +49,13 @@ const auth = new AuthCognito(scope, 'auth', {
 // ── 買い手エージェント（決定26・27・28） ────────────────────────────────
 // billing-mcp の有料ツールを AgentCore Payments で支払いながら使う。
 // 構成と配線は buyer-agent.ts 参照
-const { agent: buyerAgent, artifacts: purchasedHtml, paymentSessions, spendLimits } = createBuyerAgent(scope);
+const {
+  agent: buyerAgent,
+  artifacts: purchasedHtml,
+  paymentSessions,
+  spendLimits,
+  progress: purchaseProgress,
+} = createBuyerAgent(scope);
 const walletStores = { paymentSessions, spendLimits };
 
 // 利用者ごとの依頼回数の記録（決定40。詳細は rate-limit.ts 参照）
@@ -127,6 +133,14 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
     return buyerAgent.getChannel(conversationId);
+  },
+
+  // 購入の経過（決定65）のチャンネル。会話 ID と同一に固定し、getChannel と同じ所有検証を通す
+  // （他人の購入の経過を覗けないように）
+  async getProgressChannel(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    await requireOwnedConversation(user.userSub, conversationId);
+    return purchaseProgress.getChannel('steps', conversationId);
   },
 
   // 会話中の購入一覧（決定29）。tool-result チャンクは toolName しか運ばないため、

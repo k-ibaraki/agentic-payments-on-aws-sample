@@ -11,6 +11,7 @@ import {
 } from './x402-types.js';
 import type { PaidAmount } from './amount.js';
 import type { X402Payer } from './x402-payer.js';
+import { type PurchaseStep, sellerStep } from '../progress.js';
 
 /** 支払い証明から、支払った額（最小単位と資産）を読む。読めなければ undefined（決定60） */
 export function paidAmountOf(payload: PaymentPayload): PaidAmount | undefined {
@@ -27,11 +28,25 @@ export interface McpClientLike {
       arguments?: Record<string, unknown>;
       _meta?: Record<string, unknown>;
     },
-    options?: CallOptions,
+    options?: McpCallOptions,
   ): Promise<Record<string, unknown>>;
 }
 
+/** MCP SDK の RequestOptions のうち、ここで使う部分 */
+export interface McpCallOptions {
+  timeout?: number;
+  /** 売り手の経過（notifications/progress）を受ける。渡すと SDK が依頼に progressToken を付ける */
+  onprogress?: (progress: { message?: string }) => void;
+}
+
+/** 購入の経過の受け口（決定65）。送信の成否は受け口の責任で、ここでは待たない */
+export interface ProgressSink {
+  report(step: PurchaseStep): void;
+}
+
 export interface CallOptions {
+  /** 購入の経過を知らせる先（決定65）。省略すると売り手に経過を求めない */
+  progress?: ProgressSink;
   /**
    * 応答を待つ上限（ミリ秒）。MCP SDK の既定は 60 秒で、売り手の生成（Bedrock を 570 秒で打ち切り、
    * その外側の Lambda が 600 秒）より短い。既定のまま使うと、売り手が決済済みで生成を続けている
@@ -86,6 +101,27 @@ function parsePaymentRequired(result: Record<string, unknown>): PaymentRequired 
   return undefined;
 }
 
+const TIERS = new Set(['ume', 'take', 'matsu']);
+
+/** 見積書（売り手の決定55。`v1|価格帯|価格`）から価格帯を読む。読めなければ undefined */
+function tierOfQuote(quote: unknown): 'ume' | 'take' | 'matsu' | undefined {
+  if (typeof quote !== 'string') return undefined;
+  const [version, tier] = quote.split('|');
+  return version === 'v1' && TIERS.has(tier) ? (tier as 'ume' | 'take' | 'matsu') : undefined;
+}
+
+/** 支払い要求から、画面に出す見積もりを作る。額は最初の支払い条件のもの */
+function quoteStep(required: PaymentRequired): PurchaseStep {
+  const first = required.accepts[0];
+  const tier = tierOfQuote(first?.extra?.quote);
+  return {
+    step: 'quote',
+    ...(tier ? { tier } : {}),
+    ...(typeof first?.amount === 'string' ? { amount: first.amount } : {}),
+    ...(typeof first?.asset === 'string' ? { asset: first.asset } : {}),
+  };
+}
+
 export async function callPaidTool(
   mcp: McpClientLike,
   name: string,
@@ -93,13 +129,32 @@ export async function callPaidTool(
   payer: X402Payer,
   options?: CallOptions,
 ): Promise<PaidToolOutcome> {
-  const first = await mcp.callTool({ name, arguments: args }, options);
+  const progress = options?.progress;
+  // 経過を求めるときだけ onprogress を渡す（SDK が依頼に progressToken を付け、売り手が SSE で応える）
+  const mcpOptions: McpCallOptions = {
+    ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+    ...(progress
+      ? {
+          onprogress: ({ message }: { message?: string }) => {
+            const step = sellerStep(message);
+            if (step) progress.report(step);
+          },
+        }
+      : {}),
+  };
+  const callOptions = Object.keys(mcpOptions).length > 0 ? mcpOptions : undefined;
+
+  const first = await mcp.callTool({ name, arguments: args }, callOptions);
   const required = parsePaymentRequired(first);
   if (!required) {
     return { result: first, paymentMade: false };
   }
 
+  progress?.report(quoteStep(required));
+  progress?.report({ step: 'paying' });
   const paymentPayload = await payer.pay(required);
+  const signed = paidAmountOf(paymentPayload);
+  progress?.report({ step: 'paid', ...(signed ?? {}) });
   let second: Record<string, unknown>;
   try {
     second = await mcp.callTool(
@@ -108,7 +163,7 @@ export async function callPaidTool(
         arguments: args,
         _meta: { [PAYMENT_META_KEY]: paymentPayload },
       },
-      options,
+      callOptions,
     );
   } catch (error) {
     // 支払い証明は送った後。売り手は upfront（決定21）で決済済みの可能性が高い
@@ -133,10 +188,14 @@ export async function callPaidTool(
 
   const meta = second._meta as Record<string, unknown> | undefined;
   const paidAmount = paidAmountOf(paymentPayload);
+  const receipt = meta?.[PAYMENT_RESPONSE_META_KEY] as SettleResponse | undefined;
+  if (receipt?.success) {
+    progress?.report({ step: 'settled', ...(receipt.transaction ? { transaction: receipt.transaction } : {}) });
+  }
   return {
     result: second,
     paymentMade: true,
-    paymentResponse: meta?.[PAYMENT_RESPONSE_META_KEY] as SettleResponse | undefined,
+    paymentResponse: receipt,
     ...(paidAmount ? { paidAmount } : {}),
   };
 }

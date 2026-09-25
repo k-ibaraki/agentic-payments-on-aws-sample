@@ -148,32 +148,46 @@ export function purchaseDetail(purchase: {
 
 // ── チャットの中に購入したページを差し込む並び（決定50） ──
 
-/** チャット欄に並ぶものの識別子。吹き出しはメッセージ ID、購入カードは resultId */
-export type ChatNodeKey = { kind: 'message'; id: string } | { kind: 'purchase'; id: string };
+/** チャット欄に並ぶものの識別子。吹き出しはメッセージ ID、購入カードは resultId、途中経過は依頼ごとの ID */
+export type ChatNodeKey =
+  | { kind: 'message'; id: string }
+  | { kind: 'purchase'; id: string }
+  | { kind: 'timeline'; id: string };
 
 /**
- * 吹き出しと購入カードの並びを決める（決定50: 購入したページはチャットの中に描く）。
- * カードは「届いた時点で末尾だった吹き出し」を錨に持ち、その直後に入る。錨が見つからない
- * （承認の応答で空の吹き出しが消えた等）カードは末尾に置く。
+ * 吹き出し・途中経過・購入カードの並びを決める（決定50: 購入したページはチャットの中に描く）。
+ * カードは「届いた時点で末尾だった吹き出し」を錨に持ち、その直後に入る。途中経過（決定65）は
+ * その依頼の吹き出しを錨に持ち、同じ錨のカードより前に入る（経過の後に成果物が来る）。
+ * 錨が見つからない（承認の応答で空の吹き出しが消えた等）ものは末尾に置く。
  * この順序どおりに DOM を並べ替えると iframe が読み込み直しになるため、
  * 呼び出し側は既にある要素を動かさない差分の当て方をすること
  */
 export function orderChatNodes(
   messageIds: readonly string[],
   cards: readonly { resultId: string; afterMessageId: string | null }[],
+  timelines: readonly { id: string; afterMessageId: string | null }[] = [],
 ): ChatNodeKey[] {
   const placed = new Set<string>();
   const order: ChatNodeKey[] = [];
   for (const id of messageIds) {
     order.push({ kind: 'message', id });
+    for (const timeline of timelines) {
+      if (timeline.afterMessageId !== id) continue;
+      placed.add(`timeline:${timeline.id}`);
+      order.push({ kind: 'timeline', id: timeline.id });
+    }
     for (const card of cards) {
       if (card.afterMessageId !== id) continue;
-      placed.add(card.resultId);
+      placed.add(`purchase:${card.resultId}`);
       order.push({ kind: 'purchase', id: card.resultId });
     }
   }
+  for (const timeline of timelines) {
+    if (placed.has(`timeline:${timeline.id}`)) continue;
+    order.push({ kind: 'timeline', id: timeline.id });
+  }
   for (const card of cards) {
-    if (placed.has(card.resultId)) continue;
+    if (placed.has(`purchase:${card.resultId}`)) continue;
     order.push({ kind: 'purchase', id: card.resultId });
   }
   return order;
@@ -242,4 +256,12 @@ export function createHostSlot<T extends { destroy(): void }>(create: () => Prom
       current = null;
     },
   };
+}
+
+/**
+ * 会話と途中経過の購読を両方待つ（決定65）。待たないと、確立する前に届いた途中経過を取りこぼす。
+ * 途中経過は飾りなので、その購読の失敗では会話を止めない（失敗の知らせは購読した側が出す）
+ */
+export async function establishedTogether(chat: Promise<void>, progress: Promise<void> | undefined): Promise<void> {
+  await Promise.all([chat, progress?.catch(() => undefined)]);
 }

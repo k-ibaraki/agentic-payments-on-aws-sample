@@ -2,6 +2,7 @@
 // 署名は本物の EIP-3009 署名を作り、facilitator だけ偽物に差し替えるので、
 // テスト USDC を消費せずに upfront フロー全体を検証できる。
 // buy-once.ts と同じ経路を通るため、実決済の前段の確認になる
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { createx402MCPClient } from "@x402/mcp";
@@ -43,7 +44,7 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
       converse,
       // 価格帯の判定処理を固定する。既定のままだと生成用の偽 Converse を判定処理も使い、
       // 「生成が呼ばれていないこと」の検査が誤って落ちる（決定56 の結線後）
-      judge: async () => ({ tier: "take" }),
+      judge: async () => ({ tier: "take", model: "Haiku" }),
       loadUiHtml: () => "<html></html>",
     });
   });
@@ -215,5 +216,89 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
     expect(result.paymentResponse?.success).not.toBe(true);
     expect(converse).not.toHaveBeenCalled();
     await client.close();
+  });
+
+  // 決定65: 買い手が progressToken を付けたときだけ、売り手の中の経過を SSE で途中に流す
+  describe("経過の通知（notifications/progress）", () => {
+    async function connectPlain() {
+      const client = new Client({ name: "progress-buyer", version: "0.0.0" });
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`${ORIGIN}${MCP_PATH}`),
+        { fetch: (url, init) => app(new Request(url, init)) },
+      );
+      await client.connect(transport);
+      return client;
+    }
+
+    async function callWithProgress(meta?: Record<string, unknown>) {
+      const client = await connectPlain();
+      const messages: string[] = [];
+      const result = await client.callTool(
+        {
+          name: "generate-html",
+          arguments: { prompt: "門番テストの元にする購入" },
+          ...(meta ? { _meta: meta } : {}),
+        },
+        undefined,
+        { onprogress: (p) => messages.push(p.message ?? "") },
+      );
+      await client.close();
+      return { result, messages };
+    }
+
+    it("1 往復目は判定の結果を、402 より先に知らせる", async () => {
+      const { result, messages } = await callWithProgress();
+      expect(result.isError).toBe(true);
+      expect(messages).toEqual([
+        "判定モデル Haiku が依頼を読み、価格帯を「竹」と判定しました",
+      ]);
+    });
+
+    it("2 往復目は決済と生成の経過を知らせ、レシートは結果に載る", async () => {
+      const payment = await capturePaymentPayload();
+      const { result, messages } = await callWithProgress({
+        "x402/payment": payment,
+      });
+      expect(messages).toEqual([
+        "支払いの署名を受け取りました。中身を確かめています",
+        "決済が確定しました。ページの生成を始めます",
+        "ページを生成しました",
+      ]);
+      expect(
+        (result._meta as Record<string, { success?: boolean }>)[
+          "x402/payment-response"
+        ]?.success,
+      ).toBe(true);
+    });
+
+    it("決済が失敗したら生成の経過は流れない", async () => {
+      const payment = await capturePaymentPayload();
+      facilitator.failNextSettle();
+      const { messages } = await callWithProgress({ "x402/payment": payment });
+      expect(messages).toEqual([
+        "支払いの署名を受け取りました。中身を確かめています",
+      ]);
+    });
+
+    // 支払い付きの呼び出しで最初に流す通知（announcePricing）は、門番の検査より先に送られる。
+    // そのため、門番が弾く支払いにも届くこの通知では、決済が確定したとは言わない
+    it("門番が弾いた支払いには、決済の確定を知らせない", async () => {
+      const payment = await capturePaymentPayload();
+      payment.payload.authorization.validBefore = "1000000000";
+      const { result, messages } = await callWithProgress({
+        "x402/payment": payment,
+      });
+      expect(result.isError).toBe(true);
+      expect(messages).toEqual([
+        "支払いの署名を受け取りました。中身を確かめています",
+      ]);
+    });
+
+    it("progressToken を付けなければ応答は従来どおり JSON", async () => {
+      const response = await callToolWithPayment(await capturePaymentPayload());
+      expect(response.headers.get("content-type")).toContain(
+        "application/json",
+      );
+    });
   });
 });

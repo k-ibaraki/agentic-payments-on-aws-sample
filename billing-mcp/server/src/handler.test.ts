@@ -1,6 +1,10 @@
+import { PassThrough, type Writable } from "node:stream";
 import type { LambdaFunctionURLEvent } from "aws-lambda";
 import { describe, expect, it } from "vitest";
-import { createLambdaHandler } from "./handler.js";
+import {
+  createLambdaHandler,
+  createStreamingLambdaHandler,
+} from "./handler.js";
 
 // Function URL のイベント → Request → Response → Function URL の応答、
 // という変換だけを検証する。MCP 本体の挙動は app.test.ts が見る
@@ -97,5 +101,98 @@ describe("Lambda Function URL アダプタ", () => {
 
     expect(seen?.method).toBe("GET");
     expect(result.statusCode).toBe(405);
+  });
+});
+
+// 決定65: 経過の通知を途中で届けるため、Function URL はレスポンスストリーミングで返す
+describe("Lambda Function URL アダプタ（レスポンスストリーミング）", () => {
+  /** awslambda.HttpResponseStream.from の代わり。渡されたステータスとヘッダ（metadata）を控える */
+  function fakeStream() {
+    const sink = new PassThrough();
+    const chunks: Buffer[] = [];
+    let writes = 0;
+    const write = sink.write.bind(sink);
+    sink.write = ((...args: Parameters<typeof write>) => {
+      writes += 1;
+      return write(...args);
+    }) as typeof sink.write;
+    sink.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let metadata: Record<string, unknown> | undefined;
+    const from = (writable: Writable, meta: Record<string, unknown>) => {
+      metadata = meta;
+      return writable;
+    };
+    return {
+      sink,
+      from,
+      metadata: () => metadata,
+      writes: () => writes,
+      text: () => Buffer.concat(chunks).toString("utf-8"),
+    };
+  }
+
+  it("ステータスとヘッダを先に渡し、本文を流し終えたらストリームを閉じる", async () => {
+    const stream = fakeStream();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("event: message\n"));
+        controller.enqueue(new TextEncoder().encode("data: {}\n\n"));
+        controller.close();
+      },
+    });
+    const handler = createStreamingLambdaHandler(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+      stream.from,
+    );
+
+    await handler(event(), stream.sink);
+
+    expect(stream.metadata()).toMatchObject({
+      statusCode: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+    expect(stream.text()).toBe("event: message\ndata: {}\n\n");
+    expect(stream.sink.writableEnded).toBe(true);
+  });
+
+  it("本文の無い応答もステータスとヘッダを返して閉じる", async () => {
+    const stream = fakeStream();
+    const handler = createStreamingLambdaHandler(
+      async () =>
+        new Response(null, {
+          status: 204,
+          headers: { "access-control-allow-origin": "*" },
+        }),
+      stream.from,
+    );
+
+    await handler(event(), stream.sink);
+
+    expect(stream.metadata()).toMatchObject({
+      statusCode: 204,
+      headers: { "access-control-allow-origin": "*" },
+    });
+    expect(stream.sink.writableEnded).toBe(true);
+    // Lambda の実行環境はステータスとヘッダを最初の write のときに送る。write 無しに end するとそれらが送られず、
+    // 204 と CORS ヘッダが消えてプリフライトが通らなくなる（2026-09-25 にクラウドで実測）
+    expect(stream.writes()).toBeGreaterThan(0);
+  });
+
+  it("リクエストへの変換はバッファ版と同じ", async () => {
+    const stream = fakeStream();
+    let seen: Request | undefined;
+    const handler = createStreamingLambdaHandler(async (request) => {
+      seen = request;
+      return new Response("ok");
+    }, stream.from);
+
+    await handler(event({ rawQueryString: "a=1" }), stream.sink);
+
+    expect(new URL(seen?.url ?? "").search).toBe("?a=1");
+    expect(await seen?.text()).toBe('{"ping":true}');
   });
 });
