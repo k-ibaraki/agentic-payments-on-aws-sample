@@ -259,3 +259,65 @@ describe('タイムアウトと決済後の失敗（二重支払いの防止）'
     expect((error as Error).message).toBe('ECONNREFUSED');
   });
 });
+
+// 決定65: 購入の経過を画面へ流す。売り手の経過（notifications/progress）も中継する
+describe('callPaidTool の経過', () => {
+  function progressRecorder() {
+    const steps: unknown[] = [];
+    return { steps, report: (step: unknown) => void steps.push(step) };
+  }
+
+  it('見積もり・支払い・売り手の経過・決済の確定を順に知らせる', async () => {
+    const quoted = paymentRequiredResult();
+    quoted.structuredContent.accepts[0].extra = { name: 'USDC', version: '2', quote: 'v1|take|$0.1' } as never;
+    const callTool = vi.fn(async (_params: unknown, options?: { onprogress?: (p: { message?: string }) => void }) => {
+      if (callTool.mock.calls.length === 1) {
+        options?.onprogress?.({ message: '判定モデル Jev が依頼を読み、価格帯を「竹」と判定しました' });
+        return quoted;
+      }
+      options?.onprogress?.({ message: '決済が確定しました。ページの生成を始めます' });
+      return structuredClone(PAID_RESULT);
+    });
+    const progress = progressRecorder();
+
+    await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer(), { progress });
+
+    expect(progress.steps).toEqual([
+      { step: 'seller', message: '判定モデル Jev が依頼を読み、価格帯を「竹」と判定しました' },
+      { step: 'quote', tier: 'take', amount: '100000', asset: REQUIREMENT.asset },
+      { step: 'paying' },
+      { step: 'paid', amount: '100000', asset: REQUIREMENT.asset },
+      { step: 'seller', message: '決済が確定しました。ページの生成を始めます' },
+      { step: 'settled', transaction: '0xtx' },
+    ]);
+  });
+
+  it('経過を求めるときだけ、売り手の経過を受ける口（onprogress）を渡す', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [] });
+    await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer(), { timeout: 5 });
+    expect(callTool.mock.calls[0][1]).toEqual({ timeout: 5 });
+  });
+
+  it('見積書が読めなければ価格帯を付けない', async () => {
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequiredResult())
+      .mockResolvedValueOnce(structuredClone(PAID_RESULT));
+    const progress = progressRecorder();
+    await callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer(), { progress });
+    expect(progress.steps[0]).toEqual({ step: 'quote', amount: '100000', asset: REQUIREMENT.asset });
+  });
+
+  it('決済が受理されなければ、確定を知らせない', async () => {
+    const callTool = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequiredResult())
+      .mockResolvedValueOnce(paymentRequiredResult());
+    const progress = progressRecorder();
+    await expect(
+      callPaidTool({ callTool }, 'generate-html', { prompt: 'x' }, fakePayer(), { progress }),
+    ).rejects.toBeInstanceOf(PaidToolError);
+    expect(progress.steps.map((s) => (s as { step: string }).step)).toEqual(['quote', 'paying', 'paid']);
+  });
+});
+

@@ -37,7 +37,8 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - AWS Blocks は Infrastructure from Code のフレームワーク。`aws-blocks/` に書いた Block の宣言から
   AWS CDK の構成を生成するので、AWS へ載せるときは中身が CDK になる（deploy の経路は下記「クラウド deploy」）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime の5つ。
-  Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する
+  Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する。
+  これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（決定65。WebSocket API は共有）
 - ウォレット（AgentCore Payments）は ap-southeast-1（AgentCore Payments が東京リージョン非対応のため、ここだけクロスリージョン呼び出し）
 - 買い手エージェントの配線は `aws-blocks/buyer-agent.ts`、x402 支払いは `aws-blocks/payments/`
   （@x402/mcp のラッパは structuredContent を落とすため使わず、素の callTool を2段で叩く）
@@ -48,6 +49,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   `src/mcp-apps-host.ts` が売り手の `ui://` リソース（空の表示器。生成物は含まない）を無課金で直接取得し、MCP Apps のホスト（`AppBridge`）
   として sandbox iframe に描画する。買えたページは会話の中のカードに描き（決定50）、再開した会話の買い置きと
   購入履歴タブの一覧は「表示」を押したものだけを載せる
+- 依頼 1 回ごとに、依頼の吹き出しの直後へ途中経過の折りたたみを出す（決定65）。エージェントの動き・見積もり・署名・
+  売り手の経過（MCP の `notifications/progress`）・決済の確定（取引へのリンク）・受け取りを平易な文で積み、待ち時間を数える。
+  進行中は開き、終われば閉じて要約だけを残す。その場限りで、読み込み直すと消える。規則は `src/timeline.ts`、
+  購入の経過の形と送り口は `aws-blocks/progress.ts`
 - 支払額は購入 1 件ごとに見せる（決定60）。売り手の価格は依頼の規模で変わるため（売り手側 決定56）、
   購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
   ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）

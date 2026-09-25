@@ -576,6 +576,67 @@ h3 {
   font-size: 0.9em;
 }
 
+/* ── 依頼 1 回の途中経過（決定65） ─────────────────────────── */
+/* 依頼の吹き出しの直後に置く折りたたみ。進行中は開き、終われば閉じて要約だけ残す。
+   吹き出しと区別するため、幅いっぱいの細い枠にし、行の頭に主語の札を付ける */
+.timeline {
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  border: 1px dashed var(--app-tint-border);
+  border-radius: var(--pico-border-radius);
+  background: var(--app-surface);
+  font-size: 0.85em;
+}
+
+.timeline > summary {
+  margin: 0;
+  color: var(--pico-muted-color);
+}
+
+.timeline-rows {
+  margin: 0.4rem 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.timeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  margin: 0 0 0.25rem;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.timeline-row.error .timeline-text {
+  color: var(--pico-del-color);
+}
+
+.timeline-actor {
+  flex: none;
+  min-width: 6.5em;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.85em;
+  text-align: center;
+  background: var(--app-neutral);
+}
+
+.timeline-actor.actor-agent { background: var(--app-tint); }
+.timeline-actor.actor-wallet { background: #e6f4ea; }
+.timeline-actor.actor-seller { background: var(--app-warn); }
+.timeline-actor.actor-chain { background: #efe7f7; }
+
+.timeline-term {
+  color: var(--pico-muted-color);
+  font-size: 0.8em;
+}
+
+.timeline-waiting:empty {
+  display: none;
+}
+
 /* ── 会話の中の購入カード（決定50） ─────────────────────────── */
 /* 吹き出しと違い、幅いっぱいを使う。買えたページはここに描く */
 .purchase-card {

@@ -227,6 +227,34 @@ describe('orderChatNodes', () => {
       { kind: 'purchase', id: 'r-1' },
     ]);
   });
+
+  // 決定65: 依頼 1 回の途中経過は、その依頼の吹き出しの直後（購入カードより前）に入る
+  it('途中経過は錨の吹き出しの直後、購入カードより前に入る', () => {
+    expect(
+      orderChatNodes(
+        ['u1', 'a1', 'u2'],
+        [{ resultId: 'r-1', afterMessageId: 'u1' }],
+        [
+          { id: 't-1', afterMessageId: 'u1' },
+          { id: 't-2', afterMessageId: 'u2' },
+        ],
+      ),
+    ).toEqual([
+      { kind: 'message', id: 'u1' },
+      { kind: 'timeline', id: 't-1' },
+      { kind: 'purchase', id: 'r-1' },
+      { kind: 'message', id: 'a1' },
+      { kind: 'message', id: 'u2' },
+      { kind: 'timeline', id: 't-2' },
+    ]);
+  });
+
+  it('錨の無い途中経過は末尾に置く', () => {
+    expect(orderChatNodes(['m1'], [], [{ id: 't-1', afterMessageId: null }])).toEqual([
+      { kind: 'message', id: 'm1' },
+      { kind: 'timeline', id: 't-1' },
+    ]);
+  });
 });
 
 describe('retargetAnchor', () => {
