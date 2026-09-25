@@ -84,6 +84,10 @@ export function createStreamingLambdaHandler(
       headers: headersOf(response),
     });
     if (!response.body) {
+      // 実行環境は応答の頭（ステータスとヘッダ）を最初の write で送る。write 無しに end すると
+      // 頭が落ち、OPTIONS の 204 と CORS ヘッダが消える（2026-09-25 にクラウドで実測）。
+      // 空の書き込みを 1 度通して頭を送らせる
+      stream.write("");
       stream.end();
       return;
     }

@@ -110,6 +110,12 @@ describe("Lambda Function URL アダプタ（レスポンスストリーミン�
   function fakeStream() {
     const sink = new PassThrough();
     const chunks: Buffer[] = [];
+    let writes = 0;
+    const write = sink.write.bind(sink);
+    sink.write = ((...args: Parameters<typeof write>) => {
+      writes += 1;
+      return write(...args);
+    }) as typeof sink.write;
     sink.on("data", (chunk: Buffer) => chunks.push(chunk));
     let metadata: Record<string, unknown> | undefined;
     const from = (writable: Writable, meta: Record<string, unknown>) => {
@@ -120,6 +126,7 @@ describe("Lambda Function URL アダプタ（レスポンスストリーミン�
       sink,
       from,
       metadata: () => metadata,
+      writes: () => writes,
       text: () => Buffer.concat(chunks).toString("utf-8"),
     };
   }
@@ -170,6 +177,9 @@ describe("Lambda Function URL アダプタ（レスポンスストリーミン�
       headers: { "access-control-allow-origin": "*" },
     });
     expect(stream.sink.writableEnded).toBe(true);
+    // Lambda の実行環境は応答の頭を最初の write で送る。write 無しに end すると頭が落ち、
+    // 204 と CORS ヘッダが消えてプリフライトが通らなくなる（2026-09-25 にクラウドで実測）
+    expect(stream.writes()).toBeGreaterThan(0);
   });
 
   it("リクエストへの変換はバッファ版と同じ", async () => {

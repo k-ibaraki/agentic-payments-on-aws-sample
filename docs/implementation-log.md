@@ -32,7 +32,32 @@
   経過に購入 ID（`resultId`）を持たせ、重複の判定と並べ替えを購入ごとにした（advisor の指摘）
 - SSE の本文を流し終えたら後始末する（`closeWhenDone`）。閉じてから後始末すると、読み手の `pipeline` が先に終わって
   Lambda が止まり、後始末が途中で切れ得るので、後始末を済ませてから閉じる
-- 手元の `billing-mcp/parameter.ts`（gitignore）に古い `price` 欄が残っていて `pnpm typecheck` が落ちる。今回の変更とは無関係なので触っていない
+- 手元の `billing-mcp/parameter.ts`（gitignore）は 9/3 時点のもので、`price` 欄が残り（`pnpm typecheck` が落ちる）、
+  判定モデル（Haiku）の許可と AppConfig の拡張レイヤーの ARN が抜けていた。このまま `cdk diff` を取ると、拡張レイヤー・
+  `APPCONFIG_*`・価格表の読み取り権限を外す差分が出た（deploy していれば稼働中の `judge: "jev"` が効かなくなっていた）。
+  9/24 と同じく deploy 済みの Lambda の設定から組み直し、差分がコードと `InvokeMode` だけになることを確かめてから deploy した
+
+### 確かめたこと（ローカルで実決済 1 回、ユーザーの確認を取って）
+
+- 売り手 `pnpm dev`、買い手 `npm run dev`（`PAYMENT_*` は Amplify アプリの環境変数から読んで渡した）。Playwright で
+  ローカルの利用者（架空のアドレス）を作り、「generateHtml で、自己紹介カードのページを1枚だけ作ってください。」を 1 回送った
+- 経過はその場で流れた。売り手の「決済が確定しました。ページの生成を始めます」は生成（約 37 秒）の前に届き、待ち時間はそこから
+  数え直された。終わると閉じて「途中経過（13 件・所要 50 秒・支払い 0.1 USDC）」になった。残高は 2.95 → 2.85 USDC。
+  購入カードは従来どおり経過の下に描けた
+
+### 売り手の deploy と、そこで踏んだこと（ユーザーの確認を取って）
+
+- 1 回目の deploy の後、OPTIONS（CORS のプリフライト）が `200 application/octet-stream` で返り、`204` と CORS ヘッダが消えた。
+  レスポンスストリーミングでは、実行環境が応答の頭（ステータスとヘッダ）を最初の `write` で送る。本文の無い応答で `write` を
+  せずに `end` すると頭が落ちる。この間、クラウドの買い手画面ではブラウザが `ui://` を直接取れず、購入カードの表示が失敗する
+  状態だった（支払いと購入そのものは通る）。本文が無いときも空の書き込みを 1 度通すよう直し、テストで固定して再 deploy した
+  （途中で AWS の資格情報が切れ、再ログインを待った）
+- 再 deploy の後に確かめた: `McpEndpointUrl` は変わらず Amplify の `BILLING_MCP_URL` と同じ。OPTIONS は `204` と CORS ヘッダ、
+  `initialize` と `ui://` の `resources/read` は JSON と CORS ヘッダ、通知（`notifications/initialized`）は `202`。
+  `progressToken` 付きで支払い無しの `generate-html` を呼ぶと、SSE で「判定モデル Jev が依頼を読み、価格帯を「梅」と判定しました」が
+  402 より先に届いた。開示の目安は 6,500 トークンで、稼働中の価格表（版 7、`judge: "jev"`）が deploy 後も効いている
+- 買い手（Amplify Hosting）は PR のマージ後の再ビルドで経過の表示が入る。それまでは、ローカルの `npm run dev` を deploy 済みの
+  売り手に繋いで見せる
 
 ## 2026-09-24: PR #33（決定64）のマージ後、売り手を本番に deploy する
 
