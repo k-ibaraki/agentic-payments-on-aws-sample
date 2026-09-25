@@ -41,7 +41,8 @@ async function toResult(
   response.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  // バッファ版は SSE を返せない（読み切れない）。ストリーミングの無い実行環境向けの退路
+  // バッファ版は SSE を最後まで溜めてから一度に返す（途中の経過は逐次には届かない）。
+  // ストリーミングの無い実行環境向けの退路
   const body = await response.text();
   return {
     statusCode: response.status,

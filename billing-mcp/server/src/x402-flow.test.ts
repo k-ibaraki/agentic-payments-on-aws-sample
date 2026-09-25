@@ -260,7 +260,7 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
         "x402/payment": payment,
       });
       expect(messages).toEqual([
-        "支払いの署名を受け取りました。決済を確定しています",
+        "支払いの署名を受け取りました。中身を確かめています",
         "決済が確定しました。ページの生成を始めます",
         "ページを生成しました",
       ]);
@@ -276,7 +276,20 @@ describe("x402 の往復（実クライアント × 偽 facilitator）", () => {
       facilitator.failNextSettle();
       const { messages } = await callWithProgress({ "x402/payment": payment });
       expect(messages).toEqual([
-        "支払いの署名を受け取りました。決済を確定しています",
+        "支払いの署名を受け取りました。中身を確かめています",
+      ]);
+    });
+
+    // 経過の通知は門番より外にある。門番が弾く支払いに「決済が確定した」とは言わない
+    it("門番が弾いた支払いには、決済の確定を知らせない", async () => {
+      const payment = await capturePaymentPayload();
+      payment.payload.authorization.validBefore = "1000000000";
+      const { result, messages } = await callWithProgress({
+        "x402/payment": payment,
+      });
+      expect(result.isError).toBe(true);
+      expect(messages).toEqual([
+        "支払いの署名を受け取りました。中身を確かめています",
       ]);
     });
 

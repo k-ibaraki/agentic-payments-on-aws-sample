@@ -99,7 +99,9 @@ type ToolHandler<TArgs, TResult> = (
 
 /**
  * 有料ツールのいちばん外側を包む。支払いの無い呼び出し（1 往復目）では判定の結果を、
- * 支払い付きの呼び出し（2 往復目）では決済に進むことを、処理の前に知らせる
+ * 支払い付きの呼び出し（2 往復目）では署名を受け取ったことを、処理の前に知らせる。
+ * ここは門番（payment-guard.ts）と支払いの検証より外なので、決済に進むとは言わない。
+ * 確定は、それらを通り抜けた後に announceGeneration が知らせる
  */
 export function announcePricing<TArgs, TResult>(
   handler: ToolHandler<TArgs, TResult>,
@@ -110,7 +112,7 @@ export function announcePricing<TArgs, TResult>(
     const meta = isRecord(extra) ? extra._meta : undefined;
     const paying = isRecord(meta) && meta[PAYMENT_META_KEY] !== undefined;
     const message = paying
-      ? "支払いの署名を受け取りました。決済を確定しています"
+      ? "支払いの署名を受け取りました。中身を確かめています"
       : pricing && pricingMessage(pricing);
     if (message) await report(message);
     return await currentReporter.run(

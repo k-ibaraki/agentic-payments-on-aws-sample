@@ -133,7 +133,7 @@ describe("announcePricing", () => {
     ]);
   });
 
-  it("支払い付きの呼び出しでは、署名を受け取って決済に進むことを知らせる", async () => {
+  it("支払い付きの呼び出しでは、署名を受け取ったことだけを知らせる（確定は門番と決済の後）", async () => {
     const { extra, sendNotification } = extraWith({
       progressToken: "t",
       payment: { x: 1 },
@@ -143,7 +143,7 @@ describe("announcePricing", () => {
       extra,
     );
     expect(messagesOf(sendNotification)).toEqual([
-      "支払いの署名を受け取りました。決済を確定しています",
+      "支払いの署名を受け取りました。中身を確かめています",
     ]);
   });
 
@@ -186,7 +186,7 @@ describe("announceGeneration", () => {
       });
     await announcePricing(paidLike, undefined)({}, extra);
     expect(messagesOf(sendNotification)).toEqual([
-      "支払いの署名を受け取りました。決済を確定しています",
+      "支払いの署名を受け取りました。中身を確かめています",
       "決済が確定しました。ページの生成を始めます",
       "ページを生成しました",
     ]);
