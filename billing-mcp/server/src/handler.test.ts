@@ -106,7 +106,7 @@ describe("Lambda Function URL アダプタ", () => {
 
 // 決定65: 経過の通知を途中で届けるため、Function URL はレスポンスストリーミングで返す
 describe("Lambda Function URL アダプタ（レスポンスストリーミング）", () => {
-  /** awslambda.HttpResponseStream.from の代わり。渡された応答の頭（metadata）を控える */
+  /** awslambda.HttpResponseStream.from の代わり。渡されたステータスとヘッダ（metadata）を控える */
   function fakeStream() {
     const sink = new PassThrough();
     const chunks: Buffer[] = [];
@@ -131,7 +131,7 @@ describe("Lambda Function URL アダプタ（レスポンスストリーミン�
     };
   }
 
-  it("応答の頭を先に渡し、本文を流し終えたらストリームを閉じる", async () => {
+  it("ステータスとヘッダを先に渡し、本文を流し終えたらストリームを閉じる", async () => {
     const stream = fakeStream();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -177,7 +177,7 @@ describe("Lambda Function URL アダプタ（レスポンスストリーミン�
       headers: { "access-control-allow-origin": "*" },
     });
     expect(stream.sink.writableEnded).toBe(true);
-    // Lambda の実行環境は応答の頭を最初の write で送る。write 無しに end すると頭が落ち、
+    // Lambda の実行環境はステータスとヘッダを最初の write のときに送る。write 無しに end するとそれらが送られず、
     // 204 と CORS ヘッダが消えてプリフライトが通らなくなる（2026-09-25 にクラウドで実測）
     expect(stream.writes()).toBeGreaterThan(0);
   });

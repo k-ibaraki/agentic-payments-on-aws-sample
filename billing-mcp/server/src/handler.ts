@@ -67,7 +67,7 @@ export type ResponseStreamFactory = (
 
 /**
  * fetch ハンドラを、レスポンスストリーミングの Function URL ハンドラに変換する。
- * 応答の頭（ステータス・ヘッダ）を先に渡し、本文は届いた順に流す。SSE の途中の通知が
+ * ステータスとヘッダを先に渡し、本文は届いた順に流す。SSE の途中の通知が
  * 生成の終わりを待たずに買い手へ届く
  */
 export function createStreamingLambdaHandler(
@@ -84,9 +84,9 @@ export function createStreamingLambdaHandler(
       headers: headersOf(response),
     });
     if (!response.body) {
-      // 実行環境は応答の頭（ステータスとヘッダ）を最初の write で送る。write 無しに end すると
-      // 頭が落ち、OPTIONS の 204 と CORS ヘッダが消える（2026-09-25 にクラウドで実測）。
-      // 空の書き込みを 1 度通して頭を送らせる
+      // 実行環境はステータスとヘッダを最初の write のときに送る。write 無しに end すると
+      // それらが送られず、OPTIONS の 204 と CORS ヘッダが消える（2026-09-25 にクラウドで実測）。
+      // 空の書き込みを 1 度行って、ステータスとヘッダを確実に送らせる
       stream.write("");
       stream.end();
       return;

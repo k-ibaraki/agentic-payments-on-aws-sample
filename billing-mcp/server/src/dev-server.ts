@@ -56,7 +56,7 @@ const server = createServer((req, res) => {
       );
     } catch (error) {
       console.error("リクエスト処理に失敗しました", error);
-      // 流している途中で落ちたときは、頭を送り終えているので打ち切るだけにする
+      // 流している途中で落ちたときは、ステータスとヘッダを送り終えているので、接続を打ち切るだけにする
       if (res.headersSent) {
         res.destroy();
         return;

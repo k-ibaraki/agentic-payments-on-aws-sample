@@ -24,7 +24,7 @@ function progressTokenOf(meta: unknown): string | number | undefined {
 }
 
 // progress の値は同じトークンの中で増え続けなければならない（MCP の仕様）。
-// 包みの層ごとに報告の口を作るので、数は口ではなくプロセスで持つ（依頼をまたいでも増え続けるだけ）
+// 通知の送信関数はラッパーごとに作るので、progress の数は送信関数ではなくプロセス全体で持つ（依頼をまたいでも増え続けるだけ）
 let sequence = 0;
 
 /**
@@ -86,8 +86,9 @@ export function pricingMessage(pricing: PricingProgress): string | undefined {
   return undefined;
 }
 
-// 外側の包みが作った報告の口を、内側の包みへ引き継ぐ。`@x402/mcp` の支払いラッパーは内側の
-// ハンドラに { toolName, arguments, meta } しか渡さず、sendNotification が落ちるため。
+// いちばん外側のラッパー（announcePricing）で作った通知の送信関数を、内側のラッパー（announceGeneration）からも
+// 呼べるようにする。`@x402/mcp` の支払いラッパーは内側のハンドラに { toolName, arguments, meta } しか渡さず、
+// sendNotification が落ちるため。
 // 呼び出しごとの非同期の文脈に載せるので、バッチで呼び出しが並んでも混ざらない
 const currentReporter = new AsyncLocalStorage<ProgressReporter>();
 

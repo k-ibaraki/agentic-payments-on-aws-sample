@@ -169,8 +169,8 @@ describe("announceGeneration", () => {
   });
 
   // @x402/mcp は内側のハンドラに { toolName, arguments, meta } しか渡さず、sendNotification が落ちる。
-  // 外側の包み（announcePricing）が作った報告の口を引き継いで知らせる
-  it("支払いラッパーが extra を差し替えても、外側の口で知らせる", async () => {
+  // いちばん外側のラッパー（announcePricing）で作った通知の送信関数を、内側でも使って知らせる
+  it("支払いラッパーが extra を差し替えても、外側で作った送信関数で知らせる", async () => {
     const { extra, sendNotification } = extraWith({
       progressToken: "t",
       payment: { x: 1 },

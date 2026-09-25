@@ -61,7 +61,7 @@ export interface ProgressPublisher {
 }
 
 /**
- * 経過の送り口を作る。送信は 1 つずつ順に行う（並べて投げると届く順が入れ替わり得る）。
+ * 経過の送信処理を作る。送信は 1 つずつ順に行う（並べて投げると届く順が入れ替わり得る）。
  * 経過は飾りなので、送れなくても投げない
  */
 export function createProgressPublisher(

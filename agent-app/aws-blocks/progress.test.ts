@@ -1,4 +1,4 @@
-// 購入の経過（決定65）の送り口のテスト。順序と「飾りなので止めない」ことを固定する
+// 購入の経過（決定65）の送信処理のテスト。順序と「飾りなので止めない」ことを固定する
 import { describe, expect, it, vi } from 'vitest';
 import { createProgressPublisher, progressEventSchema, SELLER_MESSAGE_LIMIT, sellerStep } from './progress.js';
 

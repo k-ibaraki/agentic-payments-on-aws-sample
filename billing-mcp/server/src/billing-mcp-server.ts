@@ -190,7 +190,7 @@ export async function createBillingMcpServer(
   // 支払いラッパーの外側を門番で包む。上流は authorization の中身を見ずに settle へ
   // 渡すため、明らかに要求に合わない支払いをここで止める（payment-guard.ts、U9）
   // 経過の通知（決定65、progress.ts）は門番の外と、支払いラッパーの内側に挟む。
-  // 内側の包みに来た時点で決済は確定している（upfront。決定21）
+  // 支払いラッパーの内側のラッパー（announceGeneration）に処理が来た時点で、決済は確定している（upfront。決定21）
   registerGenerateHtmlTool(
     server,
     announcePricing(

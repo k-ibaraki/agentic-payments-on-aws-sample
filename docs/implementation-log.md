@@ -9,7 +9,7 @@
 - ユーザー依頼（デモで魅せるため、売り手を含めた細かい動きを、普通の人にも分かる形で随時チャット欄に流したい）を
   grill-me で詰めた。決めたことは決定65 の理由欄にまとめた
 - 売り手（billing-mcp）: 依頼に `progressToken` が付いていれば SSE で応え、`notifications/progress` で経過を流すようにした
-  （`server/src/progress.ts`）。判定モデルは判定の結果に自分の名前（`Haiku` / `Jev`）を添え、見積もりが運ぶ。
+  （`server/src/progress.ts`）。判定モデルは判定の結果に自分の名前（`Haiku` / `Jev`）を含めて返し、価格の見積もり結果（`ResolvedQuote`）がその名前を持つ。
   Lambda の入口はレスポンスストリーミング（`awslambda.streamifyResponse`）にし、Function URL を `RESPONSE_STREAM` にした。
   ローカルの `dev-server.ts` も本文を読み切らずに流す
 - 買い手（agent-app）: 有料ツールの呼び出し（`paid-tool-caller.ts`）が見積もり・署名・売り手の経過・決済の確定を知らせ、
@@ -22,8 +22,8 @@
 ### 判断・つまずき
 
 - `@x402/mcp` の支払いラッパーは、内側のハンドラに `{ toolName, arguments, meta }` しか渡さない。MCP SDK の `extra`
-  （`sendNotification` を持つ）が落ちるため、生成の前後の通知が送れなかった（結合テストで判明）。外側の包みが作った
-  報告の口を `AsyncLocalStorage` で内側へ引き継いで解いた
+  （`sendNotification` を持つ）が落ちるため、生成の前後の通知が送れなかった（結合テストで判明）。いちばん外側の
+  ラッパーで通知の送信関数を作り、`AsyncLocalStorage` に置いて内側の生成処理からも呼べるようにして解いた
 - 応答の形は依頼ごとに選ぶ。トランスポートは依頼ごとに作り直しているので、`enableJsonResponse` を
   `progressToken` の有無で切り替えられる。これで通知を求めないクライアントの見え方は変わらず、既存のテストもそのまま通る
 - 判定モデル名は `accepts[].extra` に載せない。2 往復目は判定しないので名前が分からず、照合が崩れる（決定55）。
@@ -48,8 +48,8 @@
 ### 売り手の deploy と、そこで踏んだこと（ユーザーの確認を取って）
 
 - 1 回目の deploy の後、OPTIONS（CORS のプリフライト）が `200 application/octet-stream` で返り、`204` と CORS ヘッダが消えた。
-  レスポンスストリーミングでは、実行環境が応答の頭（ステータスとヘッダ）を最初の `write` で送る。本文の無い応答で `write` を
-  せずに `end` すると頭が落ちる。この間、クラウドの買い手画面ではブラウザが `ui://` を直接取れず、購入カードの表示が失敗する
+  レスポンスストリーミングでは、実行環境がステータスとヘッダを最初の `write` のときに送る。本文の無い応答で `write` を
+  せずに `end` すると、それらが送られない。この間、クラウドの買い手画面ではブラウザが `ui://` を直接取れず、購入カードの表示が失敗する
   状態だった（支払いと購入そのものは通る）。本文が無いときも空の書き込みを 1 度通すよう直し、テストで固定して再 deploy した
   （途中で AWS の資格情報が切れ、再ログインを待った）
 - 再 deploy の後に確かめた: `McpEndpointUrl` は変わらず Amplify の `BILLING_MCP_URL` と同じ。OPTIONS は `204` と CORS ヘッダ、
