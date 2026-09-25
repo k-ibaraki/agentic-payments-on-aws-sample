@@ -11,8 +11,9 @@
 - 原因: bb-realtime は、共有の接続表とトークンの秘密値を、スタックの中で最初に作られた Realtime の配下に置く。
   途中経過用の Realtime `progress` を Agent より先に作ったため、持ち主が Agent 内蔵の `buyer/rt` から `progress` へ移り、
   接続表（`…-b-app-progress-connections`）とトークンの秘密値が新しく作られた。古い接続表は保持の設定で消されずに
-  スタックから外れた。古い表に付いた GSI を片付けるカスタムリソースは、担当ロールの権限がすでに新しい表へ向け直されて
-  いたため `dynamodb:DescribeTable` を拒まれ、3 回失敗したところで CloudFormation が諦めて `UPDATE_COMPLETE` になった
+  スタックから外れた。古い表には GSI を片付けるカスタムリソースが付いており、その担当ロールの権限は、この更新で
+  すでに新しい表だけに向け直されていた。そのため古い表への `dynamodb:DescribeTable` が拒まれ、削除は 3 回とも失敗した。
+  CloudFormation は 3 回目の失敗で削除を諦めてリソースを置き去りにし、スタックは `UPDATE_COMPLETE` になった
 - 影響: 接続表の中身はその時々の WebSocket の接続だけで、会話・購入履歴・支払いの記録には触れていない。実行時も
   合成時と同じ順で Realtime が作られる（`progress` が先）ので、Lambda が見る接続表は新しい表と一致する
 - 後始末: スタックから外れた古い接続表（`…-b-app-buyer-rt-connections`。中身 0 件）と古い秘密値の SSM パラメータ
