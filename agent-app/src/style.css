@@ -457,7 +457,7 @@ h3 {
 }
 
 /* 会話欄は高さの決まった flex の箱なので、既定の flex-shrink: 1 のままだと、中身が溢れたときに
-   拡大した購入カードが縮められる。溢れた分はスクロールに任せ、子は縮めない */
+   購入カードなどが縮められる。溢れた分はスクロールに任せ、子は縮めない */
 #chat-log > * {
   flex-shrink: 0;
 }
@@ -802,17 +802,17 @@ h3 {
 }
 
 /* ── 会話の中の購入カード（決定50） ─────────────────────────── */
-/* 吹き出しと違い、幅いっぱいを使う。買えたページはここに描く */
+/* 買えたページはここに描く。幅はテキストの吹き出し（.msg の max-width）とそろえて左に寄せる（決定68） */
 .purchase-card {
   display: flex;
   flex-direction: column;
+  align-self: flex-start;
   gap: 0.4rem;
+  width: 85%;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--app-tint-border);
   border-radius: var(--pico-border-radius);
   background: var(--app-tint);
-  /* 拡大して上端に合わせるとき（index.ts）、会話欄の内側の余白ぶん離して止める */
-  scroll-margin-block: 0.75rem;
 }
 
 /*
@@ -827,16 +827,41 @@ h3 {
   background: #fff;
 }
 
-/* 拡大ボタン（index.ts）で、カードごと会話欄の見えている高さいっぱいに広げ、iframe に残りを回す。
-   iframe は DOM の上で動かさない（動かすと読み込み直しになり、View の接続が切れる。決定50） */
-.purchase-card.expanded {
-  height: 100cqh;
+/*
+ * 拡大ボタン（index.ts）はカードに popover を付け、開くと最前面の層（top layer）で画面いっぱいのモーダルにする（決定68）。
+ * popover を付けるとブラウザ既定の [popover] の見た目（position: fixed・inset: 0・margin: auto・overflow: auto など）が
+ * 当たるので、閉じている間はそれを打ち消して会話の流れの中に置く。display・枠線・余白・背景は上の .purchase-card が
+ * 持つ（作者のスタイルはブラウザ既定に詳細度によらず勝つ）
+ */
+.purchase-card[popover] {
+  position: static;
+  inset: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  color: inherit;
 }
 
-.purchase-card.expanded > .purchase-preview {
+/* 開いた姿。画面の端から少し内側まで広げ、iframe に残りの高さを回す（後に書いたこちらが上の 0,2,0 に勝つ） */
+.purchase-card:popover-open {
+  position: fixed;
+  inset: min(2rem, 4vw);
+  /* 通常時の align-self: flex-start は、固定配置の箱にも当たって高さを中身の分まで縮める（Chromium で実測）。
+     上下の inset いっぱいに伸ばすため stretch に戻す */
+  align-self: stretch;
+  width: auto;
+  height: auto;
+  box-shadow: 0 0.5rem 2rem rgba(15, 30, 50, 0.3);
+}
+
+.purchase-card:popover-open > .purchase-preview {
   flex: 1 1 auto;
   height: auto;
-  min-height: 240px;
+  min-height: 0;
+}
+
+.purchase-card::backdrop {
+  background: rgba(15, 30, 50, 0.45);
 }
 
 /* 見出しの行の右端に置く。行を太らせないよう、一覧の行のボタン（.purchase button）より小さくする */

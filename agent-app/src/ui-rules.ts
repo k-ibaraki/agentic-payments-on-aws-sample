@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -268,12 +268,12 @@ export async function establishedTogether(chat: Promise<void>, progress: Promise
 }
 
 /**
- * 会話の中の購入カードの拡大ボタン（決定67）。既定の高さは会話欄の半分で、押すと会話欄の見えている
- * 高さいっぱいに広げ、もう一度押すと戻す。押した状態は文言の切り替えで表す（aria-pressed を併せると、
- * 文言も状態も変わって読み上げが二重に切り替わるため使わない）
+ * 会話の中の購入カードの拡大ボタン（決定67。拡大の先は決定68 で画面いっぱいのモーダルに改めた）。
+ * 押すとカードを画面いっぱいに広げ、同じボタンが「閉じる」に替わる。押した状態は文言の切り替えで表す
+ * （aria-pressed を併せると、文言も状態も変わって読み上げが二重に切り替わるため使わない）
  */
 export function previewExpandButton(expanded: boolean): { label: string; title: string } {
   return expanded
-    ? { label: '縮小', title: '既定の高さに戻す' }
-    : { label: '拡大', title: '会話欄の高さいっぱいに広げる' };
+    ? { label: '閉じる', title: '会話の中の元の大きさに戻す（Esc でも閉じる）' }
+    : { label: '拡大', title: '画面いっぱいに広げる' };
 }
