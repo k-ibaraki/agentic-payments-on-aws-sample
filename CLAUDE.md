@@ -110,7 +110,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - 支払いの枠（PaymentSession）と依頼回数の上限は利用者（Cognito の sub）ごと（決定39・40）。
   ウォレットは 1 つを共有したまま。`PAYMENT_SESSION_MINUTES` は 15 以上（AgentCore Payments の下限）
 - ウォレット残高は `GetPaymentInstrumentBalance` で取り、画面に出す（決定42。`PAYMENT_CONNECTOR_ID` が要る）。
-  支出上限は利用者が画面で自分の分を変えられ、変更時に現在のセッションを破棄する（決定43。天井なし）
+  支出上限は利用者が画面で自分の分を変えられ、変更時に現在のセッションを破棄する（決定43。天井なし）。
+  1回の支払い上限（`PAYMENT_MAX_AMOUNT` が既定）も利用者が画面で変えられるが、こちらはセッションを破棄しない（決定66）
 - 自己サインアップは既定で閉じている（決定36）。`npm run dev` / `npm run test:e2e` は `BUYER_SELF_SIGNUP=true` を
   付けて開ける。クラウドの利用者は Cognito コンソールで作る
 - 実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は合成時の環境変数（Amplify はコンソールのアプリ単位・ブランチ単位、
