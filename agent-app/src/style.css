@@ -2,9 +2,10 @@
  * 買い手の画面の見た目。Pico.css（classless）を土台に、淡いブルー系のテーマと、
  * この画面だけの独自要素（吹き出し・会話の中の購入カード・購入履歴・イベントログ）を重ねる。
  *
- * 構成（決定44・50・51・62）: ヘッダー → 未サインイン時のサインインカード →
- * タブ（依頼 / ウォレット / 購入履歴）。依頼とウォレットの面は一列、購入履歴は一覧とプレビューの二段組。
- * 内部情報の折りたたみは、広い画面では本文の左の側面パネル、狭い画面では本文の下に置く。
+ * 構成（決定44・50・51・62・67）: ヘッダーの 1 行（題名・タブ・利用者）→ 未サインイン時のサインインカード →
+ * タブで切り替える面（依頼 / ウォレット / 購入履歴）。依頼の面は画面の高さに収め、会話欄の中だけを
+ * スクロールさせる。ウォレットの面は一列、購入履歴は一覧とプレビューの二段組。
+ * 内部情報の折りたたみは、広い画面では本文の右の側面パネル、狭い画面では本文の下に置く。
  *
  * TypeScript から import せず index.html の <link> で読むのは、tsconfig に
  * vite/client の型が無く `import './style.css'` が `npm run build` の tsc で落ちるため。
@@ -51,18 +52,31 @@
  * 1280px で頭打ちにする（決定51 で一列になった後も、会話の中に描く買えたページに
  * 幅を回すため狭めていない）。
  * セレクタに .container を含めるのは、要素セレクタだけではクラス（.container）に
- * 詳細度で負けて上限が効かないため。
+ * 詳細度で負けて上限が効かないため（ヘッダーと main は .app-shell の子。決定67）。
  * Pico は 576px 以上で左右の padding を 0 にし、余白を max-width との差で作る。上限を 1280px に
  * 上げるとその差が消え、1280px 未満では本文が画面の端（決定62 からは側面パネル）に張り付く。
  * そこで padding を常に付け、その分だけ max-width を足して本文の上限 1280px は保つ
  */
-body > .container {
+.app-shell > .container {
   max-width: calc(1280px + 2 * var(--pico-spacing));
   padding-inline: var(--pico-spacing);
 }
 
-body > main.container {
-  padding-block: 1.5rem 2.5rem;
+.app-shell > main.container {
+  padding-block: 1rem 2.5rem;
+}
+
+/* 読み上げには残し、画面からは消す（Pico には無いので持つ）。依頼の面の見出しに使う（決定67） */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Pico の既定は記事向けで大きい。画面の見出しとしては章題くらいの大きさに落とす */
@@ -94,18 +108,68 @@ h3 {
 }
 
 /* ── ヘッダー ─────────────────────────────────────────────── */
+/*
+ * 題名・タブ・利用者を 1 行に並べる（決定67）。入りきらない幅では 2 行に折り返す。
+ * 題名を短くするかは画面幅ではなくヘッダーそのものの幅で決める（コンテナクエリ）。
+ * 内部情報の側面パネルを開くと、同じ画面幅でもヘッダーは細くなるため
+ */
 .app-header {
-  padding-block: 0.5rem;
+  padding-block: 0.25rem;
   border-bottom: 1px solid var(--pico-muted-border-color);
+  container-type: inline-size;
+}
+
+.app-header nav {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  column-gap: 0.75rem;
 }
 
 .app-header nav ul {
   align-items: center;
 }
 
+/* Pico の nav li は上下に 1rem の余白を持ち、ヘッダーの行が高くなる。行の高さはタブのボタンで決まるので詰める */
+.app-header nav li {
+  padding-block: 0.35rem;
+}
+
+.app-header strong {
+  white-space: nowrap;
+}
+
+/* 利用者とサインアウトは右端に寄せる */
+.app-header nav > ul.signed-in-only {
+  margin-left: auto;
+}
+
+/*
+ * 長いメールアドレスで行を押し広げないよう、省略して全体は title で見せる（index.ts）。
+ * 以前付けていた「サインイン中:」の前置きは、本文の上限 1280px の中では題名・タブと 1 行に収まらないので外した（決定67）
+ */
 #auth-status {
+  max-width: 12em;
+  overflow: hidden;
   color: var(--pico-muted-color);
   font-size: 0.9em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+ * ヘッダーが細いときは、題名の前半（Agentic Payments サンプル —）を隠し、利用者名を詰めて 1 行に収める。
+ * 60rem は、題名を略さずに題名・タブ・利用者が 1 行に収まる幅（実測で約 59.3rem）。rem で書くのは、
+ * Pico が画面幅に応じて基準の文字の大きさ（1280px 以上で 20px）を変え、中身の幅もそれに比例するため。
+ * 8em は、側面パネルを開いた 1280px 幅（ヘッダー 880px）で 1 行に収まる上限（実測）
+ */
+@container (max-width: 60rem) {
+  .title-prefix {
+    display: none;
+  }
+
+  #auth-status {
+    max-width: 8em;
+  }
 }
 
 /*
@@ -189,38 +253,57 @@ h3 {
   display: none;
 }
 
-/* ── タブ（決定50・51。依頼 / ウォレット / 購入履歴） ────────────── */
+/* ── タブ（決定50・51。依頼 / ウォレット / 購入履歴。決定67 でヘッダーの行へ） ── */
 /*
  * display はここでは指定しない。.signed-in-only（display: none）と詳細度が並び、
  * 後に書いたこちらが勝って未サインインでもタブが見えてしまうため。
  * 見せるのはサインイン後だけなので、下の .signed-in .tabs（0,2,0）で flex にする
- * （そちらは .signed-in .signed-in-only { display: block } と同じ詳細度で、後勝ちする）
+ * （そちらは .signed-in .signed-in-only { display: block } と同じ詳細度で、後勝ちする）。
+ * Pico は role="group" を幅 100%・下余白付きの連結した入力群として描く。ヘッダーの行の中では内容の幅に留める。
+ * フォーカスの輪も、Pico はグループ全体の box-shadow で描く（中のボタンの輪は消す）。タブはボタンが離れて
+ * 並ぶので、グループの輪はやめ、下の .tab:focus-visible でボタンごとに描く
  */
 .tabs {
   gap: 0.25rem;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--app-tint-border);
+  width: auto;
+  margin: 0;
+  box-shadow: none;
 }
 
 .signed-in .tabs {
   display: flex;
 }
 
-.tab {
+/*
+ * .tabs を前に付けるのは、Pico の [role=group] > :not(:first-child) などが連結のために角丸と余白を
+ * 書き換え、.tab 単独（詳細度 0,1,0）では負けるため
+ */
+.tabs .tab {
   /* Pico は role="group" の子に flex: 1 を掛けて等幅に伸ばす（連結した入力群のため）。
      タブは文字ぶんの幅で左に並べたいので、伸縮を止める */
   flex: 0 0 auto;
   margin: 0;
-  padding: 0.45rem 1.1rem;
+  padding: 0.3rem 0.75rem;
   border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--pico-border-radius) var(--pico-border-radius) 0 0;
+  border-radius: var(--pico-border-radius);
   background: transparent;
   color: var(--pico-muted-color);
   font-size: 0.95em;
 }
 
-.tab[aria-pressed='true'] {
+/* Pico は連結のため 2 枚目以降に margin-left: -1px を当てる（[role=group] [type=button]:not(:first-child)）。
+   詳細度は同じ 0,3,0 なので、後に書いたこちらが勝つ */
+.tabs .tab:not(:first-child) {
+  margin-left: 0;
+}
+
+/* Pico は [role=group] [type=button]:focus などで box-shadow: none にする。いちばん強いものが同じ 0,3,0 なので、
+   後に書いたこちらが勝つ（box-shadow には遷移が掛かるので、測るときは遷移が終わってから） */
+.tabs .tab:focus-visible {
+  box-shadow: 0 0 0 var(--pico-outline-width) var(--pico-primary-focus);
+}
+
+.tabs .tab[aria-pressed='true'] {
   border-color: var(--app-tint-border);
   background: var(--app-tint);
   /* button の中では --pico-color がボタン自身の文字色（primary の上の白）に解決されるので使わない */
@@ -231,6 +314,50 @@ h3 {
 /* タブで隠している面は、サインイン後に見せる規則（.signed-in .signed-in-only）より優先して隠す */
 .signed-in .signed-in-only[hidden] {
   display: none;
+}
+
+/* ── 依頼の面を画面の高さに収める（決定67） ─────────────────────── */
+/*
+ * ヘッダーと本文（.app-shell）を画面の高さちょうどにし、残りの高さを会話欄に回す。ページ自体は
+ * スクロールさせず、会話欄の中だけをスクロールさせる。入力欄は常に画面の下端に見える。
+ * 高さのある画面ほど会話欄も伸びる（上限は設けない）。ウォレットと購入履歴の面は中身が画面より
+ * 長くなり得るので、これまでどおりページをスクロールさせる（body の data-tab で見分ける。index.ts の showTab）。
+ * min-height は、ごく低い画面で会話欄が潰れきらないための下限。これを割る高さではページがスクロールする。
+ * 狭い画面の内部情報は .app-shell の下に回るので、ページのスクロールで届く
+ */
+.signed-in[data-tab='chat'] .app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 30rem;
+}
+
+.signed-in[data-tab='chat'] .app-shell > main.container {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding-block: 0.75rem;
+}
+
+/* :not([hidden]) が要るのは、ID を含むこのセレクタが .signed-in .signed-in-only[hidden]（0,3,0）に
+   詳細度で勝ち、隠したはずの面まで見せてしまうため */
+.signed-in #panel-chat:not([hidden]) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 区画の上下の余白は Pico の --pico-block-spacing-vertical から作られる（article の padding と、
+   header の負の margin・padding・下余白）。変数ごと詰めて、見出しの行との釣り合いを保つ */
+.chat-panel {
+  --pico-block-spacing-vertical: 0.6rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* ── 面の中の区画 ──────────────────────────────────────────── */
@@ -255,17 +382,15 @@ h3 {
   font-size: 0.85em;
 }
 
-/* ── 残高と残枠の帯（決定47） ───────────────────────────────── */
-/* 依頼の枠の中で、購入で減るのがひと目で分かるよう数字を大きく出す */
+/* ── 残高と残枠（決定47。決定67 で独立の帯から操作の行へ） ──────────── */
+/*
+ * 購入で減るのがひと目で分かるよう、依頼の面の上端に常に出す。会話欄に高さを回すため、帯の枠と
+ * 大きな数字はやめて本文くらいの太字にした。減った合図は下の「光らせる」演出が担う
+ */
 .wallet-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem 2rem;
-  margin-bottom: 0.5rem;
-  padding: 0.6rem 1rem;
-  border: 1px solid var(--app-tint-border);
-  border-radius: var(--pico-border-radius);
-  background: var(--app-tint);
+  gap: 0.2rem 1.5rem;
 }
 
 .wallet-strip > div {
@@ -283,8 +408,9 @@ h3 {
 .strip-value {
   padding: 0 0.3rem;
   border-radius: 4px;
-  font-size: 1.4em;
+  font-size: 1.05em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /*
@@ -302,18 +428,55 @@ h3 {
 }
 
 /* ── チャット ─────────────────────────────────────────────── */
-/* 空でも「ここが会話の場」と分かるよう、面として見せる。伸びすぎたら中でスクロール */
+/* 会話欄と、空のときの案内を重ねる台。残りの高さはすべて会話欄に回す（決定67） */
+.chat-area {
+  display: flex;
+  position: relative;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-bottom: 0.75rem;
+}
+
+/*
+ * 空でも「ここが会話の場」と分かるよう、面として見せる。高さは .chat-area から受け、中でスクロールする。
+ * container-type: size は、購入カードの iframe の高さを会話欄の高さに対する割合で決めるため（cqh。決定67）。
+ * size を指定すると中身から高さが決まらなくなるが、高さは flex で与えているので困らない
+ */
 #chat-log {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.5rem;
-  min-height: 320px;
-  max-height: 70vh;
-  margin-bottom: 0.75rem;
+  min-height: 0;
   padding: 0.75rem;
   overflow: auto;
   border-radius: var(--pico-border-radius);
   background: var(--app-surface);
+  container-type: size;
+}
+
+/* 会話欄は高さの決まった flex の箱なので、既定の flex-shrink: 1 のままだと、中身が溢れたときに
+   拡大した購入カードが縮められる。溢れた分はスクロールに任せ、子は縮めない */
+#chat-log > * {
+  flex-shrink: 0;
+}
+
+/* 会話が空のときだけ出す案内（決定67）。会話欄の上に重ね、押しても下の会話欄に届くようにする */
+.chat-empty {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 1.5rem 12%;
+  text-align: center;
+  pointer-events: none;
+}
+
+#chat-log:not(:empty) + .chat-empty {
+  display: none;
 }
 
 .msg {
@@ -482,15 +645,16 @@ h3 {
 /*
  * 一覧の最小幅 280px + プレビューに 2 倍の比率を回して、プレビューが 420px ほど取れる幅から組む。
  * 高さは両列とも画面に合わせ、一覧は枠の中でスクロールさせる（下の行を押してもプレビューが見えている）。
- * 20rem はヘッダー・タブ・区画の見出しと説明文・区画と main の下の余白の合計（1440×900 で実測して
- * 合わせた）。ヘッダーや説明文が折り返す幅では少しはみ出すが、ページのスクロールで届く
+ * 16rem はヘッダー・区画の見出しと説明文・区画と main の下の余白の合計（1440×900 で実測して
+ * 合わせた。決定67 でタブをヘッダーの行へ上げたので 20rem から詰めた）。ヘッダーや説明文が折り返す幅では
+ * 少しはみ出すが、ページのスクロールで届く
  */
 @container (min-width: 720px) {
   .history-split {
     display: grid;
     grid-template-columns: minmax(280px, 1fr) 2fr;
     gap: 1rem;
-    height: max(24rem, calc(100vh - 20rem));
+    height: max(24rem, calc(100vh - 16rem));
   }
 
   #history {
@@ -647,14 +811,40 @@ h3 {
   border: 1px solid var(--app-tint-border);
   border-radius: var(--pico-border-radius);
   background: var(--app-tint);
+  /* 拡大して上端に合わせるとき（index.ts）、会話欄の内側の余白ぶん離して止める */
+  scroll-margin-block: 0.75rem;
 }
 
+/*
+ * 既定の高さは会話欄の高さの半分（決定67。cqh は #chat-log の中身の高さ）。低い画面で潰れないよう 240px を下限にする。
+ * 売り手の View は枠いっぱいに広がる作り（body が 100vh）なので、高さはホスト側のここで決まる
+ */
 .purchase-preview {
   width: 100%;
-  height: 420px;
+  height: max(240px, 50cqh);
   border: 1px solid var(--app-tint-border);
   border-radius: var(--pico-border-radius);
   background: #fff;
+}
+
+/* 拡大ボタン（index.ts）で、カードごと会話欄の見えている高さいっぱいに広げ、iframe に残りを回す。
+   iframe は DOM の上で動かさない（動かすと読み込み直しになり、View の接続が切れる。決定50） */
+.purchase-card.expanded {
+  height: 100cqh;
+}
+
+.purchase-card.expanded > .purchase-preview {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 240px;
+}
+
+/* 見出しの行の右端に置く。行を太らせないよう、一覧の行のボタン（.purchase button）より小さくする */
+.purchase .purchase-expand-btn {
+  min-width: 4rem;
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8em;
 }
 
 .purchase-card-status:empty {
@@ -738,27 +928,20 @@ h3 {
  * 本文（ヘッダーと main）は左の列の中で今までどおり 1280px を上限に中央へ寄り、パネルの幅のぶん
  * 細くなるのは画面が狭いときだけ。パネルはヘッダーの行まで縦に通す（ヘッダーだけ全幅にすると、
  * 題名と本文の左端がずれるため）。未サインインでは #internals が display: none なので、auto の列は 0 に潰れる。
- * 1024px は、パネル（20rem）を開いても本文に 700px ほど残る幅
+ * 1024px は、パネル（20rem）を開いても本文に 700px ほど残る幅。
+ * 決定67 でヘッダーと main を .app-shell に包んだので、左の列には .app-shell を 1 つ置く
  */
 @media (min-width: 1024px) {
   body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      'header side'
-      'main side';
-    grid-template-rows: auto 1fr;
+    grid-template-areas: 'shell side';
     min-height: 100vh;
   }
 
-  body > header {
-    grid-area: header;
-    width: 100%;
-  }
-
-  body > main {
-    grid-area: main;
-    width: 100%;
+  .app-shell {
+    grid-area: shell;
+    min-width: 0;
   }
 
   /* スクロールしても画面の右に貼り付け、ログは画面の高さいっぱいまで伸ばす */
@@ -835,16 +1018,8 @@ h3 {
  * 入力欄を 1 行使い、ボタンをその下に置く
  */
 @media (max-width: 576px) {
-  /* 横並びのままだとラベルが 1 文字ずつ縦に割れ、値も途中で改行される（390px で実測）。2 行に積む */
-  .wallet-strip {
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .strip-label,
-  .strip-value {
-    white-space: nowrap;
-  }
+  /* 残高と残枠は、ラベルと値をそれぞれ折り返さない（.strip-label / .strip-value の nowrap）ので、
+     幅が足りなければマスごと次の行へ回る。以前は縦に積む規則をここに置いていた（決定67 で外した） */
 
   /* 見出しと値を縦に積む（横 2 列では値の幅が足りない） */
   .wallet {

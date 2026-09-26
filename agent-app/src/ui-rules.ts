@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -27,7 +27,8 @@ export function findLastAssistant(messages: Array<{ role: string }>): number {
   return -1;
 }
 
-// ── 依頼の枠の帯（残高と残枠）と、購入中の取り直し（決定47） ──
+// ── 帯（依頼の面に常に出す残高と残枠。決定47）と、購入中の取り直し ──
+// 「帯」は `.wallet-strip` の呼び名。決定67 で独立した帯から操作の行の中の表示に変わったが、呼び名は残している
 
 /** 有料ツールの応答を待つ上限の既定（`BUYER_TOOL_TIMEOUT_MS`。決定31）。ブラウザは環境変数を知らないので既定に合わせる */
 export const BALANCE_WATCH_MAX_MS = 600_000;
@@ -264,4 +265,15 @@ export function createHostSlot<T extends { destroy(): void }>(create: () => Prom
  */
 export async function establishedTogether(chat: Promise<void>, progress: Promise<void> | undefined): Promise<void> {
   await Promise.all([chat, progress?.catch(() => undefined)]);
+}
+
+/**
+ * 会話の中の購入カードの拡大ボタン（決定67）。既定の高さは会話欄の半分で、押すと会話欄の見えている
+ * 高さいっぱいに広げ、もう一度押すと戻す。押した状態は文言の切り替えで表す（aria-pressed を併せると、
+ * 文言も状態も変わって読み上げが二重に切り替わるため使わない）
+ */
+export function previewExpandButton(expanded: boolean): { label: string; title: string } {
+  return expanded
+    ? { label: '縮小', title: '既定の高さに戻す' }
+    : { label: '拡大', title: '会話欄の高さいっぱいに広げる' };
 }

@@ -7,150 +7,161 @@
   <title>Agentic Payments サンプル — 買い手</title>
   <link rel="stylesheet" href="/src/style.css">
 </head>
-<body>
+<body data-tab="chat">
   <!--
-    画面の構成（決定44・47・50・51・62）:
-    ヘッダー（題名・サインイン中の利用者とサインアウト）
+    画面の構成（決定44・47・50・51・62・67）:
+    ヘッダーの 1 行（題名・タブ 3 枚・サインイン中の利用者とサインアウト。決定67 でタブをヘッダーの行へ上げた）
     → 未サインイン: 説明とサインインのカード
-    → サインイン後: タブ 3 枚（決定50 で決定44 の「タブ部品は使わない」を上書き。3 枚目は決定51）
-       ・依頼: 会話（残高と残枠の帯を含み、購入したページはこの中に描く）
+    → サインイン後: タブで切り替える面（決定50 で決定44 の「タブ部品は使わない」を上書き。3 枚目は決定51）
+       ・依頼: 会話。画面の高さに収め、会話欄の中だけをスクロールさせる（決定67）。上端の操作の行に
+         残高と残枠と「新規会話」を並べ、購入したページは会話欄の中に描く
        ・ウォレット: ウォレットと支払いの枠（残高・セッション・上限の変更・残高の推移）
        ・購入履歴: 左に会話をまたいだ購入の一覧、右に選んだ 1 件のプレビュー（決定62）
     内部情報（会話 ID・Realtime のチャンク。折りたたみ、既定で開く）は、広い画面では本文の右の
-    側面パネル、狭い画面では本文の下に置く（決定62。並べ替えは style.css の body の grid が担う）
+    側面パネル、狭い画面では本文の下に置く（決定62。並べ替えは style.css の body の grid が担う）。
+    ヘッダーと本文を .app-shell で包むのは、依頼の面で「ヘッダー + 本文」を画面の高さに収めつつ、
+    狭い画面の内部情報をその下（ページのスクロールで届く位置）に残すため（決定67）。
+    body の data-tab は開いている面の名前（index.ts の showTab が書き換える）
   -->
-  <header class="container app-header">
-    <nav aria-label="画面の題名と利用者">
-      <ul>
-        <li><strong>Agentic Payments サンプル — 買い手（agent-app）</strong></li>
-      </ul>
-      <ul class="signed-in-only">
-        <li id="auth-status"></li>
-        <!-- サインイン後は Authenticator（サインアウトの操作）をここへ移す -->
-        <li id="auth-nav"></li>
-      </ul>
-    </nav>
-  </header>
-
-  <main class="container">
-    <section class="signed-out-only">
-      <hgroup>
-        <h1>エージェントに依頼して、有料ツールの成果物を受け取る</h1>
-        <p>
-          依頼を送ると、サーバー側のエージェントが billing-mcp の有料ツールを x402 で支払って呼び出します
-          （AgentCore Payments のウォレットから、1 回あたり売り手の提示額のテスト USDC）。
-          生成されたページは、売り手の MCP Apps の UI（<code>ui://</code>）をブラウザが無課金で取得して描画します。
-        </p>
-      </hgroup>
-      <article class="signin-card">
-        <header><h2>サインイン（メール OTP）</h2></header>
-        <!-- 未サインイン時は Authenticator（サインインのフォーム）をここに置く -->
-        <div id="auth-container"></div>
-        <div class="code-hint">
-          <span>ローカル（mock）専用: 発行されたコードをここに表示します（実際のメールは送られません）。</span>
-          <button id="last-code-btn" class="secondary outline">直近のコードを表示</button>
-          <span id="last-code-result"></span>
+  <div class="app-shell">
+    <header class="container app-header">
+      <nav aria-label="画面の題名・切り替えと利用者">
+        <ul>
+          <!-- 幅が足りないときは前半を隠して短い題名にする（style.css のコンテナクエリ） -->
+          <li><strong><span class="title-prefix">Agentic Payments サンプル — </span>買い手（agent-app）</strong></li>
+        </ul>
+        <!--
+          画面内の面の切り替え（決定50・51。決定67 でヘッダーの行へ上げた）。押した面だけを見せ、残りは hidden で隠す。
+          role="tablist" / role="tab" は名乗らない。ARIA のタブは矢印キーでの移動と roving tabindex が
+          あるものとして支援技術が案内するので、名乗る以上は自前で持つ必要があり、それは決定44 が
+          details を選んだ理由（キー操作と aria を自分で面倒見なくてよい）に反する。
+          押した状態を aria-pressed で表す素のボタンにして、button の既定（Tab で移動、Enter / Space で押す）だけで済ませる
+        -->
+        <div class="tabs signed-in-only" role="group" aria-label="画面の切り替え">
+          <button type="button" id="tab-chat" class="tab" aria-pressed="true" aria-controls="panel-chat">依頼</button>
+          <button type="button" id="tab-wallet" class="tab" aria-pressed="false" aria-controls="panel-wallet">ウォレット</button>
+          <button type="button" id="tab-history" class="tab" aria-pressed="false" aria-controls="panel-history">購入履歴</button>
         </div>
-      </article>
-    </section>
+        <ul class="signed-in-only">
+          <li id="auth-status"></li>
+          <!-- サインイン後は Authenticator（サインアウトの操作）をここへ移す -->
+          <li id="auth-nav"></li>
+        </ul>
+      </nav>
+    </header>
 
-    <!--
-      画面内の面の切り替え（決定50・51）。押した面だけを見せ、残りは hidden で隠す。
-      role="tablist" / role="tab" は名乗らない。ARIA のタブは矢印キーでの移動と roving tabindex が
-      あるものとして支援技術が案内するので、名乗る以上は自前で持つ必要があり、それは決定44 が
-      details を選んだ理由（キー操作と aria を自分で面倒見なくてよい）に反する。
-      押した状態を aria-pressed で表す素のボタンにして、button の既定（Tab で移動、Enter / Space で押す）だけで済ませる
-    -->
-    <div class="tabs signed-in-only" role="group" aria-label="画面の切り替え">
-      <button type="button" id="tab-chat" class="tab" aria-pressed="true" aria-controls="panel-chat">依頼</button>
-      <button type="button" id="tab-wallet" class="tab" aria-pressed="false" aria-controls="panel-wallet">ウォレット</button>
-      <button type="button" id="tab-history" class="tab" aria-pressed="false" aria-controls="panel-history">購入履歴</button>
-    </div>
-
-    <div id="panel-chat" class="signed-in-only" role="region" aria-labelledby="tab-chat">
-      <article class="panel" aria-labelledby="chat-heading">
-        <header class="panel-header">
-          <h2 id="chat-heading">エージェントへの依頼</h2>
-          <!-- 会話全体に対する操作なので、送信の隣ではなく見出しの行に置く -->
-          <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
-        </header>
-        <!-- 残高と残枠の帯（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
-             詳細（期限・ID・上限の変更・推移）は「ウォレット」タブに（決定51） -->
-        <div class="wallet-strip" role="status" aria-label="ウォレット残高と支払いの残枠">
-          <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
-          <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
-        </div>
-        <p class="hint">依頼を送ると、エージェントが有料ツールの利用を判断し、支払って呼び出します（実オンチェーン決済）。買えたページは会話の中に表示します。</p>
-        <div id="chat-log"></div>
-        <div id="chat-status" class="hint"></div>
-        <div id="interrupts"></div>
-        <div class="chat-input" role="group" aria-label="依頼の送信">
-          <input type="text" id="chat-text" aria-label="エージェントへの依頼" placeholder="例: 猫カフェの紹介ページを作って">
-          <button id="chat-send-btn">送信</button>
-        </div>
-      </article>
-    </div>
-
-    <div id="panel-wallet" class="signed-in-only" role="region" aria-labelledby="tab-wallet" hidden>
-      <article class="panel" aria-labelledby="wallet-heading">
-        <header class="panel-header">
-          <h2 id="wallet-heading">ウォレットと支払いの枠</h2>
-          <button id="wallet-refresh-btn" class="secondary outline" title="残高とセッションを取り直す">更新</button>
-        </header>
-        <p class="hint">
-          残高は全員で共有するウォレット（AgentCore Payments の PaymentInstrument）の値。
-          枠（PaymentSession の上限と残枠）はサインインした利用者ごとで、購入のたびにエージェントが切ります。
-        </p>
-        <dl class="wallet">
-          <div><dt>ウォレット残高</dt><dd id="wallet-balance">（未取得）</dd></div>
-          <div><dt>今のセッション</dt><dd id="session-status">（未取得）</dd></div>
-          <div><dt>次のセッションの上限</dt><dd id="spend-limit">（未取得）</dd></div>
-          <div><dt>1回の支払いの上限</dt><dd id="max-amount">（未取得）</dd></div>
-        </dl>
-        <div class="limit-input" role="group" aria-label="支出上限の変更">
-          <input type="text" id="spend-limit-text" inputmode="decimal" aria-label="次のセッションの上限（USD）" placeholder="例: 2.00（USD）">
-          <button id="spend-limit-btn">上限を変更</button>
-        </div>
-        <p class="hint">
-          上限を変えると今のセッションは破棄され、次の購入で新しい上限のセッションが切られます
-          （AgentCore Payments にはセッションの上限を後から変える API が無いため）。
-          セッションが無い間、帯の残枠には次に切る上限を出します。
-        </p>
-        <div class="limit-input" role="group" aria-label="1回の支払いの上限の変更">
-          <input type="text" id="max-amount-text" inputmode="decimal" aria-label="1回の支払いの上限（USD）" placeholder="例: 0.20（USD）">
-          <button id="max-amount-btn">1回の上限を変更</button>
-        </div>
-        <p class="hint">
-          売り手が提示した額がこれを超えると、エージェントは支払わずに断ります。
-          この判定はアプリの中だけで行うので、変えても今のセッションはそのまま残り、次の購入から効きます。
-          セッションの残枠を超える額は、この上限を上げても支払えません。
-        </p>
-        <div id="wallet-status" class="hint"></div>
-        <h3>残高の推移</h3>
-        <div id="balance-history"><span class="hint">まだありません</span></div>
-      </article>
-    </div>
-
-    <div id="panel-history" class="signed-in-only" role="region" aria-labelledby="tab-history" hidden>
-      <article class="panel" aria-labelledby="history-heading">
-        <header class="panel-header">
-          <h2 id="history-heading">購入したページ</h2>
-          <button id="history-refresh-btn" class="secondary outline" title="購入履歴を取り直す">更新</button>
-        </header>
-        <p class="hint">これまでに買ったページを会話をまたいで並べます（新しい会話の順）。「表示」を選ぶとプレビュー（売り手の MCP Apps UI）に描画します。</p>
-        <!-- 左に一覧、右にプレビュー（決定62）。幅が足りなければ一覧の下にプレビューを積む -->
-        <div class="history-split">
-          <div id="history"><span class="hint">まだありません</span></div>
-          <div class="history-preview">
-            <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts" hidden></iframe>
-            <!-- 「表示」を押すまでの案内。iframe の hidden が外れると CSS で隠れる -->
-            <p class="preview-placeholder hint">一覧で「表示」を選ぶと、買ったページをここに描きます。</p>
-            <div id="purchase-status" class="hint"></div>
+    <main class="container">
+      <section class="signed-out-only">
+        <hgroup>
+          <h1>エージェントに依頼して、有料ツールの成果物を受け取る</h1>
+          <p>
+            依頼を送ると、サーバー側のエージェントが billing-mcp の有料ツールを x402 で支払って呼び出します
+            （AgentCore Payments のウォレットから、1 回あたり売り手の提示額のテスト USDC）。
+            生成されたページは、売り手の MCP Apps の UI（<code>ui://</code>）をブラウザが無課金で取得して描画します。
+          </p>
+        </hgroup>
+        <article class="signin-card">
+          <header><h2>サインイン（メール OTP）</h2></header>
+          <!-- 未サインイン時は Authenticator（サインインのフォーム）をここに置く -->
+          <div id="auth-container"></div>
+          <div class="code-hint">
+            <span>ローカル（mock）専用: 発行されたコードをここに表示します（実際のメールは送られません）。</span>
+            <button id="last-code-btn" class="secondary outline">直近のコードを表示</button>
+            <span id="last-code-result"></span>
           </div>
-        </div>
-      </article>
-    </div>
-  </main>
+        </article>
+      </section>
+
+      <div id="panel-chat" class="signed-in-only" role="region" aria-labelledby="tab-chat">
+        <article class="panel chat-panel" aria-labelledby="chat-heading">
+          <!-- 操作の行（決定67）。見出しはタブ「依頼」と重なるので読み上げ用にだけ残し、
+               残高と残枠（決定47）と、会話全体に対する操作（新規会話）を 1 行に並べる -->
+          <header class="panel-header">
+            <h2 id="chat-heading" class="visually-hidden">エージェントへの依頼</h2>
+            <!-- 残高と残枠（決定47）。説明は付けず、購入で減るのがひと目で分かることを優先する。
+                 詳細（期限・ID・上限の変更・推移）は「ウォレット」タブに（決定51） -->
+            <div class="wallet-strip" role="status" aria-label="ウォレット残高と支払いの残枠">
+              <div><span class="strip-label">残高</span><strong id="strip-balance" class="strip-value">—</strong></div>
+              <div><span class="strip-label">残枠</span><strong id="strip-remaining" class="strip-value">—</strong></div>
+            </div>
+            <button id="chat-new-btn" class="secondary outline" title="今の会話を画面から消して、新しい会話を始める">新規会話</button>
+          </header>
+          <div class="chat-area">
+            <div id="chat-log"></div>
+            <!-- 会話が空のときだけ会話欄の上に重ねる案内（決定67）。#chat-log の中に置くと、
+                 並べ直し（index.ts の placeChildren）が知らない子として消すので、隣に置いて CSS で出し分ける -->
+            <p class="chat-empty hint">依頼を送ると、エージェントが有料ツールの利用を判断し、支払って呼び出します（実オンチェーン決済）。買えたページは会話の中に表示します。</p>
+          </div>
+          <div id="chat-status" class="hint"></div>
+          <div id="interrupts"></div>
+          <div class="chat-input" role="group" aria-label="依頼の送信">
+            <input type="text" id="chat-text" aria-label="エージェントへの依頼" placeholder="例: 猫カフェの紹介ページを作って">
+            <button id="chat-send-btn">送信</button>
+          </div>
+        </article>
+      </div>
+
+      <div id="panel-wallet" class="signed-in-only" role="region" aria-labelledby="tab-wallet" hidden>
+        <article class="panel" aria-labelledby="wallet-heading">
+          <header class="panel-header">
+            <h2 id="wallet-heading">ウォレットと支払いの枠</h2>
+            <button id="wallet-refresh-btn" class="secondary outline" title="残高とセッションを取り直す">更新</button>
+          </header>
+          <p class="hint">
+            残高は全員で共有するウォレット（AgentCore Payments の PaymentInstrument）の値。
+            枠（PaymentSession の上限と残枠）はサインインした利用者ごとで、購入のたびにエージェントが切ります。
+          </p>
+          <dl class="wallet">
+            <div><dt>ウォレット残高</dt><dd id="wallet-balance">（未取得）</dd></div>
+            <div><dt>今のセッション</dt><dd id="session-status">（未取得）</dd></div>
+            <div><dt>次のセッションの上限</dt><dd id="spend-limit">（未取得）</dd></div>
+            <div><dt>1回の支払いの上限</dt><dd id="max-amount">（未取得）</dd></div>
+          </dl>
+          <div class="limit-input" role="group" aria-label="支出上限の変更">
+            <input type="text" id="spend-limit-text" inputmode="decimal" aria-label="次のセッションの上限（USD）" placeholder="例: 2.00（USD）">
+            <button id="spend-limit-btn">上限を変更</button>
+          </div>
+          <p class="hint">
+            上限を変えると今のセッションは破棄され、次の購入で新しい上限のセッションが切られます
+            （AgentCore Payments にはセッションの上限を後から変える API が無いため）。
+            セッションが無い間、依頼タブの残枠には次に切る上限を出します。
+          </p>
+          <div class="limit-input" role="group" aria-label="1回の支払いの上限の変更">
+            <input type="text" id="max-amount-text" inputmode="decimal" aria-label="1回の支払いの上限（USD）" placeholder="例: 0.20（USD）">
+            <button id="max-amount-btn">1回の上限を変更</button>
+          </div>
+          <p class="hint">
+            売り手が提示した額がこれを超えると、エージェントは支払わずに断ります。
+            この判定はアプリの中だけで行うので、変えても今のセッションはそのまま残り、次の購入から効きます。
+            セッションの残枠を超える額は、この上限を上げても支払えません。
+          </p>
+          <div id="wallet-status" class="hint"></div>
+          <h3>残高の推移</h3>
+          <div id="balance-history"><span class="hint">まだありません</span></div>
+        </article>
+      </div>
+
+      <div id="panel-history" class="signed-in-only" role="region" aria-labelledby="tab-history" hidden>
+        <article class="panel" aria-labelledby="history-heading">
+          <header class="panel-header">
+            <h2 id="history-heading">購入したページ</h2>
+            <button id="history-refresh-btn" class="secondary outline" title="購入履歴を取り直す">更新</button>
+          </header>
+          <p class="hint">これまでに買ったページを会話をまたいで並べます（新しい会話の順）。「表示」を選ぶとプレビュー（売り手の MCP Apps UI）に描画します。</p>
+          <!-- 左に一覧、右にプレビュー（決定62）。幅が足りなければ一覧の下にプレビューを積む -->
+          <div class="history-split">
+            <div id="history"><span class="hint">まだありません</span></div>
+            <div class="history-preview">
+              <iframe id="preview-frame" title="売り手の MCP Apps UI（preview-view）" sandbox="allow-scripts" hidden></iframe>
+              <!-- 「表示」を押すまでの案内。iframe の hidden が外れると CSS で隠れる -->
+              <p class="preview-placeholder hint">一覧で「表示」を選ぶと、買ったページをここに描きます。</p>
+              <div id="purchase-status" class="hint"></div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </main>
+  </div>
 
   <!--
     内部情報（決定44・62）。main の外に置き、広い画面では body の grid で本文の右の列へ、

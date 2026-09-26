@@ -1,6 +1,6 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
-// 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場
+// 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -48,7 +48,7 @@ describe('findLastAssistant', () => {
   });
 });
 
-// ── 依頼の枠の帯（残高と残枠）と、購入中の取り直し（決定47） ──
+// ── 帯（依頼の面に常に出す残高と残枠。決定47）と、購入中の取り直し ──
 import {
   BALANCE_WATCH_INTERVAL_MS,
   BALANCE_WATCH_MAX_MS,
@@ -453,5 +453,18 @@ describe('establishedTogether', () => {
 
   it('会話の購読の失敗はそのまま伝える', async () => {
     await expect(establishedTogether(Promise.reject(new Error('会話を購読できない')), Promise.resolve())).rejects.toThrow('会話を購読できない');
+  });
+});
+
+// ── 会話の中の購入カードの拡大（決定67） ──
+import { previewExpandButton } from './ui-rules.js';
+
+describe('previewExpandButton', () => {
+  it('既定の高さのときは「拡大」を出し、会話欄いっぱいに広げると案内する', () => {
+    expect(previewExpandButton(false)).toEqual({ label: '拡大', title: '会話欄の高さいっぱいに広げる' });
+  });
+
+  it('広げているときは「縮小」を出し、既定の高さに戻すと案内する', () => {
+    expect(previewExpandButton(true)).toEqual({ label: '縮小', title: '既定の高さに戻す' });
   });
 });
