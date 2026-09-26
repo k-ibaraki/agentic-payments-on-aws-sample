@@ -117,7 +117,7 @@ pnpm outputs <名前>  # スタック名を直接指定する
 買い手側の資源で、agent-app の `npx tsx scripts/payments-setup.ts` が出力する（agent-app/README.md 参照）。
 
 価格は出力に出さない。価格は呼び出しごとに価格表が決めるため（次節）、agent-app の `PAYMENT_MAX_AMOUNT` は
-通したい価格帯の価格を賄えるように決める。
+通したい価格帯の価格を賄えるように決める。ただしこれは既定で、利用者が画面で自分の値を設定していればそちらが効く。
 
 ## 価格（段階制）
 

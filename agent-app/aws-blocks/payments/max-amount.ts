@@ -43,7 +43,7 @@ function usdDisplay(maxAmount: string): string | null {
   return `${whole}.${fraction.padEnd(2, '0')}`;
 }
 
-function describe(maxAmount: string, source: MaxAmount['source']): MaxAmount {
+function toMaxAmount(maxAmount: string, source: MaxAmount['source']): MaxAmount {
   return { maxAmount, maxAmountUsd: usdDisplay(maxAmount), source };
 }
 
@@ -55,7 +55,7 @@ export function maxAmountSource(
   return {
     async get(userSub) {
       const saved = await store.get(userSub);
-      return saved ? describe(saved.maxAmount, 'user') : describe(defaultMaxAmount, 'default');
+      return saved ? toMaxAmount(saved.maxAmount, 'user') : toMaxAmount(defaultMaxAmount, 'default');
     },
     async set(userSub, maxAmountUsd) {
       if (!isUsdAmount(maxAmountUsd)) {
@@ -66,7 +66,7 @@ export function maxAmountSource(
       const maxAmount = toTokenUnits(maxAmountUsd, USDC_DECIMALS);
       await store.put(userSub, { maxAmount, updatedAt: now() });
       console.log(`[max-amount] 1 回の上限を変更 利用者=${userSub} 上限=${maxAmount}（最小単位）`);
-      return describe(maxAmount, 'user');
+      return toMaxAmount(maxAmount, 'user');
     },
   };
 }
