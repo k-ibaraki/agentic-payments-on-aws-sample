@@ -48,7 +48,7 @@ describe('findLastAssistant', () => {
   });
 });
 
-// ── 依頼の枠の帯（残高と残枠）と、購入中の取り直し（決定47） ──
+// ── 帯（依頼の面に常に出す残高と残枠。決定47）と、購入中の取り直し ──
 import {
   BALANCE_WATCH_INTERVAL_MS,
   BALANCE_WATCH_MAX_MS,

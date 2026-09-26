@@ -27,7 +27,8 @@ export function findLastAssistant(messages: Array<{ role: string }>): number {
   return -1;
 }
 
-// ── 依頼の枠の帯（残高と残枠）と、購入中の取り直し（決定47） ──
+// ── 帯（依頼の面に常に出す残高と残枠。決定47）と、購入中の取り直し ──
+// 「帯」は `.wallet-strip` の呼び名。決定67 で独立した帯から操作の行の中の表示に変わったが、呼び名は残している
 
 /** 有料ツールの応答を待つ上限の既定（`BUYER_TOOL_TIMEOUT_MS`。決定31）。ブラウザは環境変数を知らないので既定に合わせる */
 export const BALANCE_WATCH_MAX_MS = 600_000;
