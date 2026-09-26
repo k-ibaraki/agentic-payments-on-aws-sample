@@ -949,11 +949,11 @@ function attachExpandButton(node: HTMLElement) {
   const log = el('chat-log');
   let scrollBeforeOpen = 0;
   node.addEventListener('beforetoggle', (ev) => {
-    if ((ev as ToggleEvent).newState === 'open') scrollBeforeOpen = log.scrollTop;
+    if (ev.newState === 'open') scrollBeforeOpen = log.scrollTop;
   });
   node.addEventListener('toggle', (ev) => {
     render();
-    if ((ev as ToggleEvent).newState === 'closed') log.scrollTop = scrollBeforeOpen;
+    if (ev.newState === 'closed') log.scrollTop = scrollBeforeOpen;
   });
   button.addEventListener('click', () => node.togglePopover());
   row.appendChild(button);
