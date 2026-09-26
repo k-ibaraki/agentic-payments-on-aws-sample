@@ -929,7 +929,8 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
 // 画面いっぱいのモーダルにする。カードは DOM の上で動かないので、iframe は読み込み直しにならず View の接続も切れない
 // （決定50）。position: fixed では、会話欄の container-type: size が基準の箱になって画面いっぱいに広がらない。
 // popover は manual にして、背景のクリックでは閉じない（買ったページを操作している途中で閉じないように）。
-// Esc は起動時の keydown で閉じる。表示の切り替えは toggle イベントで拾う（会話の破棄で DOM から外れたときも閉じる）
+// Esc は起動時の keydown で閉じる。表示の切り替えは toggle イベントで拾う。会話の破棄でカードが DOM から
+// 外れたときはブラウザが閉じる（このとき toggle は届かないが、ボタンもカードごと消えるので困らない）
 function attachExpandButton(node: HTMLElement) {
   const row = node.querySelector<HTMLElement>(':scope > .purchase');
   if (!row) return;
