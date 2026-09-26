@@ -835,6 +835,12 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
             appendEvent('応答を受け取る接続をつなぎ直せないため、承認への応答を送りませんでした');
             return;
           }
+          // 読み直しで承認の欄が描き直されたら、押した承認はもう無いかもしれない（別のタブで済んだなど）。
+          // 古い ID で送るとサーバーに弾かれ、useChat の応答中の印が残って送信が戻らないので、選び直してもらう
+          if (!button.isConnected) {
+            appendEvent('会話を読み直したので、承認の欄からもう一度選んでください');
+            return;
+          }
           box.replaceChildren();
           appendEvent(`承認への応答: ${label}`);
           await chat.respondToInterrupt([{ interruptId: it.id, approved }]);
