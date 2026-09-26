@@ -46,6 +46,19 @@ export function formatTokenAmount(amount: string, decimals: number): string {
 }
 
 /**
+ * 十進表記を decimals 桁の最小単位の整数にする（formatTokenAmount の逆）。
+ * 浮動小数の掛け算は端数を生み、BigInt で読めない値になるため文字列のまま桁を移す。
+ * 桁数を超える小数は丸めずに拒む（丸めると利用者が入れた額と違う額で判定してしまう）
+ */
+export function toTokenUnits(value: string, decimals: number): string {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) throw new Error(`十進表記の額ではありません: ${value}`);
+  const [, whole, fraction = ''] = match;
+  if (fraction.length > decimals) throw new Error(`小数は ${decimals} 桁までです: ${value}`);
+  return BigInt(whole + fraction.padEnd(decimals, '0')).toString();
+}
+
+/**
  * 最小単位の額をドル表記にする（売り手の提示と同じ "$0.15" の形）。
  * 桁数を知らない資産や、最小単位の整数でない値では undefined
  */

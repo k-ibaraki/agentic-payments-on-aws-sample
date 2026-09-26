@@ -1,7 +1,7 @@
 // 支払額の表示（決定60）のテスト。ドル表記に直せるのは桁数を知っている資産だけで、
 // 知らない資産で推量しないことをここで固定する
 import { describe, expect, it } from 'vitest';
-import { amountFields, describeAmount, formatTokenAmount, usdOf } from './amount.js';
+import { amountFields, describeAmount, formatTokenAmount, toTokenUnits, usdOf } from './amount.js';
 
 // 決定8: Base Sepolia のテスト USDC（6 桁）
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
@@ -17,6 +17,30 @@ describe('formatTokenAmount', () => {
 
   it('既に小数表記で来た値はそのまま返す（API の表記が最小単位か十進かは実測で確定させる）', () => {
     expect(formatTokenAmount('1.1', 6)).toBe('1.1');
+  });
+});
+
+// 画面で受けた 1 回の上限（決定66）を最小単位に直す。formatTokenAmount の逆
+describe('toTokenUnits', () => {
+  it('十進表記を decimals 桁の最小単位の整数にする', () => {
+    expect(toTokenUnits('0.2', 6)).toBe('200000');
+    expect(toTokenUnits('0.15', 6)).toBe('150000');
+    expect(toTokenUnits('1', 6)).toBe('1000000');
+    expect(toTokenUnits('12.34', 6)).toBe('12340000');
+    expect(toTokenUnits('0.000001', 6)).toBe('1');
+  });
+
+  // 浮動小数の掛け算では端数が出る（2.01 * 1e6 = 2009999.9999999998、4.03 * 1e6 = 4030000.0000000005）。
+  // そのまま保存すると BigInt が支払いの時点で落ちる
+  it('浮動小数を介さず文字列のまま桁を移す', () => {
+    expect(toTokenUnits('2.01', 6)).toBe('2010000');
+    expect(toTokenUnits('4.03', 6)).toBe('4030000');
+  });
+
+  it('桁数を超える小数・十進表記でない値は拒む（丸めて額を変えない）', () => {
+    for (const bad of ['0.0000001', 'abc', '-1', '1e3', '', '1,000']) {
+      expect(() => toTokenUnits(bad, 6), bad).toThrow();
+    }
   });
 });
 

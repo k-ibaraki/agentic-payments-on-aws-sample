@@ -514,6 +514,12 @@ function renderWallet(status: WalletStatus) {
   el('spend-limit').textContent =
     `${status.spendLimit.maxSpendUsd} USD / セッション` +
     `（${status.spendLimit.source === 'user' ? 'この画面で設定' : '既定'}）`;
+
+  // USD に直せない既定（PAYMENT_MAX_AMOUNT の書式ミス）でも行は落とさず、最小単位のまま出す
+  const max = status.maxAmount;
+  el('max-amount').textContent =
+    `${max.maxAmountUsd !== null ? `${max.maxAmountUsd} USD` : `${max.maxAmount}（最小単位）`} / 1回` +
+    `（${max.source === 'user' ? 'この画面で設定' : '既定'}）`;
 }
 
 function recordBalance(status: WalletStatus) {
@@ -624,6 +630,27 @@ async function submitSpendLimit() {
   }
 }
 
+// 1 回の上限（決定66）はアプリ側の判定だけに効くので、支出上限と違ってセッションは破棄されない
+async function submitMaxAmount() {
+  const input = el<HTMLInputElement>('max-amount-text');
+  const value = input.value.trim();
+  if (!value) return;
+  const note = el('wallet-status');
+  const button = el<HTMLButtonElement>('max-amount-btn');
+  button.disabled = true;
+  try {
+    const result = await buyer.setMaxAmount(value);
+    input.value = '';
+    showMessage(note, `1回の上限を ${result.maxAmount.maxAmountUsd} USD にしました（次の購入から効きます）`, 'success');
+    appendEvent(`1回の上限を変更: ${result.maxAmount.maxAmountUsd} USD`);
+    await refreshWallet();
+  } catch (error) {
+    showError(note, `1回の上限を変更できませんでした: ${describeError(error)}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function discardWallet() {
   stopBalanceWatch();
   balanceHistory.length = 0;
@@ -635,7 +662,7 @@ function discardWallet() {
     delete el(id).dataset.value;
     el(id).classList.remove('flash');
   }
-  for (const id of ['wallet-balance', 'session-status', 'spend-limit']) el(id).textContent = '（未取得）';
+  for (const id of ['wallet-balance', 'session-status', 'spend-limit', 'max-amount']) el(id).textContent = '（未取得）';
   el('wallet-status').replaceChildren();
   showMessage(el('balance-history'), 'まだありません');
 }
@@ -1094,6 +1121,10 @@ document.addEventListener('DOMContentLoaded', () => {
   el('spend-limit-btn').addEventListener('click', () => void submitSpendLimit());
   el<HTMLInputElement>('spend-limit-text').addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.isComposing) void submitSpendLimit();
+  });
+  el('max-amount-btn').addEventListener('click', () => void submitMaxAmount());
+  el<HTMLInputElement>('max-amount-text').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.isComposing) void submitMaxAmount();
   });
   el('wallet-refresh-btn').addEventListener('click', () => {
     refreshWallet().catch(() => {});

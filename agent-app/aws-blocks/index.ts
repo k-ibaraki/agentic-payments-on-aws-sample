@@ -1,6 +1,7 @@
 import { ApiNamespace, AuthCognito, KVStore, Scope } from '@aws-blocks/blocks';
 import { z } from 'zod';
 import {
+  changeMaxAmount,
   changeSpendLimit,
   createBuyerAgent,
   purchasedHtmlKey,
@@ -54,9 +55,10 @@ const {
   artifacts: purchasedHtml,
   paymentSessions,
   spendLimits,
+  maxAmounts,
   progress: purchaseProgress,
 } = createBuyerAgent(scope);
-const walletStores = { paymentSessions, spendLimits };
+const walletStores = { paymentSessions, spendLimits, maxAmounts };
 
 // 利用者ごとの依頼回数の記録（決定40。詳細は rate-limit.ts 参照）
 const requestCounts = new KVStore(scope, 'request-count', {
@@ -188,6 +190,13 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
   async setSpendLimit(maxSpendUsd: string) {
     const user = await auth.requireAuth(context);
     return await changeSpendLimit(walletStores, user.userSub, maxSpendUsd);
+  },
+
+  // 自分の 1 回の支払い上限を変える（決定66）。天井は設けない（実質の天井はセッションの残枠）。
+  // 判定はアプリ側だけなのでセッションには触れず、次の購入から効く
+  async setMaxAmount(maxAmountUsd: string) {
+    const user = await auth.requireAuth(context);
+    return await changeMaxAmount(walletStores, user.userSub, maxAmountUsd);
   },
 }));
 

@@ -205,7 +205,10 @@ Coinbase CDP の資格情報 3 点（`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `
   KVStore `payment-session` に利用者をキーに記録して使い回し、失効・削除で拒否されたら一度だけ作り直す。
   支出上限の超過では作り直さず失敗させる——作り直すと上限に当たった支払いがその場で通り、上限が上限でなくなるため）
 - `BILLING_MCP_URL`（既定 `http://localhost:8000/mcp`）・`PAYMENTS_USER_ID`（既定 `sample-user-1`）
-- `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `150000` = 0.15 USDC）・
+- `PAYMENT_MAX_AMOUNT`（1回の支払い上限。USDC の最小単位、既定 `150000` = 0.15 USDC。売り手の提示がこれを
+  超えると支払わずに断る。利用者が画面の「ウォレットと支払いの枠」で自分の分を USD で変えられ、変えた値
+  （KVStore `payment-max-amount`）が環境変数より優先される。判定はアプリの中だけで行うので、変えても今の
+  セッションは破棄せず、次の購入から効く。天井は無いが、セッションの残枠を超える額は支払えない）・
   `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）。ネットワークと資産は Base Sepolia +
   テスト USDC に固定しており、売り手の提示がこれに合わなければ支払わない
 - `BUYER_TOOL_TIMEOUT_MS`（有料ツールの待ち時間。既定 `600000`。短くすると決済後に失敗して支払いだけが残る）

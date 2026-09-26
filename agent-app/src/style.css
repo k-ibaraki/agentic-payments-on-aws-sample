@@ -427,11 +427,11 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-.spend-limit-input {
+.limit-input {
   margin-bottom: 0.5rem;
 }
 
-.spend-limit-input button {
+.limit-input button {
   flex: 0 0 auto;
 }
 
@@ -857,24 +857,24 @@ h3 {
   }
 
   .chat-input[role='group'],
-  .spend-limit-input[role='group'] {
+  .limit-input[role='group'] {
     flex-wrap: wrap;
     box-shadow: none;
   }
 
   .chat-input[role='group'] > *,
-  .spend-limit-input[role='group'] > * {
+  .limit-input[role='group'] > * {
     border-radius: var(--pico-border-radius);
   }
 
   .chat-input[role='group'] > #chat-text,
-  .spend-limit-input[role='group'] > #spend-limit-text {
+  .limit-input[role='group'] > input {
     flex: 1 0 100%;
     margin-bottom: 0.5rem;
   }
 
   .chat-input[role='group'] > button,
-  .spend-limit-input[role='group'] > button {
+  .limit-input[role='group'] > button {
     flex: 1 1 auto;
     margin-left: 0;
   }
