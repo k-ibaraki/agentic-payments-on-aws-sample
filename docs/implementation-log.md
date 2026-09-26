@@ -13,7 +13,7 @@
 - 実装: `payments/max-amount.ts`（`spendLimitSource` と同じ形。最小単位で保存し、USD 表記を添えて返す）、
   `amount.ts` に `toTokenUnits`（USD → 最小単位）、`buyer-agent.ts` に KVStore `payment-max-amount` と
   `changeMaxAmount`、`paymentPolicyFromEnv` に上限の引数、buyer API に `setMaxAmount`、画面に行と入力欄を足した
-- 最小単位への変換は文字列のまま桁を移した。`Number('0.29') * 1e6` は `290000.00000000006` になり、
+- 最小単位への変換は文字列のまま桁を移した。`Number('2.01') * 1e6` は `2009999.9999999998` になり、
   そのまま保存すると支払いの時点で `BigInt` が落ちる。桁数を超える小数は丸めずに拒む
 - `walletStatus` は `PAYMENT_MANAGER_ARN` が無いと早く返るので、1 回の上限はその前に埋めた（支出上限と同じ位置）。
   これを外すと、ローカルで支払いの設定が無いときに画面の行が壊れる
@@ -23,6 +23,10 @@
   次の購入から効く」）。並べて置くので、読み違えるとセッションが消えたと思われる
 - 確認: `npm run test`（26 ファイル・291 件）・`npm run typecheck`・`npm run test:e2e`（偽 LLM・`PAYMENT_*` なしの
   ローカル。5 件）が通った。deploy と実決済での確認はしていない。次の deploy で KVStore（DynamoDB の表）が 1 つ増える
+- セルフレビューで直したこと: 売り手 README の `PAYMENT_MAX_AMOUNT` の案内に、利用者の設定が優先される旨を足した。
+  `max-amount.ts` の内部関数 `describe` を `toMaxAmount` に改めた。端数の例に挙げていた `0.29 * 1e6` は、実測すると
+  端数が出なかった（`1.13` も同じ）。そのためテストが浮動小数による実装を見逃す状態だったので、実測で端数が出る
+  `2.01` と `4.03` に替えた
 
 ## 2026-09-26: README と構成図から決定番号の参照を外す（ユーザー指摘）
 
