@@ -925,26 +925,37 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
   }
 }
 
-// カードの見出しの行に拡大ボタンを付ける（決定67）。広げるのはカード（CSS の .expanded）で、iframe は動かさない。
-// 広げたらカードを会話欄の上端に合わせる。応答の描画（layoutChatLog）は会話欄を末尾へ送るので、
-// 生成中に広げても次の描画で末尾へ戻る（それで構わない。新しい応答を見せる方を優先する）
+// カードの見出しの行に拡大ボタンを付ける（決定67・68）。拡大はカードを Popover で最前面の層（top layer）へ出し、
+// 画面いっぱいのモーダルにする。カードは DOM の上で動かないので、iframe は読み込み直しにならず View の接続も切れない
+// （決定50）。position: fixed では、会話欄の container-type: size が基準の箱になって画面いっぱいに広がらない。
+// popover は manual にして、背景のクリックでは閉じない（買ったページを操作している途中で閉じないように）。
+// Esc は起動時の keydown で閉じる。表示の切り替えは toggle イベントで拾う。会話の破棄でカードが DOM から
+// 外れたときはブラウザが閉じる（このとき toggle は届かないが、ボタンもカードごと消えるので困らない）
 function attachExpandButton(node: HTMLElement) {
   const row = node.querySelector<HTMLElement>(':scope > .purchase');
   if (!row) return;
+  node.popover = 'manual';
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'purchase-expand-btn secondary outline';
-  const render = (expanded: boolean) => {
-    const { label, title } = previewExpandButton(expanded);
+  const render = () => {
+    const { label, title } = previewExpandButton(node.matches(':popover-open'));
     button.textContent = label;
     button.title = title;
   };
-  render(false);
-  button.addEventListener('click', () => {
-    const expanded = node.classList.toggle('expanded');
-    render(expanded);
-    node.scrollIntoView({ block: expanded ? 'start' : 'nearest', behavior: 'smooth' });
+  render();
+  // 開いている間はカードが会話欄の流れから抜け、会話欄のスクロール位置が詰められる。閉じたときに
+  // 元の位置へ戻さないと、カードが開く前と違う位置に見える（実測で 58px ずれた）
+  const log = el('chat-log');
+  let scrollBeforeOpen = 0;
+  node.addEventListener('beforetoggle', (ev) => {
+    if (ev.newState === 'open') scrollBeforeOpen = log.scrollTop;
   });
+  node.addEventListener('toggle', (ev) => {
+    render();
+    if (ev.newState === 'closed') log.scrollTop = scrollBeforeOpen;
+  });
+  button.addEventListener('click', () => node.togglePopover());
   row.appendChild(button);
 }
 
@@ -1172,6 +1183,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const last = await api.getLastCode();
     if (last) showMessage(result, `${last.purpose}: ${last.code}`, 'success');
     else showMessage(result, 'コードはまだありません（デプロイ環境では常に空）');
+  });
+
+  // 画面いっぱいに広げた購入カード（決定68）を Esc で閉じる。フォーカスが iframe の中にあるときは、
+  // キー入力が iframe の文書に届いてこちらには来ないので閉じない（その間は「閉じる」ボタンで閉じる）
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    const open = document.querySelector<HTMLElement>('.purchase-card:popover-open');
+    if (!open) return;
+    ev.preventDefault();
+    open.hidePopover();
   });
 
   el('chat-send-btn').addEventListener('click', () => void sendCurrentInput());

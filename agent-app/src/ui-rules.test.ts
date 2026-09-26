@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
 // 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン
 import { describe, expect, it } from 'vitest';
@@ -456,15 +456,15 @@ describe('establishedTogether', () => {
   });
 });
 
-// ── 会話の中の購入カードの拡大（決定67） ──
+// ── 会話の中の購入カードの拡大（決定67・68） ──
 import { previewExpandButton } from './ui-rules.js';
 
 describe('previewExpandButton', () => {
-  it('既定の高さのときは「拡大」を出し、会話欄いっぱいに広げると案内する', () => {
-    expect(previewExpandButton(false)).toEqual({ label: '拡大', title: '会話欄の高さいっぱいに広げる' });
+  it('会話の中にあるときは「拡大」を出し、画面いっぱいに広げると案内する', () => {
+    expect(previewExpandButton(false)).toEqual({ label: '拡大', title: '画面いっぱいに広げる' });
   });
 
-  it('広げているときは「縮小」を出し、既定の高さに戻すと案内する', () => {
-    expect(previewExpandButton(true)).toEqual({ label: '縮小', title: '既定の高さに戻す' });
+  it('画面いっぱいに広げているときは「閉じる」を出し、会話の中に戻すと案内する', () => {
+    expect(previewExpandButton(true)).toEqual({ label: '閉じる', title: '会話の中の元の大きさに戻す（Esc でも閉じる）' });
   });
 });
