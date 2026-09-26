@@ -258,9 +258,7 @@ h3 {
  * display はここでは指定しない。.signed-in-only（display: none）と詳細度が並び、
  * 後に書いたこちらが勝って未サインインでもタブが見えてしまうため。
  * 見せるのはサインイン後だけなので、下の .signed-in .tabs（0,2,0）で flex にする
- * （そちらは .signed-in .signed-in-only { display: block } と同じ詳細度で、後勝ちする）
- */
-/*
+ * （そちらは .signed-in .signed-in-only { display: block } と同じ詳細度で、後勝ちする）。
  * Pico は role="group" を幅 100%・下余白付きの連結した入力群として描く。ヘッダーの行の中では内容の幅に留める。
  * フォーカスの輪も、Pico はグループ全体の box-shadow で描く（中のボタンの輪は消す）。タブはボタンが離れて
  * 並ぶので、グループの輪はやめ、下の .tab:focus-visible でボタンごとに描く
@@ -293,12 +291,14 @@ h3 {
   font-size: 0.95em;
 }
 
-/* Pico は連結のため 2 枚目以降に margin-left: -1px を当てる（[role=group] [type=button]:not(:first-child)、0,3,0） */
+/* Pico は連結のため 2 枚目以降に margin-left: -1px を当てる（[role=group] [type=button]:not(:first-child)）。
+   詳細度は同じ 0,3,0 なので、後に書いたこちらが勝つ */
 .tabs .tab:not(:first-child) {
   margin-left: 0;
 }
 
-/* Pico の [role=group] button:focus { box-shadow: none }（0,2,1）より強く当てる */
+/* Pico は [role=group] [type=button]:focus などで box-shadow: none にする。いちばん強いものが同じ 0,3,0 なので、
+   後に書いたこちらが勝つ（box-shadow には遷移が掛かるので、測るときは遷移が終わってから） */
 .tabs .tab:focus-visible {
   box-shadow: 0 0 0 var(--pico-outline-width) var(--pico-primary-focus);
 }
