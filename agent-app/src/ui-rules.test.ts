@@ -474,23 +474,29 @@ describe('previewExpandButton', () => {
 import { isReplyFinished, planRecovery } from './ui-rules.js';
 
 describe('planRecovery', () => {
+  const idle = { loading: false, awaitingApproval: false, awaitingRecoveredReply: false };
+
   it('自分で購読を外したとき（client）は何もしない', () => {
-    expect(planRecovery('client', { loading: false, awaitingApproval: false })).toBe('ignore');
-    expect(planRecovery('client', { loading: true, awaitingApproval: true })).toBe('ignore');
+    expect(planRecovery('client', idle)).toBe('ignore');
+    expect(planRecovery('client', { loading: true, awaitingApproval: true, awaitingRecoveredReply: true })).toBe('ignore');
   });
 
   it('待っている応答が無ければ、次の送信で購読し直させる（会話と吹き出しはそのまま）', () => {
     for (const reason of ['timeout', 'error', 'unknown']) {
-      expect(planRecovery(reason, { loading: false, awaitingApproval: false })).toBe('resubscribe-on-send');
+      expect(planRecovery(reason, idle)).toBe('resubscribe-on-send');
     }
   });
 
   it('応答の途中で切れたら、その場で会話を読み直す（次の送信を待つと送信ボタンが戻らない）', () => {
-    expect(planRecovery('timeout', { loading: true, awaitingApproval: false })).toBe('reload-now');
+    expect(planRecovery('timeout', { ...idle, loading: true })).toBe('reload-now');
   });
 
   it('承認待ちで切れたら、その場で会話を読み直す（承認への応答は購読し直さない）', () => {
-    expect(planRecovery('error', { loading: false, awaitingApproval: true })).toBe('reload-now');
+    expect(planRecovery('error', { ...idle, awaitingApproval: true })).toBe('reload-now');
+  });
+
+  it('会話を読み直した後、エージェントの応答を待つ間に切れたら、その場でもう一度会話を読み直す（購読を外すだけだと、応答の終わりの知らせが届かず送信が戻らない）', () => {
+    expect(planRecovery('timeout', { ...idle, awaitingRecoveredReply: true })).toBe('reload-now');
   });
 });
 

@@ -462,6 +462,9 @@ let pendingReload = false;
 const conversationReload = createSingleFlight(() => reloadConversationOnce());
 // 応答の途中で読み直し、エージェントがまだ動いている。終わるまで送信を止める（同じ会話に依頼を重ねない）
 let awaitingRecoveredReply = false;
+// 送る前の接続の確かめ（読み直しを待つことがある）の最中。入力を消すのはその後なので、続けて押された Enter で
+// 同じ文を二度送りかけないよう、後の方は捨てる
+let checkingBeforeSend = false;
 
 function hasPendingApproval(): boolean {
   return el('interrupts').childElementCount > 0;
@@ -481,7 +484,11 @@ function watchDisconnect(owner: () => ReturnType<typeof useChat>): (reason: stri
 }
 
 function onSubscriptionLost(reason: string) {
-  const plan = planRecovery(reason, { loading: chat.isLoading(), awaitingApproval: hasPendingApproval() });
+  const plan = planRecovery(reason, {
+    loading: chat.isLoading(),
+    awaitingApproval: hasPendingApproval(),
+    awaitingRecoveredReply,
+  });
   if (plan === 'ignore') return;
   if (plan === 'resubscribe-on-send') {
     // 購読だけを外す。会話 ID と吹き出しは残り、次の送信で useChat が新しいトークンで購読し直す
@@ -489,12 +496,11 @@ function onSubscriptionLost(reason: string) {
     chatConnection = undefined;
     return;
   }
-  if (chat.isLoading()) {
-    const view = currentTimeline();
-    if (view) {
-      applyDisconnect(view.model, Date.now());
-      refreshTimeline(view);
-    }
+  // 進行中の途中経過を打ち切る。承認待ちでは useChat の loading は戻っているが、経過はまだ終わっていない
+  const view = currentTimeline();
+  if (view) {
+    applyDisconnect(view.model, Date.now());
+    refreshTimeline(view);
   }
   pendingReload = true;
   void reloadConversation();
@@ -866,9 +872,16 @@ const INTERNALS_OPEN_KEY = 'agent-app:internals-open';
 async function sendCurrentInput() {
   const input = el<HTMLInputElement>('chat-text');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text || checkingBeforeSend) return;
   // 受信が切れたまま送ると、エージェントは動くのに応答が画面に届かない（決定69）。入力は消さずに残す
-  if (!(await ensureLiveSubscription())) {
+  checkingBeforeSend = true;
+  let live: boolean;
+  try {
+    live = await ensureLiveSubscription();
+  } finally {
+    checkingBeforeSend = false;
+  }
+  if (!live) {
     showError(el('chat-status'), '応答を受け取る接続をつなぎ直せませんでした。ネットワークを確かめて、もう一度送ってください');
     return;
   }

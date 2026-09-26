@@ -191,4 +191,22 @@ describe('依頼 1 回の経過', () => {
     expect(waitingLabel(t, 9000)).toBeNull();
     expect(timelineSummary(t, 9000)).toBe('途中経過（3 件・受信が途中で切れました・支払い 0.1 USDC）');
   });
+
+  it('承認待ちで切れても打ち切る（interrupt では経過は終わっていない）', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'interrupt' }, 1000);
+    applyDisconnect(t, 5000);
+    expect(t.cut).toBe(true);
+    expect(timelineSummary(t, 9000)).toBe('途中経過（3 件・受信が途中で切れました）');
+  });
+
+  it('終わった経過には何も足さない（切れる前に done が届いていた）', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'done' }, 3000);
+    const rows = [...t.rows];
+    applyDisconnect(t, 5000);
+    expect(t.rows).toEqual(rows);
+    expect(t.cut).toBe(false);
+    expect(timelineSummary(t, 9000)).toBe('途中経過（1 件・所要 3 秒）');
+  });
 });

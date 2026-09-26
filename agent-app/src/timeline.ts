@@ -22,7 +22,7 @@ export interface TimelineRow {
 export interface Timeline {
   rows: TimelineRow[];
   startedAt: number;
-  /** 依頼への応答が終わった時刻（done / error）。終わるまで null */
+  /** 依頼への応答が終わった時刻（done / error）か、受信が途中で切れて打ち切った時刻（決定69）。終わるまで null */
   endedAt: number | null;
   /** 支払いの証明を送ってから結果が返るまでの、待ち始めの時刻。待っていなければ null */
   waitingSince: number | null;
@@ -169,6 +169,8 @@ export function applyChunk(
  * エージェントは動き続けている見込みが高く、成否は分からないため失敗の印は付けない
  */
 export function applyDisconnect(timeline: Timeline, now: number) {
+  // 切れる前に終わっていた経過は、そのまま残す（切れたのは次の依頼を待つ間）
+  if (timeline.endedAt !== null) return;
   timeline.rows.push({
     actor: 'agent',
     text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',

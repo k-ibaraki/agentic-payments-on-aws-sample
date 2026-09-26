@@ -291,13 +291,16 @@ export type SubscriptionRecovery = 'ignore' | 'resubscribe-on-send' | 'reload-no
  * - 待っている応答が無ければ、購読だけ外して次の送信で useChat に購読し直させる。会話と吹き出しは残る
  * - 応答の途中か承認待ちなら、その場で会話を読み直す。useChat は応答中の印（loading）を戻さず
  *   次の送信を黙って捨てるうえ、承認への応答では購読し直さないため
+ * - 読み直した後でエージェントの応答を待っている間（awaitingRecoveredReply）も、その場で読み直す。
+ *   読み直したフックは loading を持たないが、送信は応答の終わりの知らせが来るまで止めている。
+ *   購読を外すだけにすると、その知らせが届かなくなり送信が戻らない
  */
 export function planRecovery(
   reason: string,
-  state: { loading: boolean; awaitingApproval: boolean },
+  state: { loading: boolean; awaitingApproval: boolean; awaitingRecoveredReply: boolean },
 ): SubscriptionRecovery {
   if (reason === 'client') return 'ignore';
-  return state.loading || state.awaitingApproval ? 'reload-now' : 'resubscribe-on-send';
+  return state.loading || state.awaitingApproval || state.awaitingRecoveredReply ? 'reload-now' : 'resubscribe-on-send';
 }
 
 /**
