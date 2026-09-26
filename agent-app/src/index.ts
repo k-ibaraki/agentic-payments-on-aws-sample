@@ -370,7 +370,8 @@ function describeChunk(chunk: AgentStreamChunk): string {
 }
 
 // useChat の destroy() は購読を外すだけで conversationId と messages を保持する。
-// 会話を捨てる（新規会話・サインアウト・再開失敗）ときはインスタンスごと作り直す
+// 会話を捨てる（新規会話・サインアウト・再開失敗）ときと、受信が切れて会話を読み直すとき（決定69）は
+// インスタンスごと作り直す
 function createChat() {
   const instance: ReturnType<typeof useChat> = useChat({
     api: {
@@ -416,7 +417,7 @@ function createChat() {
       // 応答の途中で読み直した会話（決定69）。新しいフックは生成中の応答を知らないので、終わりの知らせで読み直して拾う
       if (awaitingRecoveredReply && (chunk.type === 'done' || chunk.type === 'error' || chunk.type === 'interrupt')) {
         awaitingRecoveredReply = false;
-        void reloadConversation();
+        void reloadConversation({ again: true });
       }
       onTimelineChunk(chunk);
       // 支払いは有料ツールの呼び出しの中で起きる。返るまで数秒おきに取り直し、減った瞬間を帯に出す（決定47）
@@ -458,6 +459,8 @@ let chatConnection: WebSocket | undefined;
 let pendingReload = false;
 // 読み直しの最中。online と visibilitychange が続けて来ても二重に読み直さない
 let reloading: Promise<boolean> | null = null;
+// 読み直しの最中に応答が終わった。その読み直しは応答を保存する前の履歴を読んだかもしれないので、終わったらもう一度読む
+let reloadAgain = false;
 // 応答の途中で読み直し、エージェントがまだ動いている。終わるまで送信を止める（同じ会話に依頼を重ねない）
 let awaitingRecoveredReply = false;
 
@@ -508,8 +511,20 @@ async function ensureLiveSubscription(): Promise<boolean> {
   return pendingReload ? await reloadConversation() : true;
 }
 
-function reloadConversation(): Promise<boolean> {
-  reloading ??= reloadConversationOnce().finally(() => {
+// again: 読み直しの最中なら、それが終わった後にもう一度読み直す（応答の終わりの知らせを受けたとき）
+function reloadConversation(options: { again?: boolean } = {}): Promise<boolean> {
+  if (reloading) {
+    if (options.again) reloadAgain = true;
+    return reloading;
+  }
+  reloading = (async () => {
+    let ok: boolean;
+    do {
+      reloadAgain = false;
+      ok = await reloadConversationOnce();
+    } while (ok && reloadAgain);
+    return ok;
+  })().finally(() => {
     reloading = null;
   });
   return reloading;
@@ -571,6 +586,7 @@ function discardConversation() {
   chatConnection = undefined;
   pendingReload = false;
   reloading = null;
+  reloadAgain = false;
   awaitingRecoveredReply = false;
   messageCount = 0;
   lastMessages = [];

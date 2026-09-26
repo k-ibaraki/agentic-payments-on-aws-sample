@@ -217,7 +217,7 @@ export function waitingLabel(timeline: Timeline, now: number): string | null {
   return `売り手の応答を待っています… ${Math.floor((now - timeline.waitingSince) / 1000)} 秒`;
 }
 
-/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額 */
+/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額。受信が途中で切れたら所要の代わりにそう言う（決定69） */
 export function timelineSummary(timeline: Timeline, now: number): string {
   if (timeline.endedAt === null) {
     return `途中経過（進行中・${Math.floor((now - timeline.startedAt) / 1000)} 秒）`;
