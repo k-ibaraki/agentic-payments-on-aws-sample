@@ -22,13 +22,15 @@ export interface TimelineRow {
 export interface Timeline {
   rows: TimelineRow[];
   startedAt: number;
-  /** 依頼への応答が終わった時刻（done / error）。終わるまで null */
+  /** 依頼への応答が終わった時刻（done / error）か、受信が途中で切れて打ち切った時刻（決定69）。終わるまで null */
   endedAt: number | null;
   /** 支払いの証明を送ってから結果が返るまでの、待ち始めの時刻。待っていなければ null */
   waitingSince: number | null;
   /** 署名した額の表記（要約に出す） */
   paid: string | null;
   failed: boolean;
+  /** 画面への受信が途中で切れて打ち切ったか（決定69）。成否は分からないので failed とは分ける */
+  cut: boolean;
   /** 「返事を書いています」を出したか（text-delta ごとに行を足さない） */
   writing: boolean;
   /** 届いた購入の経過（購入 ID と通し番号。二重配信を捨てる） */
@@ -111,6 +113,7 @@ export function startTimeline(now: number): Timeline {
     waitingSince: null,
     paid: null,
     failed: false,
+    cut: false,
     writing: false,
     seen: new Set(),
     progressRows: [],
@@ -162,6 +165,23 @@ export function applyChunk(
 }
 
 /**
+ * 画面への受信が途中で切れた（決定69）。以後のチャンクと経過は届かないので、そう書いて打ち切る。
+ * エージェントは動き続けている見込みが高く、成否は分からないため失敗の印は付けない
+ */
+export function applyDisconnect(timeline: Timeline, now: number) {
+  // 切れる前に終わっていた経過は、そのまま残す（切れたのは次の依頼を待つ間）
+  if (timeline.endedAt !== null) return;
+  timeline.rows.push({
+    actor: 'agent',
+    text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',
+    term: 'Realtime（WebSocket）',
+  });
+  timeline.cut = true;
+  stopWaiting(timeline);
+  timeline.endedAt = now;
+}
+
+/**
  * 購入の経過を足す。購入ごとに通し番号で並べ、二重に届いたものは捨てる。
  * 並べ替えは同じ購入の行どうしの中だけで行う（エージェントの行や別の購入との前後は届いた順）
  */
@@ -199,14 +219,15 @@ export function waitingLabel(timeline: Timeline, now: number): string | null {
   return `売り手の応答を待っています… ${Math.floor((now - timeline.waitingSince) / 1000)} 秒`;
 }
 
-/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額 */
+/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額。受信が途中で切れたら所要の代わりにそう言う（決定69） */
 export function timelineSummary(timeline: Timeline, now: number): string {
   if (timeline.endedAt === null) {
     return `途中経過（進行中・${Math.floor((now - timeline.startedAt) / 1000)} 秒）`;
   }
   const parts = [
     `${timeline.rows.length} 件`,
-    `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`,
+    // 切れた時点までの秒数は所要ではないので出さない
+    timeline.cut ? '受信が途中で切れました' : `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`,
   ];
   if (timeline.paid) parts.push(`支払い ${timeline.paid}`);
   if (timeline.failed) parts.push('失敗あり');

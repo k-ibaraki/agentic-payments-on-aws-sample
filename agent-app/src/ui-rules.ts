@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -276,4 +276,77 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
   return expanded
     ? { label: '閉じる', title: '会話の中の元の大きさに戻す（Esc でも閉じる）' }
     : { label: '拡大', title: '画面いっぱいに広げる' };
+}
+
+// ── 応答の受信が切れたときの立て直し（決定69） ──
+// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。接続は 2 時間で必ず切られ、放置したタブでは
+// 生存確認（9 分ごと）が遅れて 10 分の無通信でも切られ得る。クラウド用の購読は繋ぎ直さず、useChat も
+// 購読済みのまま送信するので、画面の側で切断を拾って購読し直す
+
+export type SubscriptionRecovery = 'ignore' | 'resubscribe-on-send' | 'reload-now';
+
+/**
+ * 切断の知らせ（`onDisconnect` の理由）から立て直し方を決める。
+ * - client: 自分で購読を外した（会話の作り直しや読み直し）ので何もしない
+ * - 待っている応答が無ければ、購読だけ外して次の送信で useChat に購読し直させる。会話と吹き出しは残る
+ * - 応答の途中か承認待ちなら、その場で会話を読み直す。useChat は応答中の印（loading）を戻さず
+ *   次の送信を黙って捨てるうえ、承認への応答では購読し直さないため
+ * - 読み直した後でエージェントの応答を待っている間（awaitingRecoveredReply）も、その場で読み直す。
+ *   読み直したフックは loading を持たないが、送信は応答の終わりの知らせが来るまで止めている。
+ *   購読を外すだけにすると、その知らせが届かなくなり送信が戻らない
+ */
+export function planRecovery(
+  reason: string,
+  state: { loading: boolean; awaitingApproval: boolean; awaitingRecoveredReply: boolean },
+): SubscriptionRecovery {
+  if (reason === 'client') return 'ignore';
+  return state.loading || state.awaitingApproval || state.awaitingRecoveredReply ? 'reload-now' : 'resubscribe-on-send';
+}
+
+/**
+ * 読み直した会話で、応答が終わっているか。エージェントは応答を保存してから done を送るので、
+ * 末尾が応答なら終わっている（受信が切れている間に done を取りこぼしていても分かる）
+ */
+export function isReplyFinished(messages: ReadonlyArray<{ role: string }>): boolean {
+  const last = messages[messages.length - 1];
+  return !last || last.role === 'assistant';
+}
+
+/**
+ * 1 本ずつしか走らせない非同期の処理（決定69 の会話の読み直し）。走っている間の呼び出しは同じ結果を待つ。
+ * - again を付けた呼び出しは、走っている処理が成功した後にもう一度走らせる。読み直しの最中に応答が終わると、
+ *   その読み直しは応答を保存する前の履歴を読んだかもしれないため
+ * - reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
+ *   印は消さず、もう一度走ることもしない
+ */
+export function createSingleFlight(task: () => Promise<boolean>) {
+  let running: Promise<boolean> | null = null;
+  let again = false;
+  // 今の処理の番号。reset と新しい処理のたびに進め、捨てた処理が自分の番かどうかを見分ける
+  let flight = 0;
+  return {
+    run(options: { again?: boolean } = {}): Promise<boolean> {
+      if (running) {
+        if (options.again) again = true;
+        return running;
+      }
+      const id = ++flight;
+      running = (async () => {
+        let ok: boolean;
+        do {
+          again = false;
+          ok = await task();
+        } while (ok && again && flight === id);
+        return ok;
+      })().finally(() => {
+        if (flight === id) running = null;
+      });
+      return running;
+    },
+    reset() {
+      flight += 1;
+      running = null;
+      again = false;
+    },
+  };
 }
