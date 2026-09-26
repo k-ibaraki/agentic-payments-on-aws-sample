@@ -93,6 +93,7 @@ test('未認証では会話を作れない', async () => {
   await assert.rejects(buyer.createConversation());
   await assert.rejects(buyer.getWalletStatus());
   await assert.rejects(buyer.setSpendLimit('1.00'));
+  await assert.rejects(buyer.setMaxAmount('0.20'));
   await assert.rejects(buyer.listPurchaseHistory());
 });
 
@@ -153,12 +154,28 @@ test('ウォレットの状態を取れ、自分の支出上限を変えられ�
   assert.strictEqual((await buyer.getWalletStatus()).spendLimit.maxSpendUsd, '2.50');
 });
 
+// 1 回の支払い上限（決定66）。USD で受けて最小単位で保存し、支出上限と違ってセッションには触れない
+test('自分の 1 回の支払い上限を変えられる', async () => {
+  const before = await buyer.getWalletStatus();
+  assert.deepStrictEqual(before.maxAmount, { maxAmount: '150000', maxAmountUsd: '0.15', source: 'default' });
+
+  const changed = await buyer.setMaxAmount('0.2');
+  assert.deepStrictEqual(changed, { maxAmount: { maxAmount: '200000', maxAmountUsd: '0.20', source: 'user' } });
+  assert.deepStrictEqual((await buyer.getWalletStatus()).maxAmount, changed.maxAmount);
+
+  await assert.rejects(buyer.setMaxAmount('abc'));
+  await assert.rejects(buyer.setMaxAmount('0'));
+  assert.strictEqual((await buyer.getWalletStatus()).maxAmount.maxAmount, '200000');
+});
+
 test('他人の会話には発注・閲覧・購読・購入一覧・承認のいずれもできない', async () => {
   await signOut();
   await signUpAndSignIn(userB);
 
   // 支出上限は利用者ごと。A が変えた値は B には見えない（決定43）
   assert.deepStrictEqual((await buyer.getWalletStatus()).spendLimit, { maxSpendUsd: '1.00', source: 'default' });
+  // 1 回の上限も利用者ごと（決定66）
+  assert.strictEqual((await buyer.getWalletStatus()).maxAmount.source, 'default');
 
   await assert.rejects(buyer.sendMessage(conversationA, 'generateHtml で何か作って'));
   await assert.rejects(buyer.getMessages(conversationA));

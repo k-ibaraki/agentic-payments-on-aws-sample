@@ -14,7 +14,8 @@
 //                            利用者 1 人・1 セッションあたりの値（決定39）。期限の下限は 15 分。
 //                            上限は利用者が画面で変えられ、変えた値が KVStore にあればそちらが勝つ（決定43）
 //   PAYMENTS_USER_ID      … 既定 sample-user-1（ウォレットの持ち主 ID。下記「支払い主体」参照）
-//   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 150000 = 0.15 USDC。決定59）
+//   PAYMENT_MAX_AMOUNT    … 1回の支払い上限（USDC の最小単位。既定 150000 = 0.15 USDC。決定59）。
+//                            利用者が画面で変えられ、変えた値が KVStore にあればそちらが勝つ（決定66）
 //   PAYMENT_PAY_TO        … 任意。指定すると売り手アドレスを固定する
 //   BUYER_TOOL_TIMEOUT_MS … 有料ツールの応答を待つ上限。既定 600000（決定31。根拠は
 //                            payments/paid-tool-caller.ts の CallOptions.timeout 参照）
@@ -42,6 +43,7 @@ import {
   paymentSessionSource,
   type PaymentSessionStatus,
 } from './payments/payment-session.js';
+import { maxAmountSource, type MaxAmount } from './payments/max-amount.js';
 import { spendLimitSource, type SpendLimit } from './payments/spend-limit.js';
 import { getWalletBalance, type WalletBalance } from './payments/wallet-balance.js';
 import { createAgentCorePayer } from './payments/x402-payer.js';
@@ -66,13 +68,18 @@ function requireEnv(name: string): string {
   return value;
 }
 
-// 支払いポリシー。上限は環境変数で緩められるが、ネットワークと資産は決定8 に固定する
-export function paymentPolicyFromEnv(): PaymentPolicy {
+// 1 回の支払い上限の既定（最小単位）。利用者が画面で変えた値（決定66）が無いときに使う
+function defaultMaxAmountFromEnv(): string {
+  return process.env.PAYMENT_MAX_AMOUNT ?? '150000';
+}
+
+// 支払いポリシー。上限は環境変数と利用者の設定（決定66）で緩められるが、ネットワークと資産は決定8 に固定する
+export function paymentPolicyFromEnv(maxAmount: string = defaultMaxAmountFromEnv()): PaymentPolicy {
   const payTo = process.env.PAYMENT_PAY_TO;
   return {
     network: BASE_SEPOLIA,
     asset: USDC_BASE_SEPOLIA,
-    maxAmount: process.env.PAYMENT_MAX_AMOUNT ?? '150000',
+    maxAmount,
     ...(payTo ? { payTo } : {}),
   };
 }
@@ -257,6 +264,14 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
+  // 利用者が画面で変えた 1 回の支払い上限（決定66。最小単位）。無ければ環境変数の既定。TTL は無し
+  const maxAmounts = new KVStore(scope, 'payment-max-amount', {
+    schema: z.object({
+      maxAmount: z.string(),
+      updatedAt: z.number(),
+    }),
+  });
+
   // 購入の経過（決定65。progress.ts 参照）。チャンネルは会話 ID ごと。購読の取っ手は
   // buyer API が会話の所有を検証してから返す（index.ts の getProgressChannel）。
   // 共有の接続表とトークンの秘密値は最初に作られた Realtime が持つので、Agent（内蔵の Realtime）より先に
@@ -345,10 +360,12 @@ export function createBuyerAgent(scope: Scope) {
             maxSpendUsd: async () =>
               (await spendLimitSource(spendLimits, sessionConfig.maxSpendUsd).get(context.userId)).maxSpendUsd,
           });
+          // 1 回の上限は購入のたびに読む。利用者が画面で変えた値（決定66）があればそれ、無ければ既定
+          const { maxAmount } = await maxAmountSource(maxAmounts, defaultMaxAmountFromEnv()).get(context.userId);
           const payer = createAgentCorePayer(
             paymentsClient,
             { userId, paymentManagerArn, paymentSession, paymentInstrumentId, purchaseId: resultId },
-            paymentPolicyFromEnv(),
+            paymentPolicyFromEnv(maxAmount),
           );
           // 購入の経過を画面へ流す（決定65）。送信は待たずに順に行い、ツールを返す前に出揃うのを待つ
           const publisher = createProgressPublisher(resultId, (event) =>
@@ -430,10 +447,10 @@ export function createBuyerAgent(scope: Scope) {
     }),
   });
 
-  return { agent, artifacts, paymentSessions, spendLimits, unresolvedPurchases, progress };
+  return { agent, artifacts, paymentSessions, spendLimits, maxAmounts, unresolvedPurchases, progress };
 }
 
-// ── ウォレットと支払いの枠（決定42・43）。buyer API から利用者ごとに呼ぶ ──────────────
+// ── ウォレットと支払いの枠（決定42・43・66）。buyer API から利用者ごとに呼ぶ ──────────────
 
 export interface WalletStatus {
   /** ウォレット残高。PAYMENT_CONNECTOR_ID が無い・取得に失敗したときは null と理由 */
@@ -441,6 +458,8 @@ export interface WalletStatus {
   balanceError: string | null;
   /** 次に切るセッションの上限（利用者の設定か既定） */
   spendLimit: SpendLimit;
+  /** 1 回の支払い上限（利用者の設定か既定） */
+  maxAmount: MaxAmount;
   /** 現在のセッション（無ければ null。次の購入で切られる） */
   session: PaymentSessionStatus | null;
   sessionError: string | null;
@@ -452,6 +471,7 @@ export interface WalletStatus {
 export interface WalletStores {
   paymentSessions: Parameters<typeof describePaymentSession>[1];
   spendLimits: Parameters<typeof spendLimitSource>[0];
+  maxAmounts: Parameters<typeof maxAmountSource>[0];
 }
 
 interface AwsClientLike {
@@ -470,6 +490,7 @@ export async function walletStatus(
   const userId = process.env.PAYMENTS_USER_ID ?? 'sample-user-1';
   const sessionConfig = paymentSessionConfigFromEnv();
   const spendLimit = await spendLimitSource(stores.spendLimits, sessionConfig.maxSpendUsd).get(userSub);
+  const maxAmount = await maxAmountSource(stores.maxAmounts, defaultMaxAmountFromEnv()).get(userSub);
   const paymentManagerArn = process.env.PAYMENT_MANAGER_ARN;
   const paymentInstrumentId = process.env.PAYMENT_INSTRUMENT_ID;
   const paymentConnectorId = process.env.PAYMENT_CONNECTOR_ID;
@@ -478,6 +499,7 @@ export async function walletStatus(
     balance: null,
     balanceError: null,
     spendLimit,
+    maxAmount,
     session: null,
     sessionError: null,
     sessionMinutes: sessionConfig.expiryMinutes,
@@ -544,4 +566,17 @@ export async function changeSpendLimit(
     paymentManagerArn,
   });
   return { spendLimit, discardedSession: discarded };
+}
+
+/**
+ * 利用者の 1 回の支払い上限を変える（決定66）。判定はアプリ側（x402-payer.ts）だけで行うので、
+ * 支出上限（changeSpendLimit）と違って PaymentSession は破棄しない。次の購入から効く
+ */
+export async function changeMaxAmount(
+  stores: Pick<WalletStores, 'maxAmounts'>,
+  userSub: string,
+  maxAmountUsd: string,
+): Promise<{ maxAmount: MaxAmount }> {
+  const maxAmount = await maxAmountSource(stores.maxAmounts, defaultMaxAmountFromEnv()).set(userSub, maxAmountUsd);
+  return { maxAmount };
 }

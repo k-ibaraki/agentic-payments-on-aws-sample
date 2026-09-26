@@ -1,4 +1,4 @@
-// ウォレットの状態と上限変更（決定42・43）の配線のテスト。環境変数は vi.stubEnv で与え、
+// ウォレットの状態と上限変更（決定42・43・66）の配線のテスト。環境変数は vi.stubEnv で与え、
 // SDK クライアントはモック、KVStore はメモリ実装で代える
 import {
   DeletePaymentSessionCommand,
@@ -6,7 +6,13 @@ import {
   GetPaymentSessionCommand,
 } from '@aws-sdk/client-bedrock-agentcore';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { changeSpendLimit, walletStatus, type WalletStores } from './buyer-agent.js';
+import {
+  changeMaxAmount,
+  changeSpendLimit,
+  paymentPolicyFromEnv,
+  walletStatus,
+  type WalletStores,
+} from './buyer-agent.js';
 
 const ENV = {
   PAYMENT_MANAGER_ARN: 'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/x',
@@ -14,6 +20,7 @@ const ENV = {
   PAYMENT_CONNECTOR_ID: 'connector-1',
   PAYMENTS_USER_ID: 'wallet-owner',
   PAYMENT_SESSION_MAX_USD: '1.00',
+  PAYMENT_MAX_AMOUNT: '150000',
 };
 
 function stubEnv(overrides: Partial<Record<keyof typeof ENV, string | undefined>> = {}) {
@@ -22,12 +29,18 @@ function stubEnv(overrides: Partial<Record<keyof typeof ENV, string | undefined>
   }
 }
 
-function memoryStores(): WalletStores & { sessions: Map<string, unknown>; limits: Map<string, unknown> } {
+function memoryStores(): WalletStores & {
+  sessions: Map<string, unknown>;
+  limits: Map<string, unknown>;
+  maxAmountRecords: Map<string, unknown>;
+} {
   const sessions = new Map<string, any>();
   const limits = new Map<string, any>();
+  const maxAmountRecords = new Map<string, any>();
   return {
     sessions,
     limits,
+    maxAmountRecords,
     paymentSessions: {
       async get(key) {
         return sessions.get(key) ?? null;
@@ -45,6 +58,14 @@ function memoryStores(): WalletStores & { sessions: Map<string, unknown>; limits
       },
       async put(key, value) {
         limits.set(key, value);
+      },
+    },
+    maxAmounts: {
+      async get(key) {
+        return maxAmountRecords.get(key) ?? null;
+      },
+      async put(key, value) {
+        maxAmountRecords.set(key, value);
       },
     },
   };
@@ -80,7 +101,22 @@ describe('walletStatus', () => {
     expect(status.balanceError).toBeNull();
     expect(status.session).toMatchObject({ paymentSessionId: 's1', maxSpendUsd: '1.00', availableSpendUsd: '0.9' });
     expect(status.spendLimit).toEqual({ maxSpendUsd: '1.00', source: 'default' });
+    expect(status.maxAmount).toEqual({ maxAmount: '150000', maxAmountUsd: '0.15', source: 'default' });
     expect(status.sessionMinutes).toBe(60);
+  });
+
+  // 画面の行が理由つきで出せるよう、支払いの設定が欠けて早く返る経路でも 1 回の上限は埋める
+  it('PAYMENT_MANAGER_ARN が無くても 1 回の上限は返す', async () => {
+    stubEnv({ PAYMENT_MANAGER_ARN: undefined });
+    const status = await walletStatus(memoryStores(), 'user-a', { send: vi.fn() });
+    expect(status.sessionError).toMatch(/PAYMENT_MANAGER_ARN/);
+    expect(status.maxAmount).toEqual({ maxAmount: '150000', maxAmountUsd: '0.15', source: 'default' });
+  });
+
+  it('PAYMENT_MAX_AMOUNT が無ければコードの既定（0.15 USDC）を返す', async () => {
+    stubEnv({ PAYMENT_MAX_AMOUNT: undefined });
+    const status = await walletStatus(memoryStores(), 'user-a', { send: async () => ({}) });
+    expect(status.maxAmount).toMatchObject({ maxAmount: '150000', source: 'default' });
   });
 
   it('PAYMENT_CONNECTOR_ID が無ければ残高だけ理由つきで null にし、セッションは返す', async () => {
@@ -149,5 +185,38 @@ describe('changeSpendLimit', () => {
     await expect(changeSpendLimit(stores, 'user-a', 'abc', { send })).rejects.toThrow(/金額/);
     expect(stores.limits.size).toBe(0);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('changeMaxAmount', () => {
+  // 1 回の上限はアプリ側の判定だけに効くので、AgentCore Payments は呼ばない（セッションは残る）
+  it('利用者ごとに保存し、セッションには触れない', async () => {
+    stubEnv();
+    const stores = memoryStores();
+    const now = Date.now();
+    stores.sessions.set('user-a', { paymentSessionId: 's1', createdAt: now, expiresAt: now + 30 * 60_000 });
+
+    const result = await changeMaxAmount(stores, 'user-a', '0.2');
+
+    expect(result).toEqual({ maxAmount: { maxAmount: '200000', maxAmountUsd: '0.20', source: 'user' } });
+    expect(stores.sessions.has('user-a')).toBe(true);
+    const send = vi.fn(async () => ({}));
+    expect((await walletStatus(stores, 'user-a', { send })).maxAmount).toEqual(result.maxAmount);
+    expect((await walletStatus(stores, 'user-b', { send })).maxAmount).toMatchObject({ source: 'default' });
+  });
+
+  it('書式外の値は保存しない', async () => {
+    stubEnv();
+    const stores = memoryStores();
+    await expect(changeMaxAmount(stores, 'user-a', '0')).rejects.toThrow(/金額/);
+    expect(stores.maxAmountRecords.size).toBe(0);
+  });
+});
+
+describe('paymentPolicyFromEnv', () => {
+  it('上限を渡せばそれを、無ければ PAYMENT_MAX_AMOUNT を使う', () => {
+    stubEnv({ PAYMENT_MAX_AMOUNT: '120000' });
+    expect(paymentPolicyFromEnv().maxAmount).toBe('120000');
+    expect(paymentPolicyFromEnv('200000').maxAmount).toBe('200000');
   });
 });
