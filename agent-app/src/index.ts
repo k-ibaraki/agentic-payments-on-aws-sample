@@ -532,6 +532,10 @@ async function reloadConversationOnce(): Promise<boolean> {
   finishTimeline();
   // 新しいフックは loading を知らせないので、生成中の素の描画と送信ボタンはここで戻す
   streamingResponse = false;
+  // loadConversation は承認待ちが残っているときにしか描き直さないので、前の承認の欄は先に空ける。
+  // 空けないと、切れている間に済んだ承認のボタンが残り、承認待ちの判定（hasPendingApproval）も誤る
+  const approvals = Array.from(el('interrupts').children);
+  el('interrupts').replaceChildren();
   const next = createChat();
   chat = next;
   try {
@@ -540,6 +544,8 @@ async function reloadConversationOnce(): Promise<boolean> {
     // 途中で会話が捨てられた（新規会話・サインアウト）なら、捨てた側に任せる
     if (chat !== next) return false;
     next.destroy();
+    // 読めなかったので、承認の欄は元に戻す（押すと送る前に読み直しをやり直す）
+    el('interrupts').replaceChildren(...approvals);
     pendingReload = true;
     // 送信ボタンは押せるようにしておく。押すと送る前に読み直しをやり直す（sendCurrentInput）
     el<HTMLButtonElement>('chat-send-btn').disabled = false;
