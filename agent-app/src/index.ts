@@ -28,6 +28,7 @@ import {
   isPaidToolCall,
   isSelectedPurchase,
   orderChatNodes,
+  previewExpandButton,
   purchaseDetail,
   readInternalsOpen,
   retargetAnchor,
@@ -911,6 +912,7 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
     }
     card.host = host;
     status.replaceChildren();
+    attachExpandButton(node);
     return true;
   } catch (error) {
     host?.destroy();
@@ -921,6 +923,29 @@ async function showCardPreview(resultId: string, node: HTMLElement, status: HTML
     showError(status, '表示に失敗しました（「表示」でやり直せます）');
     return false;
   }
+}
+
+// カードの見出しの行に拡大ボタンを付ける（決定67）。広げるのはカード（CSS の .expanded）で、iframe は動かさない。
+// 広げたらカードを会話欄の上端に合わせる。応答の描画（layoutChatLog）は会話欄を末尾へ送るので、
+// 生成中に広げても次の描画で末尾へ戻る（それで構わない。新しい応答を見せる方を優先する）
+function attachExpandButton(node: HTMLElement) {
+  const row = node.querySelector<HTMLElement>(':scope > .purchase');
+  if (!row) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'purchase-expand-btn secondary outline';
+  const render = (expanded: boolean) => {
+    const { label, title } = previewExpandButton(expanded);
+    button.textContent = label;
+    button.title = title;
+  };
+  render(false);
+  button.addEventListener('click', () => {
+    const expanded = node.classList.toggle('expanded');
+    render(expanded);
+    node.scrollIntoView({ block: expanded ? 'start' : 'nearest', behavior: 'smooth' });
+  });
+  row.appendChild(button);
 }
 
 // ── 購入履歴（決定50） ────────────────────────────────────────────────
@@ -1056,6 +1081,8 @@ const TAB_NAMES = ['chat', 'wallet', 'history'] as const;
 type TabName = (typeof TAB_NAMES)[number];
 
 function showTab(name: TabName) {
+  // 依頼の面だけを画面の高さに収めるための印（決定67。style.css の [data-tab='chat']）
+  document.body.dataset.tab = name;
   for (const panel of TAB_NAMES) {
     const active = panel === name;
     el(`tab-${panel}`).setAttribute('aria-pressed', String(active));
@@ -1102,7 +1129,10 @@ document.addEventListener('DOMContentLoaded', () => {
   el('auth-container').appendChild(authenticator);
 
   onAuthChange(authApi, (user) => {
-    el('auth-status').textContent = user ? `サインイン中: ${user.username}` : '未サインイン';
+    const authStatus = el('auth-status');
+    authStatus.textContent = user ? user.username : '未サインイン';
+    // ヘッダーの 1 行に収めるため、利用者名は省略して出すことがある。全体は title で見せる（決定67）
+    authStatus.title = user ? `サインイン中: ${user.username}` : '';
     document.body.classList.toggle('signed-in', !!user);
     el(user ? 'auth-nav' : 'auth-container').appendChild(authenticator);
     if (user) {
