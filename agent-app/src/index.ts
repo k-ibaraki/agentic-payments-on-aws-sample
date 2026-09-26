@@ -23,6 +23,7 @@ import {
   STRIP_EMPTY,
   balanceKey,
   createHostSlot,
+  createSingleFlight,
   didBalanceChange,
   establishedTogether,
   findLastAssistant,
@@ -457,10 +458,8 @@ let chat = createChat();
 let chatConnection: WebSocket | undefined;
 // 会話の読み直しが要るのに、まだできていない（多くはオフライン）。接続が戻ったとき・画面に戻ったとき・送る前にやり直す
 let pendingReload = false;
-// 読み直しの最中。online と visibilitychange が続けて来ても二重に読み直さない
-let reloading: Promise<boolean> | null = null;
-// 読み直しの最中に応答が終わった。その読み直しは応答を保存する前の履歴を読んだかもしれないので、終わったらもう一度読む
-let reloadAgain = false;
+// 会話の読み直しは 1 本ずつ。online と visibilitychange が続けて来ても二重に読み直さない
+const conversationReload = createSingleFlight(() => reloadConversationOnce());
 // 応答の途中で読み直し、エージェントがまだ動いている。終わるまで送信を止める（同じ会話に依頼を重ねない）
 let awaitingRecoveredReply = false;
 
@@ -513,21 +512,7 @@ async function ensureLiveSubscription(): Promise<boolean> {
 
 // again: 読み直しの最中なら、それが終わった後にもう一度読み直す（応答の終わりの知らせを受けたとき）
 function reloadConversation(options: { again?: boolean } = {}): Promise<boolean> {
-  if (reloading) {
-    if (options.again) reloadAgain = true;
-    return reloading;
-  }
-  reloading = (async () => {
-    let ok: boolean;
-    do {
-      reloadAgain = false;
-      ok = await reloadConversationOnce();
-    } while (ok && reloadAgain);
-    return ok;
-  })().finally(() => {
-    reloading = null;
-  });
-  return reloading;
+  return conversationReload.run(options);
 }
 
 // 応答の途中や承認待ちで切れたときは、フックを作り直して会話を読み直す（画面の再読み込みと同じ道筋）。
@@ -585,8 +570,7 @@ function discardConversation() {
   chat = createChat();
   chatConnection = undefined;
   pendingReload = false;
-  reloading = null;
-  reloadAgain = false;
+  conversationReload.reset();
   awaitingRecoveredReply = false;
   messageCount = 0;
   lastMessages = [];

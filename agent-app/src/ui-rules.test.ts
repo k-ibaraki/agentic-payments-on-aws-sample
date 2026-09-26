@@ -508,3 +508,118 @@ describe('isReplyFinished', () => {
     expect(isReplyFinished([])).toBe(true);
   });
 });
+
+// ── 会話の読み直しを 1 本ずつ走らせる（決定69） ──
+import { createSingleFlight } from './ui-rules.js';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+describe('createSingleFlight', () => {
+  it('走っている間の呼び出しは同じ結果を待ち、処理は 1 回だけ走る', async () => {
+    const gate = deferred<boolean>();
+    let calls = 0;
+    const flight = createSingleFlight(() => {
+      calls += 1;
+      return gate.promise;
+    });
+    const a = flight.run();
+    const b = flight.run();
+    gate.resolve(true);
+    expect(await a).toBe(true);
+    expect(await b).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it('again を付けて呼ぶと、走っている処理の後にもう一度走らせる（古い履歴を読んだかもしれないとき）', async () => {
+    const gates = [deferred<boolean>(), deferred<boolean>()];
+    let calls = 0;
+    const flight = createSingleFlight(() => gates[calls++].promise);
+    const a = flight.run();
+    void flight.run({ again: true });
+    gates[0].resolve(true);
+    await Promise.resolve();
+    gates[1].resolve(true);
+    expect(await a).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it('失敗したら、again があってももう一度は走らせない（やり直しは接続が戻ったときに任せる）', async () => {
+    let calls = 0;
+    const flight = createSingleFlight(async () => {
+      calls += 1;
+      return false;
+    });
+    const a = flight.run();
+    void flight.run({ again: true });
+    expect(await a).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it('終わった後の呼び出しは新しく走らせる', async () => {
+    let calls = 0;
+    const flight = createSingleFlight(async () => {
+      calls += 1;
+      return true;
+    });
+    await flight.run();
+    await flight.run();
+    expect(calls).toBe(2);
+  });
+
+  it('reset の後に始めた処理は、捨てた処理が後から終わっても 1 本として扱う', async () => {
+    const gates = [deferred<boolean>(), deferred<boolean>()];
+    let calls = 0;
+    const flight = createSingleFlight(() => gates[calls++].promise);
+    const old = flight.run({ again: true });
+    flight.reset();
+    const fresh = flight.run();
+    gates[0].resolve(true);
+    await old;
+    // 捨てた処理が終わっても、走っている新しい処理に相乗りする（二重に走らせない）
+    const joined = flight.run();
+    gates[1].resolve(true);
+    expect(await fresh).toBe(true);
+    expect(await joined).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it('reset の前に付けた again は、新しく始めた処理に持ち越さない', async () => {
+    const gates = [deferred<boolean>(), deferred<boolean>(), deferred<boolean>()];
+    let calls = 0;
+    const flight = createSingleFlight(() => gates[calls++].promise);
+    const old = flight.run();
+    void flight.run({ again: true });
+    flight.reset();
+    const fresh = flight.run();
+    gates[0].resolve(true);
+    gates[1].resolve(true);
+    await old;
+    expect(await fresh).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it('捨てた処理は、新しい処理に付いた again を横取りしてもう一度走ったりしない', async () => {
+    const gates = [deferred<boolean>(), deferred<boolean>(), deferred<boolean>()];
+    let calls = 0;
+    const flight = createSingleFlight(() => gates[calls++].promise);
+    const old = flight.run();
+    flight.reset();
+    const fresh = flight.run();
+    void flight.run({ again: true });
+    let settled = false;
+    void fresh.then(() => (settled = true));
+    gates[0].resolve(true);
+    await old;
+    gates[1].resolve(true);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    // 新しい処理が自分の again でもう一度走っている（捨てた処理が again を使い切っていない）
+    expect(settled).toBe(false);
+    expect(calls).toBe(3);
+    gates[2].resolve(true);
+    expect(await fresh).toBe(true);
+  });
+});

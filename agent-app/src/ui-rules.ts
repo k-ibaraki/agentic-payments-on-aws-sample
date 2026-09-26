@@ -308,3 +308,42 @@ export function isReplyFinished(messages: ReadonlyArray<{ role: string }>): bool
   const last = messages[messages.length - 1];
   return !last || last.role === 'assistant';
 }
+
+/**
+ * 1 本ずつしか走らせない非同期の処理（決定69 の会話の読み直し）。走っている間の呼び出しは同じ結果を待つ。
+ * - again を付けた呼び出しは、走っている処理が成功した後にもう一度走らせる。読み直しの最中に応答が終わると、
+ *   その読み直しは応答を保存する前の履歴を読んだかもしれないため
+ * - reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
+ *   印は消さず、もう一度走ることもしない
+ */
+export function createSingleFlight(task: () => Promise<boolean>) {
+  let running: Promise<boolean> | null = null;
+  let again = false;
+  // 今の処理の番号。reset と新しい処理のたびに進め、捨てた処理が自分の番かどうかを見分ける
+  let flight = 0;
+  return {
+    run(options: { again?: boolean } = {}): Promise<boolean> {
+      if (running) {
+        if (options.again) again = true;
+        return running;
+      }
+      const id = ++flight;
+      running = (async () => {
+        let ok: boolean;
+        do {
+          again = false;
+          ok = await task();
+        } while (ok && again && flight === id);
+        return ok;
+      })().finally(() => {
+        if (flight === id) running = null;
+      });
+      return running;
+    },
+    reset() {
+      flight += 1;
+      running = null;
+      again = false;
+    },
+  };
+}
