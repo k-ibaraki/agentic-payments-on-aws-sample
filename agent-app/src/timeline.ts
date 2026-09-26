@@ -29,6 +29,8 @@ export interface Timeline {
   /** 署名した額の表記（要約に出す） */
   paid: string | null;
   failed: boolean;
+  /** 画面への受信が途中で切れて打ち切ったか（決定69）。成否は分からないので failed とは分ける */
+  cut: boolean;
   /** 「返事を書いています」を出したか（text-delta ごとに行を足さない） */
   writing: boolean;
   /** 届いた購入の経過（購入 ID と通し番号。二重配信を捨てる） */
@@ -111,6 +113,7 @@ export function startTimeline(now: number): Timeline {
     waitingSince: null,
     paid: null,
     failed: false,
+    cut: false,
     writing: false,
     seen: new Set(),
     progressRows: [],
@@ -162,6 +165,21 @@ export function applyChunk(
 }
 
 /**
+ * 画面への受信が途中で切れた（決定69）。以後のチャンクと経過は届かないので、そう書いて打ち切る。
+ * エージェントは動き続けている見込みが高く、成否は分からないため失敗の印は付けない
+ */
+export function applyDisconnect(timeline: Timeline, now: number) {
+  timeline.rows.push({
+    actor: 'agent',
+    text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',
+    term: 'Realtime（WebSocket）',
+  });
+  timeline.cut = true;
+  stopWaiting(timeline);
+  timeline.endedAt = now;
+}
+
+/**
  * 購入の経過を足す。購入ごとに通し番号で並べ、二重に届いたものは捨てる。
  * 並べ替えは同じ購入の行どうしの中だけで行う（エージェントの行や別の購入との前後は届いた順）
  */
@@ -206,7 +224,8 @@ export function timelineSummary(timeline: Timeline, now: number): string {
   }
   const parts = [
     `${timeline.rows.length} 件`,
-    `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`,
+    // 切れた時点までの秒数は所要ではないので出さない
+    timeline.cut ? '受信が途中で切れました' : `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`,
   ];
   if (timeline.paid) parts.push(`支払い ${timeline.paid}`);
   if (timeline.failed) parts.push('失敗あり');

@@ -1,6 +1,7 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
-// 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン
+// 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン、
+// 応答の受信が切れたときの立て直し
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -466,5 +467,44 @@ describe('previewExpandButton', () => {
 
   it('画面いっぱいに広げているときは「閉じる」を出し、会話の中に戻すと案内する', () => {
     expect(previewExpandButton(true)).toEqual({ label: '閉じる', title: '会話の中の元の大きさに戻す（Esc でも閉じる）' });
+  });
+});
+
+// ── 応答の受信が切れたときの立て直し（決定69） ──
+import { isReplyFinished, planRecovery } from './ui-rules.js';
+
+describe('planRecovery', () => {
+  it('自分で購読を外したとき（client）は何もしない', () => {
+    expect(planRecovery('client', { loading: false, awaitingApproval: false })).toBe('ignore');
+    expect(planRecovery('client', { loading: true, awaitingApproval: true })).toBe('ignore');
+  });
+
+  it('待っている応答が無ければ、次の送信で購読し直させる（会話と吹き出しはそのまま）', () => {
+    for (const reason of ['timeout', 'error', 'unknown']) {
+      expect(planRecovery(reason, { loading: false, awaitingApproval: false })).toBe('resubscribe-on-send');
+    }
+  });
+
+  it('応答の途中で切れたら、その場で会話を読み直す（次の送信を待つと送信ボタンが戻らない）', () => {
+    expect(planRecovery('timeout', { loading: true, awaitingApproval: false })).toBe('reload-now');
+  });
+
+  it('承認待ちで切れたら、その場で会話を読み直す（承認への応答は購読し直さない）', () => {
+    expect(planRecovery('error', { loading: false, awaitingApproval: true })).toBe('reload-now');
+  });
+});
+
+describe('isReplyFinished', () => {
+  it('読み直した会話の末尾が応答なら、応答は終わっている（エージェントは応答を保存してから done を送る）', () => {
+    expect(isReplyFinished([{ role: 'user' }, { role: 'assistant' }])).toBe(true);
+  });
+
+  it('末尾が依頼か承認なら、エージェントはまだ動いている', () => {
+    expect(isReplyFinished([{ role: 'assistant' }, { role: 'user' }])).toBe(false);
+    expect(isReplyFinished([{ role: 'user' }, { role: 'approval' }])).toBe(false);
+  });
+
+  it('会話が空なら、待つ応答は無い', () => {
+    expect(isReplyFinished([])).toBe(true);
   });
 });

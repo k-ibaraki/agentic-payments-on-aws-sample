@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyChunk,
+  applyDisconnect,
   applyProgress,
   describeStep,
   startTimeline,
@@ -175,5 +176,19 @@ describe('依頼 1 回の経過', () => {
     applyProgress(t, progress(1, { step: 'failed', message: 'x' }), 1000);
     applyChunk(t, { type: 'done' }, 2000);
     expect(timelineSummary(t, 2000)).toBe('途中経過（2 件・所要 2 秒・失敗あり）');
+  });
+
+  it('受信が途中で切れたら、そう書いて打ち切る（成否は分からないので失敗とは言わない）', () => {
+    const t = startTimeline(0);
+    applyProgress(t, progress(1, { step: 'paid', amount: '100000', asset: USDC }), 1000);
+    applyDisconnect(t, 5000);
+    expect(t.rows.at(-1)).toEqual({
+      actor: 'agent',
+      text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',
+      term: 'Realtime（WebSocket）',
+    });
+    expect(t.failed).toBe(false);
+    expect(waitingLabel(t, 9000)).toBeNull();
+    expect(timelineSummary(t, 9000)).toBe('途中経過（3 件・受信が途中で切れました・支払い 0.1 USDC）');
   });
 });
