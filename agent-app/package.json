@@ -5,7 +5,7 @@
   "blocksTemplate": "auth-cognito",
   "blocksTemplateDescription": "Vite + vanilla-DOM frontend with Cognito passwordless email-OTP auth end-to-end",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "workspaces": [
     "aws-blocks"
