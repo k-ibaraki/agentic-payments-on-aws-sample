@@ -38,7 +38,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
 - CDK は ops-agent-sample-on-aws 方式: 関数ベースのスタック定義、`parameter.ts`（gitignore、`parameter.sample.ts` をコミット）、jest + @swc/jest で Template テスト、cdk.json は tsx 実行
 - サーバー実装は Biome（lint / format）+ Vitest
-- MCP は `@modelcontextprotocol/sdk` 1.30 系 + `@modelcontextprotocol/ext-apps` 1.7 系に固定。SDK v2（`@modelcontextprotocol/server` 等）へは ext-apps の v2 対応後に移行（DESIGN.md 決定3）
+- MCP は `@modelcontextprotocol/sdk` 1.30 系 + `@modelcontextprotocol/ext-apps` 1.7 系に固定。ext-apps は 2.0 で SDK v2 に
+  対応したが、SDK v2（`@modelcontextprotocol/server` 等）への移行は買い手と合わせて別の作業で行う（DESIGN.md 決定3・U5）
 - サーバーは express を使わず、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから使う。MCP セッションはステートレス（DESIGN.md 決定22）
 - 売り手は無認証の公開エンドポイント。認可は x402 の支払いのみが担う（DESIGN.md 決定19・21）
 - x402 は `@x402/*`（v2 系）のみ使用。旧 `x402-express` 等の v1 パッケージは deprecated のため使わない
@@ -62,6 +63,9 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
   合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）。`.blocks/config.json` の
   `stackId` も `cdk deploy` 経路のスタック名と S3 バケット名の元になる（gitignore しない。fork 先で使うなら書き換える）
+- AWS Blocks は本体を `~0.3.1` に、`@aws-blocks/*` の部品を lockfile の版に留めている（決定70）。0.4 以降は
+  エージェントが AgentCore Runtime で動き、`wireRuntime` の環境変数（`PAYMENT_*` など）が届かない。素の `npm update` は
+  部品を上げて core を混在させるので、更新するときは `@aws-blocks/*` を除いた名前を指定する
 
 ## リージョン
 
