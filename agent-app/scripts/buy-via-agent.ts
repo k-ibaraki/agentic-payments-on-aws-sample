@@ -10,8 +10,8 @@
 // 実行: npx tsx scripts/buy-via-agent.ts "作りたいページの指示"
 //
 // 注意: 1回の実行で実オンチェーン決済（テスト USDC。売り手の価格は依頼ごとに変わる）が発生する。
-// ローカルの LLM は既定で canned プロバイダ（モック）だが、
-// 支払い・billing-mcp 側の Bedrock 生成・オンチェーン決済はすべて本物が動く
+// ローカルの LLM は既定で Bedrock（決定28。BUYER_LOCAL_MODEL=canned で偽 LLM に切り替わる）。
+// どちらでも、支払い・billing-mcp 側の Bedrock 生成・オンチェーン決済はすべて本物が動く
 import { type AgentStreamChunk, Scope } from '@aws-blocks/blocks';
 import { createBuyerAgent, purchasedHtmlKey } from '../aws-blocks/buyer-agent.js';
 
@@ -29,7 +29,7 @@ const conversationId = await agent.createConversationId(userId);
 console.log(`会話を開始: ${conversationId}`);
 console.log(`エージェントへの依頼: generateHtml ツールで ${prompt}`);
 
-// canned プロバイダはツール名への言及でツール呼び出しを発火させるため、
+// 偽 LLM（BUYER_LOCAL_MODEL=canned）はツール名への言及でツール呼び出しを発火させるため、
 // 依頼文にツール名を含めている
 const result = await agent.stream(`generateHtml ツールを使ってください: ${prompt}`, {
   conversationId,
