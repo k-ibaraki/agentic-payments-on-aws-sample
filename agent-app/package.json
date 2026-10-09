@@ -5,7 +5,7 @@
   "blocksTemplate": "auth-cognito",
   "blocksTemplateDescription": "Vite + vanilla-DOM frontend with Cognito passwordless email-OTP auth end-to-end",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "workspaces": [
     "aws-blocks"
@@ -32,32 +32,32 @@
     "test": "vitest run aws-blocks src amplify scripts"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
+    "@aws-blocks/blocks": "~0.3.1",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@picocss/pico": "^2.1.1",
-    "dompurify": "^3.4.14",
-    "marked": "^18.0.11",
-    "zod": "^4.3.0"
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@aws-amplify/backend": "^1.24.0",
-    "@aws-amplify/backend-cli": "^1.9.0",
-    "@aws-sdk/client-bedrock-agentcore": "^3.1121.0",
-    "@aws-sdk/client-bedrock-agentcore-control": "^3.1121.0",
-    "@aws-sdk/client-iam": "^3.1121.0",
-    "@aws-sdk/client-sts": "^3.1121.0",
-    "@coinbase/cdp-sdk": "^1.55.0",
-    "@types/node": "^20.0.0",
-    "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0",
-    "cross-env": "^7.0.3",
-    "esbuild": "^0.27.1",
-    "jsdom": "^30.0.1",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
-    "vite": "^6.4.3",
-    "vitest": "^4.1.11"
+    "@aws-amplify/backend": "^1.25.1",
+    "@aws-amplify/backend-cli": "^1.10.0",
+    "@aws-sdk/client-bedrock-agentcore": "^3.1144.0",
+    "@aws-sdk/client-bedrock-agentcore-control": "^3.1144.0",
+    "@aws-sdk/client-iam": "^3.1144.0",
+    "@aws-sdk/client-sts": "^3.1144.0",
+    "@coinbase/cdp-sdk": "^1.57.1",
+    "@types/node": "^22.20.4",
+    "aws-cdk-lib": "^2.272.0",
+    "constructs": "^10.8.1",
+    "cross-env": "^10.1.0",
+    "esbuild": "^0.27.7",
+    "jsdom": "^30.1.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.3"
   },
   "blocksTemplateVersion": "0.1.0"
 }
