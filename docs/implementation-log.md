@@ -2,6 +2,31 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-09: 買い手の依存の更新を PR #41 に出す（決定70）
+
+10-01 の作業は、取り決めどおりローカルのコミットまでで止まっていた。ユーザーが気づき、PR にすると決めた。
+Amplify Hosting の `main` はマージで自動でビルドされるが、テスト用の環境なのでそのまま出す（ユーザー決定）。
+
+### やったこと
+
+- 出す前に、いまの deploy の状況を AWS で確かめた。買い手は Amplify のジョブで #40（`3bc5230`）まで成功している。
+  売り手（`BillingMcpStack-dev`）は 09-25 の更新が最新で、その後の billing-mcp の変更は README だけなので、deploy し直すものは無い
+- ブランチは最新の main の上に載っており、rebase は要らなかった。main の決定は 69 までで、決定70 とぶつからない
+- 新しい worktree で `npm ci`・`npm run typecheck`・`npm run test`（311 件）・`npm run blocks:client` の後の `npm run build` を流し直した
+- push して PR #41 を出した。CI の 4 ジョブ（agent-app・billing-mcp-cdk・billing-mcp-server・docs-check）が通った
+
+### つまずき
+
+- 新しい worktree で `npm run build` だけを回すと、`Rolldown failed to resolve import "aws-blocks"` で落ちた。生成物の
+  `aws-blocks/client.js` が無いためで、以前からの挙動（vite 8 で文言だけ変わった）。`build:amplify` は先に生成するので、
+  Amplify のビルドには響かない
+
+### 残していること
+
+- マージ後のテスト環境で 1 度依頼を送り、解き直した後の `client-bedrock-runtime` 3.1144 で Bedrock の呼び出しが通るかを確かめる
+  （実決済が起きるので、送る前に確認を取る）
+- 09-25 の deploy でスタックから外れた古い接続表と秘密値の SSM パラメータは、まだ残っている。消すかどうかはユーザーの判断を待っている
+
 ## 2026-10-01: 買い手の依存の更新（決定70、決定3・決定69・U5 追記）
 
 ユーザーの依頼「買い手側のライブラリのバージョンの最新化を検討して」を grill-me で詰めてから着工した。
