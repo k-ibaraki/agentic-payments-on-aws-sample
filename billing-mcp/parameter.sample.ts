@@ -19,8 +19,8 @@ export const devParameter: AppParameter = {
   allowedModelIds: [
     "jp.anthropic.claude-sonnet-4-6",
     "jp.anthropic.claude-opus-4-8",
-    // 価格帯の判定に使う（決定53）
-    "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+    // 価格帯の判定に使う（決定53・71）
+    "jp.anthropic.claude-haiku-5-5",
   ],
   // 価格帯の判定モデル（決定58）はパラメータではなく AppConfig の価格表で切り替える（pnpm set:tier-table）。
   // Jev 用の Secret は仮の値（REPLACE_ME）で作られ、鍵は pnpm set:jev-key で入れるので、ここに書くことは無い

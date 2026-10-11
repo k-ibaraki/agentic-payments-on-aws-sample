@@ -11,11 +11,10 @@ import {
 } from "./judge.js";
 import type { Tier } from "./quote-format.js";
 
-/** Converse の戻りを、本文だけ差し替えて作る */
-function converseReturning(text: string) {
-  return vi.fn().mockResolvedValue({
-    output: { message: { content: [{ text }] } },
-  });
+/** Converse の戻りを、本文（または中身の塊の並び）だけ差し替えて作る */
+function converseReturning(answer: string | object[]) {
+  const content = typeof answer === "string" ? [{ text: answer }] : answer;
+  return vi.fn().mockResolvedValue({ output: { message: { content } } });
 }
 
 describe("Bedrock を使う判定処理", () => {
@@ -64,6 +63,31 @@ describe("Bedrock を使う判定処理", () => {
     await judge({ toolName: "generate-html", state: "会社の連絡先ページ" });
     const input = converse.mock.calls[0][0];
     expect(JSON.stringify(input.messages)).toContain("会社の連絡先ページ");
+  });
+
+  // temperature を渡すと Haiku 5.5 が拒み、全件が中央の価格帯に落ちる（決定71）
+  it("Haiku 5.5 向けの呼び方で呼ぶ", async () => {
+    const converse = converseReturning("ume");
+    await createBedrockJudge(converse)({ toolName: "t", state: "s" });
+    const { inferenceConfig, additionalModelRequestFields } =
+      converse.mock.calls[0][0];
+    expect(inferenceConfig).not.toHaveProperty("temperature");
+    expect(additionalModelRequestFields).toEqual({
+      output_config: { effort: "low" },
+    });
+    // 思考の余地は残しつつ、402 を返すまでの待ちを延ばしすぎない
+    expect(inferenceConfig.maxTokens).toBeGreaterThanOrEqual(128);
+    expect(inferenceConfig.maxTokens).toBeLessThanOrEqual(256);
+  });
+
+  it("答えの前に思考の塊が付いていても本文から読む", async () => {
+    const judge = createBedrockJudge(
+      converseReturning([
+        { reasoningContent: { reasoningText: { text: "" } } },
+        { text: "matsu" },
+      ]),
+    );
+    expect((await judge({ toolName: "t", state: "s" })).tier).toBe("matsu");
   });
 });
 

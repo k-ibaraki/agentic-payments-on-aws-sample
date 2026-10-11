@@ -78,8 +78,11 @@ export type ConverseFn = (
   input: ConverseCommandInput,
 ) => Promise<ConverseCommandOutput>;
 
-/** 判定に使うモデル。生成側（決定56 の対象）とは別に、安く速いものを選ぶ */
-export const JUDGE_MODEL_ID = "jp.anthropic.claude-haiku-4-5-20251001-v1:0";
+/**
+ * 判定に使うモデル。生成側（決定56 の対象）とは別に、安く速いものを選ぶ。
+ * 変えるときは CDK の `allowedModelIds` も揃える（IAM で許したモデルしか呼べない）
+ */
+export const JUDGE_MODEL_ID = "jp.anthropic.claude-haiku-5-5";
 
 const BEDROCK_SYSTEM_PROMPT = [
   "あなたはHTML生成サービスの見積もり係です。依頼文を読み、作るべきページの規模を3段から1つ選びます。",
@@ -127,8 +130,11 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
         modelId: JUDGE_MODEL_ID,
         system: [{ text: BEDROCK_SYSTEM_PROMPT }],
         messages: [{ role: "user", content: [{ text: state }] }],
-        // 1 語で足りるが、前置きを添えられたときに語が途中で切れないよう余裕を持たせる
-        inferenceConfig: { maxTokens: 16, temperature: 0 },
+        // 思考のぶん 1 語より余裕を持たせつつ、402 を返すまでの待ちを延ばしすぎない上限。
+        // temperature は Haiku 5.5 が拒むので渡さない（決定71）
+        inferenceConfig: { maxTokens: 256 },
+        // 思考は切らずに effort を low に絞る（決定71）
+        additionalModelRequestFields: { output_config: { effort: "low" } },
       });
       const tier = readTier(
         response.output?.message?.content
