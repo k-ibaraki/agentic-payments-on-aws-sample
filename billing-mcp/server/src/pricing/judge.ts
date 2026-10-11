@@ -130,14 +130,10 @@ export function createBedrockJudge(converse: ConverseFn): Judge {
         modelId: JUDGE_MODEL_ID,
         system: [{ text: BEDROCK_SYSTEM_PROMPT }],
         messages: [{ role: "user", content: [{ text: state }] }],
-        // 思考に使ったトークンも数えられるので 1 語ぶんより余裕を持たせるが、広げすぎると
-        // 考え込んだ回に 402 を返すまでの待ちが延びる（生成と同じ、570 秒で打ち切るクライアントを
-        // 使うため）。上限に達して答えの語が出なかった回は、readTier が価格帯を拾えないので、
-        // ほかの読めない答えと同じく中央の価格帯へ落とす。temperature は Haiku 5.5 が
-        // 拒むので渡さない（決定71）
+        // 思考のぶん 1 語より余裕を持たせつつ、402 を返すまでの待ちを延ばしすぎない上限。
+        // temperature は Haiku 5.5 が拒むので渡さない（決定71）
         inferenceConfig: { maxTokens: 256 },
-        // 思考は切らずに effort を low に絞る。思考を切るより 4.5 の判定に近く、待ちも費用も
-        // 変わらない（決定71）
+        // 思考は切らずに effort を low に絞る（決定71）
         additionalModelRequestFields: { output_config: { effort: "low" } },
       });
       const tier = readTier(

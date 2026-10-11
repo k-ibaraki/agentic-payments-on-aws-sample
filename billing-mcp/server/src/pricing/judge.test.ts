@@ -11,11 +11,10 @@ import {
 } from "./judge.js";
 import type { Tier } from "./quote-format.js";
 
-/** Converse の戻りを、本文だけ差し替えて作る */
-function converseReturning(text: string) {
-  return vi.fn().mockResolvedValue({
-    output: { message: { content: [{ text }] } },
-  });
+/** Converse の戻りを、本文（または中身の塊の並び）だけ差し替えて作る */
+function converseReturning(answer: string | object[]) {
+  const content = typeof answer === "string" ? [{ text: answer }] : answer;
+  return vi.fn().mockResolvedValue({ output: { message: { content } } });
 }
 
 describe("Bedrock を使う判定処理", () => {
@@ -66,47 +65,27 @@ describe("Bedrock を使う判定処理", () => {
     expect(JSON.stringify(input.messages)).toContain("会社の連絡先ページ");
   });
 
-  // Haiku 5.5 は temperature を ValidationException で拒む。渡すと判定が毎回落ち、
-  // 黙って全件が中央の価格帯で売られる
-  it("temperature は渡さない", async () => {
+  // temperature を渡すと Haiku 5.5 が拒み、全件が中央の価格帯に落ちる（決定71）
+  it("Haiku 5.5 向けの呼び方で呼ぶ", async () => {
     const converse = converseReturning("ume");
     await createBedrockJudge(converse)({ toolName: "t", state: "s" });
-    expect(converse.mock.calls[0][0].inferenceConfig).not.toHaveProperty(
-      "temperature",
-    );
-  });
-
-  // 思考を切るより、思考を許して effort を low に絞るほうが 4.5 の判定に近かった（決定71）
-  it("effort を low に絞って呼ぶ", async () => {
-    const converse = converseReturning("ume");
-    await createBedrockJudge(converse)({ toolName: "t", state: "s" });
-    expect(converse.mock.calls[0][0].additionalModelRequestFields).toEqual({
+    const { inferenceConfig, additionalModelRequestFields } =
+      converse.mock.calls[0][0];
+    expect(inferenceConfig).not.toHaveProperty("temperature");
+    expect(additionalModelRequestFields).toEqual({
       output_config: { effort: "low" },
     });
-  });
-
-  // 思考に使ったトークンも maxTokens に数えられるので、1 語ぶん（16）では考えた回に答えが
-  // 空になる。一方で上限を広げすぎると、考え込んだ回に 402 を返すまでの待ちが延びる
-  it("思考の余地は残しつつ、402 の待ちを延ばしすぎない maxTokens を渡す", async () => {
-    const converse = converseReturning("ume");
-    await createBedrockJudge(converse)({ toolName: "t", state: "s" });
-    const { maxTokens } = converse.mock.calls[0][0].inferenceConfig;
-    expect(maxTokens).toBeGreaterThanOrEqual(128);
-    expect(maxTokens).toBeLessThanOrEqual(256);
+    // 思考の余地は残しつつ、402 を返すまでの待ちを延ばしすぎない
+    expect(inferenceConfig.maxTokens).toBeGreaterThanOrEqual(128);
+    expect(inferenceConfig.maxTokens).toBeLessThanOrEqual(256);
   });
 
   it("答えの前に思考の塊が付いていても本文から読む", async () => {
     const judge = createBedrockJudge(
-      vi.fn().mockResolvedValue({
-        output: {
-          message: {
-            content: [
-              { reasoningContent: { reasoningText: { text: "" } } },
-              { text: "matsu" },
-            ],
-          },
-        },
-      }),
+      converseReturning([
+        { reasoningContent: { reasoningText: { text: "" } } },
+        { text: "matsu" },
+      ]),
     );
     expect((await judge({ toolName: "t", state: "s" })).tier).toBe("matsu");
   });
