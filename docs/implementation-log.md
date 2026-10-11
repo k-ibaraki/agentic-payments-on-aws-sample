@@ -72,7 +72,11 @@
 - `cdk diff` の結果。IAM の許可が Haiku 4.5 から 5.5 に替わり（jp 推論プロファイルと ap-northeast-1／-3 の foundation-model）、
   Lambda のコードが替わる。作り直しは無い。ほかに 8 件の差分が出たが、`--strict` で見ると Output と Secret の説明文で、
   動いているスタック側の日本語が `?` に化けているだけだった
-- deploy はまだ。ユーザーの判断を待つ
+- 時間割表の食い違いを受け入れると決まった後、コミットしてから deploy した（ユーザー決定。`pnpm cdk deploy`、約 75 秒。
+  作り直しは無く、`McpEndpointUrl` も変わらない）。支払いを付けずに `generate-html` を呼んで 402 を返させ、
+  `eval-cases.ts` の 3 件で判定を確かめた。時間割表は竹、スコアランキングは竹、授業予約サイトは松で、手元で 5.5 に
+  通したときと同じ。CloudWatch に、判定に失敗して既定の価格帯に落としたという警告と ValidationException は出ていない。
+  AppConfig の拡張の「failed to create endpoint（tcp6 [::1]:2772）」という警告は出ているが、deploy の前から出ているもの
 
 ### セルフレビュー（同日）
 
