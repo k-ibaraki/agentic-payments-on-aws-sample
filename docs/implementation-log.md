@@ -2,6 +2,69 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-11: 価格帯の判定に Strands Decider を足す案を見送り、稼働中の判定モデルを Haiku に戻す
+
+ユーザーの依頼「価格帯の判定モデルに Strands Decider を足して既定にし、稼働中の環境も切り替えたい」を grill-me で
+詰めた。手間が大きいと分かった時点でユーザーが取りやめ、代わりに稼働中の判定モデルを Haiku に戻した（Jev の
+クレジットがまもなく切れるため）。コードの変更は無い。
+
+### 下調べで分かったこと（Strands Decider）
+
+- Strands Labs が 2026-10 に公開した、System One 型の判定モデル（choice / score / noul で答え、文章は生成しない）。
+  Qwen3.5-2B-Base の言語モデルの出力層を外し、選択肢を採点する小さな頭に替えたもので、約 1.9B。Apache-2.0。
+  重み・学習データ・学習スクリプトが公開されている（GitHub `strands-labs/strands-decider`、Hugging Face `StrandsAgents/*`）
+- **Bedrock では提供されていない**。自前でホストするしかなく、付属のサーバー（`strands-decider serve`）は認証を
+  持たない。窓口は `/v1/systemone` で、`state` と `questions` を受ける形は Jev に近いが、互換をうたってはいない
+- AWS の上でのホスト先ごとの実測（AWS Builder Center のコミュニティ記事。こちらでは測っていない）:
+  SageMaker の L4 で 1 回 131ms・T4 で 483ms（常時起動で月 $600 前後）、AgentCore Runtime の GPU で 475ms
+  （セッションの立ち上げに約 3 分）、AgentCore Runtime の CPU（2 vCPU・8GB）で 1 回 9.1 秒・新しいセッションの
+  最初の答えまで 10〜17 秒、Lambda（arm64・10GB）で 1 回 4.3 秒・コールドスタート 39〜49 秒。いまの Haiku は
+  約 1 秒で、速さでも費用でも Haiku を上回る置き方は無かった
+- 重みは bf16 で約 4GB あり、AgentCore Runtime の CPU 版のイメージの上限（2GB）に入らない。起動時に S3 か
+  Hugging Face から取ってくる作りになる。日本語での判定品質はどこにも公表されていない
+- 公開されている 2B は `2B-qwen3.5-v1-2610`・`2B-hobson-v21`・`2B-hobson-v19` の 3 つ。Gemma 4 系は bf16 で
+  9GB 以上あり、CPU 版の 8GB に入らない
+
+### grill-me で決めかけていたこと（取りやめ）
+
+目的は「AWS の中で完結する Jev 相当」（Jev は AWS の外にあり、waitlist で読者が再現できない）。そのうえで、
+次のところまで決めていた。再開するときの出発点として残す。
+
+- ホスト先は AgentCore Runtime の CPU 版。判定は 20 秒まで待ち、再送はしない（いまの Jev 経路の 3 秒では、温まって
+  いても毎回打ち切られて竹に落ちる）
+- 稼働中を切り替える前に、日本語の判定品質を Haiku と比べて関門にする。評価セットは新しい依頼文 40 件で、正解の
+  ラベルは Claude が付ける。合格線は「3 つの価格帯のどれにも答えが出ていること」と「的中が Haiku の 4 件落ち以内」。
+  不合格ならそこで止めて報告する。モデルは 2B の 3 種を測って最良の版を採る
+- コードの既定（`DEFAULT_JUDGE_KIND`）を decider にし、CDK は Runtime を常に作る（売り手を deploy する読者全員に
+  Docker と AgentCore Runtime が要るようになる）
+
+重みの置き場・Runtime が落ちたときの逃げ先・Jev の扱いを問う前に、ユーザーが「大変そうだから止めよう」と取りやめた。
+
+### やったこと
+
+- 稼働中の価格表（`BillingMcpStack-dev` の AppConfig）の `judge` を `jev` から `haiku` に替えた。版 7 の中身を読み、
+  `judge` の 1 行だけを替えた表を `pnpm set:tier-table` で配った（版 8、配信 #8 は COMPLETE）。価格（$0.1 / $0.15 /
+  $0.2）と目安（6,500 / 10,000 / 14,000）は変えていない。クレジットが切れた後も `jev` のままだと、Haiku には
+  落ちない。問い合わせが失敗するたびに中央の価格帯（竹）で売ることになるので、切れる前に替えた
+- Jev の API キーは Secrets Manager に残した。`judge` が `haiku` なら読まれない
+- 買い手の共有ウォレット（sample-user-1）に、CDP の faucet でテスト USDC を 1 USDC 補充した（`scripts/faucet.ts`）。
+  残高は 2.345 から 3.345 USDC になったことを、`GetPaymentInstrumentBalance` で確かめた
+
+### つまずき
+
+- 9/20 に Haiku とローカルの判定モデルを比べた 20 件の評価セット（`/tmp/jev-trial/`）は、もう消えていた。
+  リポジトリに残っているのは `pricing/eval-cases.ts` の 3 件（各価格帯 1 件）だけで、判定モデルを比べ直すなら
+  評価セットを作り直すことになる
+- この worktree には `parameter.ts` も `node_modules` も無く、`pnpm set:tier-table` と `faucet.ts` が動かなかった。
+  同じコミットの本体の checkout で実行した
+
+### 残していること
+
+- 稼働中が Haiku で判定しているかは、まだ見ていない。AppConfig の反映には間隔をあけた呼び出しが 2 回ほど要る。
+  支払いなしの見積もり（402）を何度か取り、402 の判定モデル名が Haiku になることと、CloudWatch Logs に
+  「判定モデルの指定を読み取れませんでした」が出ていないことを確かめる
+- Secrets Manager の Jev の鍵を消すかどうかは、ユーザーの判断を待っている
+
 ## 2026-10-09: 買い手の依存の更新を PR #41 に出す（決定70）
 
 10-01 の作業は、取り決めどおりローカルのコミットまでで止まっていた。ユーザーが気づき、PR にすると決めた。
