@@ -321,6 +321,16 @@ export function watchTurnEnd(
   };
 }
 
+/**
+ * createChat の onError から、その回が購読を残さずに終わったかを決める（watchTurnEnd の endedByChunk に使う）。
+ * 原因（cause）が付くのは 3 通り。送信の失敗と消費ループの例外は、応答中の印を戻してから知らせ、購読は残らない。
+ * 繋ぎ直した後の読み直しの失敗は、印を応答中のまま知らせ、回は続く（購読も生きている）。原因が無いのはエラーの
+ * チャンクと安全弁で、前者はチャンクとして、後者は印の変化として別に扱うので、ここでは決めない
+ */
+export function endsTurnWithoutStaleSubscription(error: { cause: unknown; loading: boolean }): boolean {
+  return error.cause !== undefined && !error.loading;
+}
+
 /** サーバーが識別子を外して返したチャンネルの記述に、付け直す（createChat の refresh が求める形） */
 export function toChannelDescriptor(raw: { channel: string; [key: string]: unknown }): ChatChannelDescriptor {
   return { ...raw, __blocks: 'realtime/channel' };

@@ -27,6 +27,7 @@ import {
   establishedTogether,
   findLastAssistant,
   isPaidToolCall,
+  endsTurnWithoutStaleSubscription,
   isReplyPending,
   isSelectedPurchase,
   orderChatNodes,
@@ -484,9 +485,8 @@ function newChat() {
       if (chunk.type === 'tool-result' || chunk.type === 'done') refreshAfterReply();
     },
     onError: (error, cause) => {
-      // cause があるのは送信そのものの失敗（handleSendFailure）。購読の消費ループは始まっていないか自分で終えているので、
-      // 購読は残らない（作り直さなくてよい）
-      if (cause !== undefined) endedByChunk = true;
+      // 送信そのものの失敗などで終わったなら、購読は残らない（作り直さなくてよい）。判定は ui-rules.ts
+      if (endsTurnWithoutStaleSubscription({ cause, loading: instance.isLoading() })) endedByChunk = true;
       // ストリームが落ちるとチャンクは以後届かない。取り直しもここで止める（決定47）
       appendEvent(`エラー: ${error}`);
       stopBalanceWatch();
@@ -515,22 +515,35 @@ let chatStale = false;
 // createChat は、終わりのチャンクを受けずに終わった回（繋ぎ直し後の読み直し・安全弁）の購読を外さない。そのまま
 // 次の依頼を送ると、残った購読の後始末が新しい回の応答中の印を消し、途中経過が閉じて送信ボタンも戻ってしまう。
 // destroy() で残った購読を黙らせ、新しいインスタンスで会話を読み直してから送る
-// 戻り値は、送ってよいか（作り直しの間に新規会話・サインアウトで会話を捨てたら false）
-async function renewStaleChat(): Promise<boolean> {
-  if (!chatStale) return true;
-  chatStale = false;
-  const conversationId = chat.getConversationId();
-  chat.destroy();
-  const next = newChat();
-  chat = next;
-  if (!conversationId) return true;
-  try {
-    await next.loadConversation(conversationId);
-  } catch (error) {
-    // 会話 ID は読み込みの前に覚えるので、読めなくても送れる（応答は届く）
-    if (chat === next) appendEvent(`会話を読み直せませんでした: ${describeError(error)}`);
-  }
-  return chat === next;
+// 戻り値は、送ってよいか。作り直しの間に新規会話・サインアウトで会話を捨てたとき、会話を読み直せなかったとき
+// （空のまま送ると画面の吹き出しが消える）は false。作り直しは 1 本ずつで、待つ間に来た送信や承認も同じ結果を待つ
+let renewing: Promise<boolean> | null = null;
+function renewStaleChat(): Promise<boolean> {
+  if (renewing) return renewing;
+  if (!chatStale) return Promise.resolve(true);
+  renewing = (async () => {
+    const conversationId = chat.getConversationId();
+    chat.destroy();
+    const next = newChat();
+    chat = next;
+    if (!conversationId) {
+      chatStale = false;
+      return true;
+    }
+    try {
+      await next.loadConversation(conversationId);
+    } catch (error) {
+      // 次に送るときにもう一度作り直す（chatStale は立てたまま）
+      if (chat === next) appendEvent(`会話を読み直せなかったので送りませんでした。もう一度送ってください: ${describeError(error)}`);
+      return false;
+    }
+    if (chat !== next) return false;
+    chatStale = false;
+    return true;
+  })().finally(() => {
+    renewing = null;
+  });
+  return renewing;
 }
 
 // ── 読み込み直した会話の続きを待つ（決定73。判断の規則は ui-rules.ts） ──
@@ -906,7 +919,8 @@ function renderInterrupts(interrupts: Array<{ interruptId: string; name: string;
         button.textContent = label;
         button.addEventListener('click', async () => {
           // 応答中は createChat が承認への応答を黙って捨てる（送信と同じ）。欄を空ける前に止め、承認待ちを画面から消さない
-          if (chat.isLoading()) {
+          // 読み込み直した会話の続きを待つ間（その後の読み直しを含む）も止める。読み直しが応答の吹き出しを上書きするため
+          if (chat.isLoading() || observing) {
             appendEvent('応答中は承認に応えられません。応答が終わってからもう一度選んでください');
             return;
           }
@@ -947,7 +961,8 @@ async function sendCurrentInput() {
   // 入力を消す前に止める。Enter は送信ボタンの無効を通らない）
   if (!text || chat.isLoading() || observing) return;
   input.value = '';
-  if (!(await renewStaleChat())) {
+  // 作り直しを待つ間に、承認への応答などで応答中になっていたら送らない（createChat は黙って捨てる）
+  if (!(await renewStaleChat()) || chat.isLoading()) {
     input.value = text;
     return;
   }

@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
 });
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
-import { isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
+import { endsTurnWithoutStaleSubscription, isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
 describe('isReplyPending', () => {
   // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
@@ -572,6 +572,22 @@ describe('watchTurnEnd', () => {
     onLoadingEnded();
     await flush();
     expect(calls.stale).toBe(0);
+  });
+});
+
+describe('endsTurnWithoutStaleSubscription', () => {
+  // createChat の onError に原因（cause）が付くのは、送信の失敗・消費ループの例外（どちらも応答中の印を戻してから知らせる。
+  // 購読は残らない）と、繋ぎ直した後の読み直しの失敗（印は応答中のまま。購読は生きていて、回は続く）
+  it('原因付きで、応答中の印が戻っていれば、購読を残さずに終わった', () => {
+    expect(endsTurnWithoutStaleSubscription({ cause: new Error('x'), loading: false })).toBe(true);
+  });
+
+  it('原因付きでも応答中なら、回は続いている（繋ぎ直した後の読み直しの失敗）', () => {
+    expect(endsTurnWithoutStaleSubscription({ cause: new Error('x'), loading: true })).toBe(false);
+  });
+
+  it('原因が無ければ、エラーのチャンクか安全弁。この判定では決めない', () => {
+    expect(endsTurnWithoutStaleSubscription({ cause: undefined, loading: false })).toBe(false);
   });
 });
 
