@@ -146,7 +146,7 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     return purchaseProgress.getChannel('steps', conversationId);
   },
 
-  // 繋ぎ直しのときにトークンを取り直すための、チャンネルの生の記述（決定72。useChat の refresh）。
+  // 繋ぎ直しのときにトークンを取り直すための、チャンネルの生の記述（決定72。createChat の refresh）。
   // 中身は接続と購読のトークンそのものなので、getChannel / getProgressChannel と同じ所有検証を通す
   async getChannelDescriptor(conversationId: string) {
     const user = await auth.requireAuth(context);

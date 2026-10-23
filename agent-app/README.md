@@ -40,7 +40,7 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   エージェントの会話ループ（LLM 呼び出し・MCP ツール呼び出し・x402 の署名）は、Agent ブロックが作る
   Bedrock AgentCore Runtime の中で動く。API を受ける共有 Lambda は、依頼を受けると Runtime を呼び出すだけになる
   （手元の `npm run dev` では同じプロセスで動く）。AWS Blocks は 0.8 系に固定している（版を上げると構成が変わることがあるため）。
-  Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する。
+  Realtime は Agent ブロック内蔵の分をブラウザから `createChat`（`@aws-blocks/bb-agent/client`）で購読する。
   これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（WebSocket API は共有）。
   共有の接続表とトークンの秘密値は、最初に作られた `progress` の配下に置かれる。作る順を deploy 後に変えると、
   接続表とトークンの秘密値が作り直されるので変えない
@@ -61,12 +61,13 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   進行中は開き、終われば閉じて要約だけを残す。その場限りで、読み込み直すと消える。規則は `src/timeline.ts`、
   購入の経過の形と送信処理は `aws-blocks/progress.ts`
 - 応答と途中経過を受ける WebSocket（API Gateway）は、接続から 2 時間で必ず切られる。放置したタブでは、
-  ブラウザがタイマーを間引くため生存確認が遅れ、10 分の無通信で切られることもある。切れたときの繋ぎ直しと、
-  繋ぎ直した後の会話の読み直しは AWS Blocks（`useChat`）に任せる。繋ぎ直すときは、期限の切れたトークンを
-  使い回さないよう、サーバーから取り直す（`getChannelDescriptor` / `getProgressChannelDescriptor`。チャンネルを
-  渡す API と同じ所有検証を通す）。ただし AWS Blocks は繋ぎ直しを 5 回（約 31 秒）で諦め、その後の送信の応答は
-  届かなくなるので、画面は送る前と承認に応える前にだけ接続を確かめる。切れていれば会話を読み直してから送る
-  （会話の中の購入カードは会話の末尾へ移る。画面を読み込み直したときと同じ）。判断の規則は `src/ui-rules.ts`
+  ブラウザがタイマーを間引くため生存確認が遅れ、10 分の無通信で切られることもある。`createChat` は依頼のたびに
+  購読し直し、応答が終わると購読を外すので、応答を待っていない間は WebSocket を張らず、放置しても切れた購読に
+  送ることは無い。応答の途中で切れたときの繋ぎ直しと、繋ぎ直した後の会話の読み直しも `createChat` に任せる。
+  繋ぎ直すときは、期限の切れたトークンを使い回さないよう、サーバーから取り直す（`getChannelDescriptor` /
+  `getProgressChannelDescriptor`。チャンネルを渡す API と同じ所有検証を通す）。`createChat` の `loadConversation` は
+  履歴を読むだけで購読しないので、応答の途中で画面を読み込み直したときは、観察用に購読して終わりを待ち、
+  届いたら会話を読み直す（待つ間は送信を止める）。判断の規則は `src/ui-rules.ts`
 - 支払額は購入 1 件ごとに見せる。売り手の価格は依頼の規模で変わるため、
   購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
   ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）

@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69・72）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69・72・73）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
 // 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン、
 // 受信の切断と繋ぎ直しまわり
@@ -471,28 +471,34 @@ describe('previewExpandButton', () => {
 });
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
-import { isSubscriptionClosed, isTurnEndedWithoutChunk, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
+import { isReplyPending, isTurnEndedWithoutChunk, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
-describe('isSubscriptionClosed', () => {
-  // 上流（bb-realtime）は繋ぎ直しを 5 回で諦めて接続を畳む。useChat は購読済みのまま送るので、
-  // 閉じていれば送る前に会話を読み直す
-  it('閉じかけ・閉じた接続は切れているとみなす', () => {
-    expect(isSubscriptionClosed(2)).toBe(true);
-    expect(isSubscriptionClosed(3)).toBe(true);
+describe('isReplyPending', () => {
+  // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
+  // エージェントがまだ動いているかを履歴から判断し、動いていれば観察用に購読して終わりを待つ
+  it('末尾が依頼なら、エージェントはまだ応答を作っている', () => {
+    expect(isReplyPending([{ role: 'assistant' }, { role: 'user' }], false)).toBe(true);
   });
 
-  it('つながっている・つなぎかけの接続はそのまま送る（つなぎかけは上流が繋ぎ直している最中）', () => {
-    expect(isSubscriptionClosed(0)).toBe(false);
-    expect(isSubscriptionClosed(1)).toBe(false);
+  it('末尾が承認への応答なら、承認の後の続きを作っている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'approval' }], false)).toBe(true);
   });
 
-  it('まだ購読していなければ切れていない（useChat が送る前に購読する）', () => {
-    expect(isSubscriptionClosed(undefined)).toBe(false);
+  it('末尾が応答なら、待つものは無い（エージェントは応答を保存してから終わりを知らせる）', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'assistant' }], false)).toBe(false);
+  });
+
+  it('承認待ちなら、エージェントは止まっている', () => {
+    expect(isReplyPending([{ role: 'user' }], true)).toBe(false);
+  });
+
+  it('会話が空なら、待つものは無い', () => {
+    expect(isReplyPending([], false)).toBe(false);
   });
 });
 
 describe('isTurnEndedWithoutChunk', () => {
-  // useChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、done を流さずに
+  // createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、done を流さずに
   // 応答中の印だけを戻す。画面の後始末（途中経過・購入一覧・残高）は done を受けて走るので、ここで拾う
   it('応答中の印が戻ったのに途中経過が開いたままなら、終わりの知らせを取りこぼしている', () => {
     expect(isTurnEndedWithoutChunk({ loading: false, timelineOpen: true, awaitingApproval: false })).toBe(true);
@@ -512,7 +518,7 @@ describe('isTurnEndedWithoutChunk', () => {
 });
 
 describe('watchTurnEnd', () => {
-  // useChat は応答中の印を戻した直後に、同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼ぶ。
+  // createChat は応答中の印を戻した直後に、同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼ぶ。
   // 判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -566,57 +572,3 @@ describe('toChannelDescriptor', () => {
   });
 });
 
-// ── 会話の読み直しを 1 本ずつ走らせる（決定69） ──
-import { createSingleFlight } from './ui-rules.js';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
-
-describe('createSingleFlight', () => {
-  it('走っている間の呼び出しは同じ結果を待ち、処理は 1 回だけ走る', async () => {
-    const gate = deferred<boolean>();
-    let calls = 0;
-    const flight = createSingleFlight(() => {
-      calls += 1;
-      return gate.promise;
-    });
-    const a = flight.run();
-    const b = flight.run();
-    gate.resolve(true);
-    expect(await a).toBe(true);
-    expect(await b).toBe(true);
-    expect(calls).toBe(1);
-  });
-
-  it('終わった後の呼び出しは新しく走らせる', async () => {
-    let calls = 0;
-    const flight = createSingleFlight(async () => {
-      calls += 1;
-      return true;
-    });
-    await flight.run();
-    await flight.run();
-    expect(calls).toBe(2);
-  });
-
-  it('reset の後に始めた処理は、捨てた処理が後から終わっても 1 本として扱う', async () => {
-    const gates = [deferred<boolean>(), deferred<boolean>()];
-    let calls = 0;
-    const flight = createSingleFlight(() => gates[calls++].promise);
-    const old = flight.run();
-    flight.reset();
-    const fresh = flight.run();
-    gates[0].resolve(true);
-    await old;
-    // 捨てた処理が終わっても、走っている新しい処理に相乗りする（二重に走らせない）
-    const joined = flight.run();
-    gates[1].resolve(true);
-    expect(await fresh).toBe(true);
-    expect(await joined).toBe(true);
-    expect(calls).toBe(2);
-  });
-
-});

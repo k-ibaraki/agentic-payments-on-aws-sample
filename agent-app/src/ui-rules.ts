@@ -1,4 +1,4 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69・72）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69・72・73）。index.ts から呼び、テストはここで固定する
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -278,22 +278,24 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
     : { label: '拡大', title: '画面いっぱいに広げる' };
 }
 
-// ── 受信の切断と繋ぎ直しまわり（送る前の確かめ・繋ぎ直した後の後始末・トークンの取り直し。決定69・72） ──
-// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。切れたときの繋ぎ直しと、繋ぎ直した後の会話の
-// 読み直しは上流（bb-realtime 0.4・bb-agent 0.6）に任せる。ただし上流は繋ぎ直しを 5 回（約 31 秒）で諦めて
-// 接続を畳み、useChat は購読済みのまま次の依頼を送るので、応答が画面に届かない。そこで送る前にだけ確かめる。
-// 繋ぎ直した後に応答が終わっていたと分かったときの後始末と、トークンの取り直しの形もここに置く
+// ── 受信の切断と繋ぎ直しまわり（決定69・72・73） ──
+// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。createChat は依頼のたびに購読し直し、応答が終わると
+// 購読を外すので、待っていない間に切れても次の依頼は新しい接続で受けられる。応答の途中で切れたときの繋ぎ直しと
+// 繋ぎ直した後の会話の読み直しは createChat に任せ、ここには画面の側で要る規則だけを置く
 
 /**
- * 応答を受ける接続が切れているか（WebSocket の readyState）。閉じかけ（2）と閉じた（3）を切れたとみなす。
- * 上流が繋ぎ直しを待っている間も閉じた接続が見えるが、その場合も会話を読み直せば新しい接続で受け直せる
+ * 読み込み直した会話で、エージェントがまだ応答を作っているか。createChat の loadConversation は履歴を
+ * 読むだけで購読しないので、作っている最中なら観察用に購読して終わりを待つ。末尾が依頼か承認への応答なら
+ * 作っている最中とみなす（エージェントは応答を保存してから終わりを知らせる）。承認待ちなら止まっている
  */
-export function isSubscriptionClosed(readyState: number | undefined): boolean {
-  return readyState === 2 || readyState === 3;
+export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaitingApproval: boolean): boolean {
+  if (awaitingApproval) return false;
+  const last = messages[messages.length - 1];
+  return last !== undefined && last.role !== 'assistant';
 }
 
 /**
- * 終わりの知らせ（done / error）を受けないまま応答が終わったか。useChat は繋ぎ直した後に会話を読み直し、
+ * 終わりの知らせ（done / error）を受けないまま応答が終わったか。createChat は繋ぎ直した後に会話を読み直し、
  * 切れている間に応答が終わっていれば、吹き出しを差し替えて応答中の印（loading）を戻すだけで done を流さない。
  * 画面の後始末（途中経過を閉じる・購入一覧と残高の取り直し・残高の監視を止める）は done を受けて走るので、
  * 応答中の印が戻ったのに途中経過が開いたままなら、ここで拾う。承認待ちで印が戻ったときは経過は終わっていない
@@ -307,9 +309,9 @@ export function isTurnEndedWithoutChunk(state: {
 }
 
 /**
- * useChat の onLoadingChange に渡す関数を作る。応答中の印が戻ったら一拍おいてから状態を読み、
+ * createChat の onLoadingChange に渡す関数を作る。応答中の印が戻ったら一拍おいてから状態を読み、
  * 終わりの知らせを取りこぼしていれば onEnded を呼ぶ（判定は isTurnEndedWithoutChunk）。
- * 一拍おくのは、useChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
+ * 一拍おくのは、createChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
  * それらが途中経過を閉じたり承認の欄を出したりした後の状態で判定するため
  */
 export function watchTurnEnd(
@@ -324,32 +326,8 @@ export function watchTurnEnd(
   };
 }
 
-/** サーバーが識別子を外して返したチャンネルの記述に、付け直す（useChat の refresh が求める形） */
+/** サーバーが識別子を外して返したチャンネルの記述に、付け直す（createChat の refresh が求める形） */
 export function toChannelDescriptor<T extends { channel: string }>(raw: T): T & { __blocks: 'realtime/channel' } {
   return { ...raw, __blocks: 'realtime/channel' };
 }
 
-/**
- * 1 本ずつしか走らせない非同期の処理（決定69 の会話の読み直し）。走っている間の呼び出しは同じ結果を待つ。
- * reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
- * 印は消さない
- */
-export function createSingleFlight(task: () => Promise<boolean>) {
-  let running: Promise<boolean> | null = null;
-  // 今の処理の番号。reset と新しい処理のたびに進め、捨てた処理が自分の番かどうかを見分ける
-  let flight = 0;
-  return {
-    run(): Promise<boolean> {
-      if (running) return running;
-      const id = ++flight;
-      running = task().finally(() => {
-        if (flight === id) running = null;
-      });
-      return running;
-    },
-    reset() {
-      flight += 1;
-      running = null;
-    },
-  };
-}

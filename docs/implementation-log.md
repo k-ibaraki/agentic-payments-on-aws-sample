@@ -2,6 +2,29 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-23: 画面のチャットを useChat から createChat へ移す（決定73、決定69・72 追記）
+
+ユーザーの依頼は「非推奨機能は外したい」。決定72 の 3 巡目のセルフレビューで、bb-agent 0.6.0 の useChat が非推奨・凍結
+（正は `createChat`）と分かったのを受けた。
+
+### やったこと
+
+- `createChat` の実装を読んだ。依頼のたびに購読し直し（`startTurn`）、応答が終わると購読を外す。承認への応答も
+  `sendMessage({ interruptResponses })` で購読し直す。`loadConversation` は履歴を読むだけで購読しない。繋ぎ直し・
+  読み直し・安全弁と知らせの順は useChat と同じ
+- 応答の途中で読み込み直したときの扱いをユーザーに確かめ、観察用の購読で終わりを待つことにした
+- TDD で書き換えた。ui-rules から `isSubscriptionClosed`・`createSingleFlight` を外し（テストも）、`isReplyPending` を
+  足した。`src/index.ts` は `createChat` + `realtimeTransport` に組み直し、送る前の確かめと読み直し
+  （`ensureLiveSubscription`・`reloadConversationOnce`）を外し、`observeRunningReply` を足した
+- README（agent-app）とコメントの useChat を createChat に改めた
+
+### 確かめたこと
+
+- 単体テスト 314 件・型検査・e2e 5 件・フロントのビルド
+- 偽 LLM でのブラウザ確認: 続けて 2 回送っても応答が届く（依頼ごとに購読し直している）。送ってすぐ読み込み直すと
+  履歴が戻り、送信も押せる。ただし偽 LLM は応答が速く、読み込み直した時点で応答は終わっていたので、観察の経路
+  （`observeRunningReply`）には入らなかった。この経路は未検証
+
 ## 2026-10-23: AWS Blocks を 0.8 系へ上げ、エージェントのループを AgentCore Runtime へ移す（決定72、決定31・32・33・34・37・69・70・U5・U8 追記）
 
 ユーザーの依頼は「そろそろ AWS Blocks を更新したい」。決定70 で待つと決めた条件（上流の #497・#501・#503 の公開）が
