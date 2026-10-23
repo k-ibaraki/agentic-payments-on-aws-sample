@@ -2,6 +2,35 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-23: sandbox での画面の動作確認（createChat への移行）
+
+ユーザーの依頼は「動作確認をしておきましょう」。偽 LLM では通らない経路を、sandbox（Amplify）で確かめた。
+
+### やったこと
+
+- sandbox を作り（実行時設定は本番の Amplify アプリの環境変数を読んで渡す）、本番の Cognito にいる利用者と同じメールで
+  sandbox に利用者を作った。画面は Playwright（ヘッドレス）で動かし、サインインの OTP はユーザーに転記してもらった
+- 確かめた 3 つ（すべて通った）
+  - a. 購入あり: 依頼 1 回で、支払い（$0.1）・応答・購入カードの表示まで 19 秒
+  - b. 読み込み直したときの続き: 有料ツールの呼び出しが始まってから 5 秒後に画面を読み込み直すと、観察用の購読で続きを待ち
+    （その間は送信を止める）、`done` を受けて会話を読み直した。購入カードは 1 → 2、送信も戻った
+  - c. オフラインの後の送信: 40 秒オフラインにして戻した後、購入なしの依頼の応答が届いた
+- 終わった後に sandbox を消した
+- ユーザーの依頼で、買い手のウォレット（`0x4288…9B13`）に CDP faucet でテスト USDC を 1.0 補充した（`npx tsx scripts/faucet.ts <アドレス> usdc`）。
+  Base Sepolia の RPC で `balanceOf` を読み、補充の後の残高が 3.645 USDC になったことを確かめた
+
+### つまずき
+
+- 最初は `BLOCKS_API_URL=… npm run dev`（手元の画面を sandbox の API に中継する、CLAUDE.md にある手順）で試したが、
+  Realtime の WebSocket が 403 で弾かれ、依頼が送られなかった（11 分後に createChat の安全弁が出た。支払いは起きていない）。
+  原因: 手元のサーバーはバックエンドをローカルにも読み込み、起動時に `aws-blocks/client.js` をローカル用のクライアントで
+  生成し直す。そのため画面はローカル用の Realtime クライアント（`mock-middleware`）を使い、クラウドの WebSocket に
+  接続用のトークンを付けずに繋ぐ。本番のビルド（`npm run blocks:client`。`aws-runtime` の条件付き）はクラウド用の
+  クライアント（`aws-middleware`）を使うので、本番には関係しない
+- そこで `npm run build:amplify`（Amplify Hosting と同じ組み立て）で作った `dist/` を `vite preview` で配信し、sandbox の
+  API と WebSocket に直接つないで確かめた
+- OTP は数分で期限が切れ、転記が遅れると「Not authorized」で弾かれる。2 回送り直した
+
 ## 2026-10-23: createChat への移行の後のセルフレビュー（決定26・46・73 追記）
 
 `/goal` でセルフレビューと修正を繰り返した（最大 3 巡）。
