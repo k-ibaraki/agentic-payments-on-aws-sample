@@ -912,18 +912,19 @@ function renderInterrupts(interrupts: Array<{ interruptId: string; name: string;
           appendEvent(`承認への応答: ${label}`);
           // 承認への応答も依頼と同じく購読し直してから送る（createChat の sendMessage が担う）
           await chat.sendMessage({ interruptResponses: [{ interruptId: it.interruptId, approved }] });
-          // 送れなかった（応答への受け付けの失敗。createChat は onError に流して応答中の印を戻す）ときは、サーバーに承認待ちが
-          // 残っているので欄を描き直す
+          // 送れなかった（購読か受け付けの失敗。createChat は onError に流して応答中の印を戻す）ときは、サーバーに承認待ちが
+          // 残っているので欄を描き直す。読み直せなければ、手元の承認待ちで描き直す（選び直せるように）
           const conversationId = chat.getConversationId();
           if (!chat.isLoading() && !hasPendingApproval() && conversationId) {
+            const redraw = (pending: Array<{ interruptId: string; name: string; reason?: unknown }>) => {
+              if (pending.length && chat.getConversationId() === conversationId && !isBusy() && !hasPendingApproval()) {
+                renderInterrupts(pending);
+              }
+            };
             buyer
               .getPendingInterrupts(conversationId)
-              .then(({ interrupts: pending }) => {
-                if (pending.length && chat.getConversationId() === conversationId && !chat.isLoading()) {
-                  renderInterrupts(pending.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
-                }
-              })
-              .catch(() => {});
+              .then(({ interrupts: pending }) => redraw(pending.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason }))))
+              .catch(() => redraw(interrupts));
           }
         });
         row.appendChild(button);
