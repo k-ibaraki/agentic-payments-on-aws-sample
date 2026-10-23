@@ -52,7 +52,7 @@ PaymentSession の枠は作成時に固定され、後から変えられない�
 | 回数の制限 | 無い | 依頼回数を KVStore で数える（決定40。対象は Payments でなく Bedrock の費用） |
 | 品目・対価の妥当性、成果物が届くか | 見ない | 決済後の失敗は決定31・48 で人の承認へ。返金に相当する仕組みは U7 |
 | 枠の外に出る費用 | MPP で買い手がガス代を負う場合（`buyerPaysGasFees`）と upto の Permit2 承認の手数料は、公式が「payment amount」と呼ぶ枠に含まれないと読める（明言は無い） | 該当機能を使っていない |
-| userId の真正性 | `AWS_IAM` 認可ではヘッダの自己申告。`CUSTOM_JWT` 認可なら JWT から取る | `AWS_IAM` のまま。userId は固定の `PAYMENTS_USER_ID` で、ヘッダはサーバー側（AgentCore Runtime の中のツール）が付けるので利用者は触れない |
+| userId の真正性 | `AWS_IAM` 認可ではヘッダの自己申告。`CUSTOM_JWT` 認可なら JWT から取る | `AWS_IAM` のまま。userId は固定の `PAYMENTS_USER_ID` で、ヘッダはサーバー側（支払いは AgentCore Runtime の中のツール、残高とセッションの照会・破棄は共有 Lambda）が付けるので利用者は触れない |
 
 告知文にある「agent-level」の制限は、API 上は `X-Amzn-Bedrock-AgentCore-Payments-Agent-Name` ヘッダが
 観測用に付くだけで、エージェント単位の枠は無い。エージェントごとに予算を分けたければセッションを分けて作る。

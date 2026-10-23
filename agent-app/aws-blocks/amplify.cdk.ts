@@ -16,8 +16,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Blocks の既定値を選ぶ。ブランチ deploy では production の既定に CORS の許可オリジンを足す。
- * core はこれを CORS_ALLOWED_ORIGINS として共有 Lambda に載せる（0.3 系では handler.addEnvironment で
- * 直接載せていたが、0.8.0 で handler が無くなった。決定72）
+ * Blocks（bb-lambda-compute）がこれを CORS_ALLOWED_ORIGINS として共有 Lambda に載せる
+ * （0.3 系では handler.addEnvironment で直接載せていたが、0.8.0 で handler が無くなった。決定72）
  *
  * @param allowedOrigins  正規表現の文字列（^…$ で括って評価される）。sandbox では使わない
  *                        （sandbox の既定が localhost を許している）

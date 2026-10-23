@@ -1,7 +1,7 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69・72）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
 // 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン、
-// 送る前に受信が生きているかの確かめ
+// 受信の切断と繋ぎ直しまわり
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -470,7 +470,7 @@ describe('previewExpandButton', () => {
   });
 });
 
-// ── 送る前に受信が生きているかの確かめ（決定69・72） ──
+// ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
 import { isSubscriptionClosed, isTurnEndedWithoutChunk, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
 describe('isSubscriptionClosed', () => {

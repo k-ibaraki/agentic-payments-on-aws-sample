@@ -412,6 +412,7 @@ function createChat() {
     // 切れたときの繋ぎ直しと、繋ぎ直した後の会話の読み直しは useChat が受け持つ（決定72）
     subscribe: async (channelId, sub) => {
       const channel = await buyer.getChannel(channelId);
+      // 両辺は同じだが消さない。subscribe はオーバーロード（関数か指定のオブジェクト）で、和の型のままでは渡せないため
       const chunks = typeof sub === 'function' ? channel.subscribe(sub) : channel.subscribe(sub);
       chatSubscription = chunks;
       // 途中経過（決定65）も同じ会話 ID で購読し、useChat には両方の確立を待たせる
@@ -515,6 +516,10 @@ async function reloadConversationOnce(): Promise<boolean> {
   chatSubscription = undefined;
   stopBalanceWatch();
   finishTimeline();
+  // 新しいフックは応答中の印の変化を知らせないので、生成中の素の描画と送信ボタンはここで戻す
+  // （応答の途中で承認ボタンから読み直したとき）
+  streamingResponse = false;
+  el<HTMLButtonElement>('chat-send-btn').disabled = false;
   // loadConversation は承認待ちが残っているときにしか描き直さないので、前の承認の欄は先に空ける。
   // 空けないと、切れている間に済んだ承認のボタンが残る
   const approvals = Array.from(el('interrupts').children);
