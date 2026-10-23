@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
 });
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
-import { endsTurnWithoutStaleSubscription, isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
+import { isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
 describe('isReplyPending', () => {
   // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
@@ -512,13 +512,13 @@ describe('watchTurnEnd', () => {
   // 戻す。そのときの後始末を拾う。印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を
   // 呼ぶので、判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-  const idle = { loading: false, timelineOpen: true, awaitingApproval: false, endedByChunk: false };
+  const idle = { loading: false, timelineOpen: true, awaitingApproval: false };
 
   function watch(state: typeof idle) {
-    const calls = { missedEnd: 0, stale: 0 };
+    const calls = { missedEnd: 0, idle: 0 };
     const onLoadingEnded = watchTurnEnd(() => state, {
       onMissedEnd: () => calls.missedEnd++,
-      onStaleSubscription: () => calls.stale++,
+      onIdle: () => calls.idle++,
     });
     return { calls, onLoadingEnded };
   }
@@ -548,46 +548,21 @@ describe('watchTurnEnd', () => {
     expect(calls.missedEnd).toBe(1);
   });
 
+  // 応答が終わった後の片付け（残った購読を外す）は、終わり方によらず一拍おいて必ず呼ぶ
+  it('印が戻ったまま一拍たてば、片付けを呼ぶ（承認待ちでも）', async () => {
+    const { calls, onLoadingEnded } = watch({ ...idle, timelineOpen: false, awaitingApproval: true });
+    onLoadingEnded();
+    await flush();
+    expect(calls.idle).toBe(1);
+  });
+
   it('一拍の間に次の応答が始まったら、何もしない', async () => {
     const state = { ...idle };
     const { calls, onLoadingEnded } = watch(state);
     onLoadingEnded();
     state.loading = true;
     await flush();
-    expect(calls).toEqual({ missedEnd: 0, stale: 0 });
-  });
-
-  // 終わりのチャンク（done / error / interrupt）を受けずに終わった回は、createChat の中に購読が残る。次の依頼を
-  // 送るとその購読の後始末が新しい回の応答中の印を消すので、送る前にインスタンスを作り直させる
-  it('終わりのチャンクを受けずに終わったら、購読が残っていると知らせる（承認待ちでも）', async () => {
-    const state = { ...idle, awaitingApproval: true };
-    const { calls, onLoadingEnded } = watch(state);
-    onLoadingEnded();
-    await flush();
-    expect(calls.stale).toBe(1);
-  });
-
-  it('終わりのチャンクを受けて終わったなら、購読は残っていない', async () => {
-    const { calls, onLoadingEnded } = watch({ ...idle, timelineOpen: false, endedByChunk: true });
-    onLoadingEnded();
-    await flush();
-    expect(calls.stale).toBe(0);
-  });
-});
-
-describe('endsTurnWithoutStaleSubscription', () => {
-  // createChat の onError に原因（cause）が付くのは、送信の失敗・消費ループの例外（どちらも応答中の印を戻してから知らせる。
-  // 購読は残らない）と、繋ぎ直した後の読み直しの失敗（印は応答中のまま。購読は生きていて、回は続く）
-  it('原因付きで、応答中の印が戻っていれば、購読を残さずに終わった', () => {
-    expect(endsTurnWithoutStaleSubscription({ cause: new Error('x'), loading: false })).toBe(true);
-  });
-
-  it('原因付きでも応答中なら、回は続いている（繋ぎ直した後の読み直しの失敗）', () => {
-    expect(endsTurnWithoutStaleSubscription({ cause: new Error('x'), loading: true })).toBe(false);
-  });
-
-  it('原因が無ければ、エラーのチャンクか安全弁。この判定では決めない', () => {
-    expect(endsTurnWithoutStaleSubscription({ cause: undefined, loading: false })).toBe(false);
+    expect(calls).toEqual({ missedEnd: 0, idle: 0 });
   });
 });
 

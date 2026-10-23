@@ -297,38 +297,25 @@ export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaiti
 }
 
 /**
- * createChat の onLoadingChange(false) から呼ぶ関数を作る。応答中の印が戻ったら一拍おいて状態を読み、次の 2 つを知らせる。
- * 一拍おくのは、createChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
- * それらが途中経過を閉じたり承認の欄を出したりした後で見るため
- * - onMissedEnd: 終わりの知らせ（done / error）を取りこぼした。createChat は繋ぎ直した後に会話を読み直し、切れている間に
- *   応答が終わっていれば、吹き出しを差し替えて印を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と
- *   残高の取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたまま（承認待ちを除く）なら拾う
- * - onStaleSubscription: 終わりのチャンク（done / error / interrupt）を受けずに終わった（繋ぎ直し後の読み直し・安全弁）。
- *   createChat はこのとき購読を外さず、次の依頼を送るとその購読の後始末が新しい回の印を消してしまうので、
- *   送る前にインスタンスを作り直させる
+ * createChat の onLoadingChange(false) から呼ぶ関数を作る。応答中の印が戻ったら一拍おいて状態を読み、印が戻ったままなら
+ * onIdle（応答が終わった後の片付け）を呼び、終わりの知らせを取りこぼしていれば onMissedEnd も呼ぶ。
+ * createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを差し替えて印を戻すだけで
+ * done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の取り直し・残高の監視を止める）は done を受けて走るので、
+ * 印が戻ったのに途中経過が開いたまま（承認待ちを除く）なら拾う。一拍おくのは、createChat が印を戻した直後に同じ流れで
+ * onError（送信の失敗）や onInterrupt（承認待ち）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
  */
 export function watchTurnEnd(
-  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean; endedByChunk: boolean },
-  on: { onMissedEnd: () => void; onStaleSubscription: () => void },
+  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
+  on: { onMissedEnd: () => void; onIdle: () => void },
 ): () => void {
   return () => {
     setTimeout(() => {
       const state = read();
       if (state.loading) return;
-      if (!state.endedByChunk) on.onStaleSubscription();
+      on.onIdle();
       if (state.timelineOpen && !state.awaitingApproval) on.onMissedEnd();
     }, 0);
   };
-}
-
-/**
- * createChat の onError から、その回が購読を残さずに終わったかを決める（watchTurnEnd の endedByChunk に使う）。
- * 原因（cause）が付くのは 3 通り。送信の失敗と消費ループの例外は、応答中の印を戻してから知らせ、購読は残らない。
- * 繋ぎ直した後の読み直しの失敗は、印を応答中のまま知らせ、回は続く（購読も生きている）。原因が無いのはエラーの
- * チャンクと安全弁で、前者はチャンクとして、後者は印の変化として別に扱うので、ここでは決めない
- */
-export function endsTurnWithoutStaleSubscription(error: { cause: unknown; loading: boolean }): boolean {
-  return error.cause !== undefined && !error.loading;
 }
 
 /** サーバーが識別子を外して返したチャンネルの記述に、付け直す（createChat の refresh が求める形） */
