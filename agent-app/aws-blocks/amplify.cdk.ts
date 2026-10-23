@@ -30,7 +30,7 @@ export function blocksDefaults(sandboxMode: boolean, allowedOrigins: string[]): 
   };
 }
 
-export async function createBlocksBackend(stack: Stack, sandboxMode: boolean, allowedOrigins: string[] = []) {
+export async function createBlocksBackend(stack: Stack, sandboxMode: boolean, allowedOrigins: string[]) {
   // CDK コンテキストで sandbox を伝える。Block 側（削除ポリシー・削除保護・localhost の CORS）が
   // これを見る
   if (sandboxMode) {

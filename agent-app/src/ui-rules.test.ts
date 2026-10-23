@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
 });
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
-import { isReplyPending, isTurnEndedWithoutChunk, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
+import { isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
 describe('isReplyPending', () => {
   // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
@@ -497,36 +497,17 @@ describe('isReplyPending', () => {
   });
 });
 
-describe('isTurnEndedWithoutChunk', () => {
-  // createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、done を流さずに
-  // 応答中の印だけを戻す。画面の後始末（途中経過・購入一覧・残高）は done を受けて走るので、ここで拾う
-  it('応答中の印が戻ったのに途中経過が開いたままなら、終わりの知らせを取りこぼしている', () => {
-    expect(isTurnEndedWithoutChunk({ loading: false, timelineOpen: true, awaitingApproval: false })).toBe(true);
-  });
-
-  it('done / error を受けて途中経過を閉じた後なら、何もしない', () => {
-    expect(isTurnEndedWithoutChunk({ loading: false, timelineOpen: false, awaitingApproval: false })).toBe(false);
-  });
-
-  it('承認待ちで応答中の印が戻ったときは、経過はまだ終わっていない', () => {
-    expect(isTurnEndedWithoutChunk({ loading: false, timelineOpen: true, awaitingApproval: true })).toBe(false);
-  });
-
-  it('応答中なら何もしない', () => {
-    expect(isTurnEndedWithoutChunk({ loading: true, timelineOpen: true, awaitingApproval: false })).toBe(false);
-  });
-});
-
 describe('watchTurnEnd', () => {
-  // createChat は応答中の印を戻した直後に、同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼ぶ。
-  // 判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
+  // createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、done を流さずに応答中の印だけを
+  // 戻す。そのときの後始末を拾う。印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を
+  // 呼ぶので、判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   it('印が戻った直後に承認待ちになったら、終わったとはみなさない', async () => {
     const state = { loading: false, timelineOpen: true, awaitingApproval: false };
     let ended = 0;
-    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
-    onLoadingChange(false);
+    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    onLoadingEnded();
     state.awaitingApproval = true;
     await flush();
     expect(ended).toBe(0);
@@ -535,8 +516,8 @@ describe('watchTurnEnd', () => {
   it('印が戻った直後にエラーで途中経過が閉じたら、終わったとはみなさない', async () => {
     const state = { loading: false, timelineOpen: true, awaitingApproval: false };
     let ended = 0;
-    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
-    onLoadingChange(false);
+    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    onLoadingEnded();
     state.timelineOpen = false;
     await flush();
     expect(ended).toBe(0);
@@ -545,16 +526,17 @@ describe('watchTurnEnd', () => {
   it('何も続かなければ、終わりの知らせを取りこぼしたとみなす', async () => {
     const state = { loading: false, timelineOpen: true, awaitingApproval: false };
     let ended = 0;
-    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
-    onLoadingChange(false);
+    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    onLoadingEnded();
     await flush();
     expect(ended).toBe(1);
   });
 
-  it('応答中になったときは何もしない', async () => {
-    const state = { loading: true, timelineOpen: true, awaitingApproval: false };
+  it('一拍の間に次の応答が始まったら、終わったとはみなさない', async () => {
+    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
     let ended = 0;
-    watchTurnEnd(() => state, () => ended++)(true);
+    watchTurnEnd(() => state, () => ended++)();
+    state.loading = true;
     await flush();
     expect(ended).toBe(0);
   });
@@ -571,4 +553,3 @@ describe('toChannelDescriptor', () => {
     });
   });
 });
-

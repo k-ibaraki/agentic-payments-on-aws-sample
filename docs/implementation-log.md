@@ -25,6 +25,41 @@
   履歴が戻り、送信も押せる。ただし偽 LLM は応答が速く、読み込み直した時点で応答は終わっていたので、観察の経路
   （`observeRunningReply`）には入らなかった。この経路は未検証
 
+## 2026-10-23: /simplify で画面とテストの組み方を整える（決定73 追記）
+
+4 つの観点（再利用・簡潔化・効率・修正の深さ）でレビューし、意図した振る舞いを変えないものを直した。
+
+### 直したこと
+
+- transport を 1 つ作って使い回し、観察用の購読も `transport.subscribe(..., { observer: true, refresh })` で直接張る
+  （`chat.subscribe` は `refresh` を渡さないため）。観察をやめる無通信の時間は 16 分（有料ツールの待ちの天井 15 分より長く）
+- 購読のたびの `getChannel` と途中経過の購読を `Promise.all` で並べた（依頼ごとに購読し直すので、直列だと毎回遅れる）
+- 応答の後の取り直し（購入一覧と残高）を `refreshAfterReply` にまとめ、3 か所から呼ぶ。繋ぎ直し後の後始末は
+  `onTimelineChunk({ type: 'done' })` を使う。残高の監視を止めるのは error と interrupt では onError / onInterrupt に任せる
+- `isTurnEndedWithoutChunk` を `watchTurnEnd` に畳み、使われない `loading` 引数を外した（テストは 4 件減って 310 件）
+- `observeRunningReply` の `owner`（会話を捨てるときは先に stop するので導き出せる）と、送信の届かない catch
+  （createChat の sendMessage は投げずに onError へ流す）を外した
+- `toChannelDescriptor` の戻り値をライブラリの `ChatChannelDescriptor` にした
+- `runtime.cdk.test.ts` は core の内部（`Symbol.for('BLOCKS_CONFIG_REGISTRY')`）を読むのをやめ、`registerConfig` を差し替えて
+  何を渡したかで見る
+- vitest は除外を足していく形をやめ、対象（`{aws-blocks,src,amplify,scripts}/**/*.test.ts`）を列挙する形にした
+  （`npm run test` は `vitest run`）。`TOOL_TIMEOUT_CEILING_MS` の使われない export と、`createBlocksBackend` の使われない
+  既定値を外した
+
+### 見送ったこと
+
+- 経過を createChat のターン（承認への応答で分かれる）に合わせて組み直し、`watchTurnEnd` を無くす案。承認をはさむと経過が
+  2 つに分かれ、振る舞いが変わるので見送った。根は上流（`handleReconnect` が終わりの知らせを出さない）にある
+- トークンを取り直す 2 つの API と、チャンネルを渡す 2 つの API を 1 本にまとめる案。ファイル全体が口ごとに認可を書く形で、
+  繋ぎ直しはまれなので見送った
+- 観察用の購読でも途中経過のチャンネルを張ってしまう点（読み込み直したときだけで、まれ）。チャンクごとのタイマーの張り直し
+  （軽い）。繋ぎ直し後の読み直しで終わった回は次の送信まで購読が残る点（createChat に外から外す API が無い）
+- `TOOL_TIMEOUT_CEILING_MS` の天井を実際に効く制約に合わせる案（15 分を残すのはユーザー決定）
+
+### 確かめたこと
+
+- 単体テスト 310 件・型検査・e2e 5 件・フロントのビルド・偽 LLM でのブラウザ確認（続けて 2 回送れる、経過が閉じる）
+
 ## 2026-10-23: AWS Blocks を 0.8 系へ上げ、エージェントのループを AgentCore Runtime へ移す（決定72、決定31・32・33・34・37・69・70・U5・U8 追記）
 
 ユーザーの依頼は「そろそろ AWS Blocks を更新したい」。決定70 で待つと決めた条件（上流の #497・#501・#503 の公開）が

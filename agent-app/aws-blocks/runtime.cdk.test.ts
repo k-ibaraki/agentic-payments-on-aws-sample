@@ -4,9 +4,13 @@
 import { App, NestedStack, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { registerConfig } from '@aws-blocks/blocks/cdk';
 import { Construct } from 'constructs';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { paymentsPolicy, wireRuntime } from './runtime.cdk.js';
+
+// 登録の中身（S3 へ上げる JSON）はテンプレートから見えないので、公開 API の registerConfig に何を渡したかで見る
+vi.mock('@aws-blocks/blocks/cdk', () => ({ registerConfig: vi.fn() }));
 
 const FULL_ENV = {
   PAYMENT_MANAGER_ARN: 'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/x',
@@ -15,8 +19,8 @@ const FULL_ENV = {
 };
 
 /**
- * BlocksStack / BlocksBackend の代わり。wireRuntime が使うのは構成要素としての位置（registerConfig が
- * 持ち主を探す起点）と共有ロールだけなので、その 2 つを持つ素の Construct で足りる。
+ * BlocksStack / BlocksBackend の代わり。wireRuntime が使うのは構成要素としての位置（registerConfig に渡す）と
+ * 共有ロールだけなので、その 2 つを持つ素の Construct で足りる。
  * BlocksBackend を作ると esbuild のバンドルまで走るので使わない
  */
 function fakeBackend(stack: Stack) {
@@ -27,31 +31,26 @@ function fakeBackend(stack: Stack) {
   return backend;
 }
 
-/**
- * registerConfig が溜めた設定を読む。持ち主が見つからなければスタックに溜まる（core の getBlocksRoot）。
- * 置き場所は core の内部（Symbol.for のキー）で公開 API ではないが、合成すると S3 へ上げる JSON の
- * 中身はテンプレートから見えないため、ここを読む。core の版上げでこのテストが落ちたら置き場所を確かめる
- */
-function registeredConfig(stack: Stack): Record<string, unknown> {
-  const registry = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
-    Symbol.for('BLOCKS_CONFIG_REGISTRY')
-  ];
-  return Object.fromEntries(registry?.entries ?? []);
-}
-
 function synth(env: Record<string, string | undefined>, options: { requireAll: boolean }) {
   const stack = new Stack(new App(), 'test');
-  wireRuntime(fakeBackend(stack), env, options);
-  return { stack, template: Template.fromStack(stack) };
+  const backend = fakeBackend(stack);
+  wireRuntime(backend, env, options);
+  return { backend, template: Template.fromStack(stack) };
 }
+
+beforeEach(() => {
+  vi.mocked(registerConfig).mockClear();
+});
 
 describe('wireRuntime', () => {
   // 0.8.0 ではエージェントのループが AgentCore Runtime で動き、Lambda の環境変数は届かない。
   // 設定に登録すれば、Lambda も Runtime も起動時に process.env へ読み込む
   it('許可リストの環境変数を設定に登録する', () => {
-    const { stack } = synth({ ...FULL_ENV, UNRELATED: 'x' }, { requireAll: true });
+    const { backend } = synth({ ...FULL_ENV, UNRELATED: 'x' }, { requireAll: true });
 
-    expect(registeredConfig(stack)).toEqual(FULL_ENV);
+    expect(vi.mocked(registerConfig).mock.calls).toEqual(
+      Object.entries(FULL_ENV).map(([key, value]) => [backend, key, value]),
+    );
   });
 
   // Runtime も同じ共有ロールで動くので、ここに付ければ支払いを行うループまで届く

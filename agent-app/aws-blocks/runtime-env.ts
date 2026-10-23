@@ -37,7 +37,7 @@ export const REQUIRED_ENV_KEYS = ['PAYMENT_MANAGER_ARN', 'PAYMENT_INSTRUMENT_ID'
  * 動いていた）。0.8.0 からループは AgentCore Runtime（最長 8 時間）で動くので、この天井は根拠を失ったが、
  * 長い待ちを実機で確かめるまでは広げずに残す（決定72）
  */
-export const TOOL_TIMEOUT_CEILING_MS = 15 * 60 * 1000;
+const TOOL_TIMEOUT_CEILING_MS = 15 * 60 * 1000;
 
 /**
  * @param options.requireAll  REQUIRED_ENV_KEYS の欠落を例外にするか（決定34 の改訂）。

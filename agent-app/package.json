@@ -29,7 +29,7 @@
     "build:amplify": "npm run blocks:client && npm run build && tsx scripts/amplify-blocks-config.ts",
     "test:e2e": "cross-env BUYER_SELF_SIGNUP=true tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
-    "test": "vitest run aws-blocks src amplify scripts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-blocks/blocks": "~0.8.0",

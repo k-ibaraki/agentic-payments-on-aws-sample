@@ -1,4 +1,5 @@
 // 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69・72・73）。index.ts から呼び、テストはここで固定する
+import type { ChatChannelDescriptor } from '@aws-blocks/bb-agent/client';
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -295,39 +296,26 @@ export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaiti
 }
 
 /**
- * 終わりの知らせ（done / error）を受けないまま応答が終わったか。createChat は繋ぎ直した後に会話を読み直し、
- * 切れている間に応答が終わっていれば、吹き出しを差し替えて応答中の印（loading）を戻すだけで done を流さない。
- * 画面の後始末（途中経過を閉じる・購入一覧と残高の取り直し・残高の監視を止める）は done を受けて走るので、
- * 応答中の印が戻ったのに途中経過が開いたままなら、ここで拾う。承認待ちで印が戻ったときは経過は終わっていない
- */
-export function isTurnEndedWithoutChunk(state: {
-  loading: boolean;
-  timelineOpen: boolean;
-  awaitingApproval: boolean;
-}): boolean {
-  return !state.loading && state.timelineOpen && !state.awaitingApproval;
-}
-
-/**
- * createChat の onLoadingChange に渡す関数を作る。応答中の印が戻ったら一拍おいてから状態を読み、
- * 終わりの知らせを取りこぼしていれば onEnded を呼ぶ（判定は isTurnEndedWithoutChunk）。
- * 一拍おくのは、createChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
- * それらが途中経過を閉じたり承認の欄を出したりした後の状態で判定するため
+ * 終わりの知らせ（done / error）を受けないまま応答が終わったときの後始末を、createChat の onLoadingChange(false) から
+ * 呼ぶ関数を作る。createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを
+ * 差し替えて応答中の印（loading）を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の
+ * 取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたままなら、ここで拾う。
+ * 判定は一拍おいてから行う。createChat は印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt
+ * （承認待ち。経過はまだ終わっていない）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
  */
 export function watchTurnEnd(
   read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
   onEnded: () => void,
-): (loading: boolean) => void {
-  return (loading) => {
-    if (loading) return;
+): () => void {
+  return () => {
     setTimeout(() => {
-      if (isTurnEndedWithoutChunk(read())) onEnded();
+      const state = read();
+      if (!state.loading && state.timelineOpen && !state.awaitingApproval) onEnded();
     }, 0);
   };
 }
 
 /** サーバーが識別子を外して返したチャンネルの記述に、付け直す（createChat の refresh が求める形） */
-export function toChannelDescriptor<T extends { channel: string }>(raw: T): T & { __blocks: 'realtime/channel' } {
+export function toChannelDescriptor(raw: { channel: string; [key: string]: unknown }): ChatChannelDescriptor {
   return { ...raw, __blocks: 'realtime/channel' };
 }
-
