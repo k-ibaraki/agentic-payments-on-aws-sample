@@ -1,4 +1,4 @@
-// 合成時の環境変数から Lambda に写す実行時設定を決めるモジュールのテスト（決定34）
+// 合成時の環境変数から、設定に登録する実行時設定を決めるモジュールのテスト（決定34・72）
 import { describe, expect, it } from 'vitest';
 import { runtimeEnvironment } from './runtime-env.js';
 

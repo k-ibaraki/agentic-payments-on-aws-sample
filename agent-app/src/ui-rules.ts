@@ -305,6 +305,24 @@ export function isTurnEndedWithoutChunk(state: {
   return !state.loading && state.timelineOpen && !state.awaitingApproval;
 }
 
+/**
+ * useChat の onLoadingChange に渡す関数を作る。応答中の印が戻ったら一拍おいてから状態を読み、
+ * 終わりの知らせを取りこぼしていれば onEnded を呼ぶ（判定は isTurnEndedWithoutChunk）。
+ * 一拍おくのは、useChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
+ * それらが途中経過を閉じたり承認の欄を出したりした後の状態で判定するため
+ */
+export function watchTurnEnd(
+  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
+  onEnded: () => void,
+): (loading: boolean) => void {
+  return (loading) => {
+    if (loading) return;
+    setTimeout(() => {
+      if (isTurnEndedWithoutChunk(read())) onEnded();
+    }, 0);
+  };
+}
+
 /** サーバーが識別子を外して返したチャンネルの記述に、付け直す（useChat の refresh が求める形） */
 export function toChannelDescriptor<T extends { channel: string }>(raw: T): T & { __blocks: 'realtime/channel' } {
   return { ...raw, __blocks: 'realtime/channel' };

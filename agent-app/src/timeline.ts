@@ -162,6 +162,17 @@ export function applyChunk(
 }
 
 /**
+ * 経過を閉じる。終わりの知らせ（done / error）を受けずに閉じるとき（承認待ちのまま会話を読み直した・次の依頼を
+ * 送った）は、閉じた時刻を終わりにする。interrupt は終わりの時刻を立てないので、立てないと見出しが
+ * 「進行中・N 秒」のまま止まって残る。既に終わっていれば何もしない
+ */
+export function closeTimeline(timeline: Timeline, now: number) {
+  if (timeline.endedAt !== null) return;
+  stopWaiting(timeline);
+  timeline.endedAt = now;
+}
+
+/**
  * 購入の経過を足す。購入ごとに通し番号で並べ、二重に届いたものは捨てる。
  * 並べ替えは同じ購入の行どうしの中だけで行う（エージェントの行や別の購入との前後は届いた順）
  */

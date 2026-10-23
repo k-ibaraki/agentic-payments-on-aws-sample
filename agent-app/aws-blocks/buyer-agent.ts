@@ -3,7 +3,8 @@
 // HTML 本体は LLM のコンテキストに流さず KVStore に置き、ID だけを会話に返す
 // （決定10 の最終形（ブラウザへは Realtime・取得系 API で渡す）を見据えた設計）。
 //
-// 接続設定は環境変数で受ける（ローカルはシェル、クラウドは aws-blocks/runtime-env.ts が Lambda に写す。決定34）:
+// 接続設定は環境変数で受ける（ローカルはシェル、クラウドは aws-blocks/runtime-env.ts が設定に登録し、Lambda と AgentCore Runtime が
+// 起動時に読む。決定34・72）:
 //   BILLING_MCP_URL       … 既定 http://localhost:8000/mcp
 //   BUYER_LOCAL_MODEL     … ローカル実行時の LLM。既定 bedrock（決定28）。canned で決定的な偽 LLM
 //   PAYMENT_MANAGER_ARN   … payments-setup.ts の出力

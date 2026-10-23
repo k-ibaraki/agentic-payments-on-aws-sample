@@ -11,6 +11,7 @@ import {
   actorLabel,
   applyChunk,
   applyProgress,
+  closeTimeline,
   startTimeline,
   timelineSummary,
   waitingLabel,
@@ -29,7 +30,6 @@ import {
   isPaidToolCall,
   isSelectedPurchase,
   isSubscriptionClosed,
-  isTurnEndedWithoutChunk,
   orderChatNodes,
   previewExpandButton,
   purchaseDetail,
@@ -42,6 +42,7 @@ import {
   stripBalance,
   stripRemaining,
   toChannelDescriptor,
+  watchTurnEnd,
 } from './ui-rules.js';
 
 // ── DOM ヘルパー（文字列は必ず textContent で入れる。innerHTML は
@@ -254,6 +255,7 @@ function finishTimeline() {
     timelineTimer = null;
   }
   if (!view) return;
+  closeTimeline(view.model, Date.now());
   if (!view.userToggled) {
     view.autoOpen = false;
     view.node.open = false;
@@ -377,6 +379,21 @@ function describeChunk(chunk: AgentStreamChunk): string {
 // 会話を捨てる（新規会話・サインアウト・再開失敗）ときと、受信が切れて会話を読み直すとき（決定69）は
 // インスタンスごと作り直す
 function createChat() {
+  // 繋ぎ直した後の読み直しで応答が終わったと分かったとき（done は流れない）の後始末
+  const turnEndWatch = watchTurnEnd(
+    () => ({ loading: instance.isLoading(), timelineOpen: currentTimeline() !== null, awaitingApproval: hasPendingApproval() }),
+    () => {
+      const view = currentTimeline();
+      if (instance !== chat || !view) return;
+      appendEvent('受信が切れている間に応答が終わっていました（会話を読み直して表示しています）');
+      applyChunk(view.model, { type: 'done' }, Date.now());
+      refreshTimeline(view);
+      finishTimeline();
+      stopBalanceWatch();
+      refreshPurchases(true).catch(() => {});
+      refreshWallet().catch(() => {});
+    },
+  );
   const instance: ReturnType<typeof useChat> = useChat({
     api: {
       // buyer API は channelId を受け取らない（会話 ID に固定。他人の会話へのストリーム注入を防ぐ）
@@ -418,22 +435,7 @@ function createChat() {
       streamingResponse = loading;
       if (!loading) {
         renderMessages(lastMessages);
-        // 繋ぎ直した後の読み直しで応答が終わったと分かったとき（done は流れない）の後始末。判定は一拍おいてから行う。
-        // useChat は応答中の印を戻した直後に onError（送信の失敗）や onInterrupt（承認待ち）を呼ぶことがあり、
-        // それらが途中経過を閉じたり承認の欄を出したりした後で見るため
-        setTimeout(() => {
-          if (instance !== chat) return;
-          const view = currentTimeline();
-          const state = { loading: instance.isLoading(), timelineOpen: view !== null, awaitingApproval: hasPendingApproval() };
-          if (!view || !isTurnEndedWithoutChunk(state)) return;
-          appendEvent('受信が切れている間に応答が終わっていました（会話を読み直して表示しています）');
-          applyChunk(view.model, { type: 'done' }, Date.now());
-          refreshTimeline(view);
-          finishTimeline();
-          stopBalanceWatch();
-          refreshPurchases(true).catch(() => {});
-          refreshWallet().catch(() => {});
-        }, 0);
+        turnEndWatch(loading);
       }
     },
     onChunk: (chunk) => {

@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
 });
 
 // ── 送る前に受信が生きているかの確かめ（決定69・72） ──
-import { isSubscriptionClosed, isTurnEndedWithoutChunk, toChannelDescriptor } from './ui-rules.js';
+import { isSubscriptionClosed, isTurnEndedWithoutChunk, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
 
 describe('isSubscriptionClosed', () => {
   // 上流（bb-realtime）は繋ぎ直しを 5 回で諦めて接続を畳む。useChat は購読済みのまま送るので、
@@ -508,6 +508,49 @@ describe('isTurnEndedWithoutChunk', () => {
 
   it('応答中なら何もしない', () => {
     expect(isTurnEndedWithoutChunk({ loading: true, timelineOpen: true, awaitingApproval: false })).toBe(false);
+  });
+});
+
+describe('watchTurnEnd', () => {
+  // useChat は応答中の印を戻した直後に、同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼ぶ。
+  // 判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('印が戻った直後に承認待ちになったら、終わったとはみなさない', async () => {
+    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
+    let ended = 0;
+    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
+    onLoadingChange(false);
+    state.awaitingApproval = true;
+    await flush();
+    expect(ended).toBe(0);
+  });
+
+  it('印が戻った直後にエラーで途中経過が閉じたら、終わったとはみなさない', async () => {
+    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
+    let ended = 0;
+    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
+    onLoadingChange(false);
+    state.timelineOpen = false;
+    await flush();
+    expect(ended).toBe(0);
+  });
+
+  it('何も続かなければ、終わりの知らせを取りこぼしたとみなす', async () => {
+    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
+    let ended = 0;
+    const onLoadingChange = watchTurnEnd(() => state, () => ended++);
+    onLoadingChange(false);
+    await flush();
+    expect(ended).toBe(1);
+  });
+
+  it('応答中になったときは何もしない', async () => {
+    const state = { loading: true, timelineOpen: true, awaitingApproval: false };
+    let ended = 0;
+    watchTurnEnd(() => state, () => ended++)(true);
+    await flush();
+    expect(ended).toBe(0);
   });
 });
 

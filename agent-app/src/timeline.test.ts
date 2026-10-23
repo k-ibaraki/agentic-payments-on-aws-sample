@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyChunk,
   applyProgress,
+  closeTimeline,
   describeStep,
   startTimeline,
   timelineSummary,
@@ -175,5 +176,22 @@ describe('依頼 1 回の経過', () => {
     applyProgress(t, progress(1, { step: 'failed', message: 'x' }), 1000);
     applyChunk(t, { type: 'done' }, 2000);
     expect(timelineSummary(t, 2000)).toBe('途中経過（2 件・所要 2 秒・失敗あり）');
+  });
+
+  // 承認待ちのまま閉じる（会話の読み直し・次の依頼）。interrupt は終わりの時刻を立てないので、閉じた時点で立てる。
+  // 立てないと、見出しが「進行中・N 秒」のまま止まって残る
+  it('終わっていない経過を閉じると、閉じた時刻で終わりにする', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'interrupt' }, 1000);
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(5000);
+    expect(timelineSummary(t, 9000)).toBe('途中経過（2 件・所要 5 秒）');
+  });
+
+  it('終わった経過を閉じても、終わりの時刻は変えない', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'done' }, 3000);
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(3000);
   });
 });

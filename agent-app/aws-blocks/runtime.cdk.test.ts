@@ -76,7 +76,7 @@ describe('wireRuntime', () => {
     });
   });
 
-  // 必須値が欠けた deploy は決済のできない Lambda を作ってしまうので、合成の時点で落とす。
+  // 必須値が欠けた deploy は決済のできない構成を作ってしまうので、合成の時点で落とす。
   // 判定そのものは runtime-env.test.ts が網羅する
   it('必須にすると環境変数の欠落で合成が落ちる', () => {
     expect(() => synth({}, { requireAll: true })).toThrow(/PAYMENT_MANAGER_ARN/);
