@@ -126,8 +126,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   `--once` を外すとファイル監視で再 deploy し続ける。`npm run amplify:sandbox:delete` で削除
 - `npm run build:amplify` — Amplify Hosting 用のフロントのビルド（`client.js` 生成 → `tsc` + `vite build` →
   `amplify_outputs.json` から `dist/.blocks-sandbox/config.json`）。`amplify.yml` が呼ぶ
-- sandbox の API にローカルのフロントを繋ぐ:
-  `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`
+- sandbox の API にローカルのフロントを繋ぐ: `npm run build:amplify && npx vite preview --port 4173` で、
+  Amplify Hosting と同じ組み立ての画面を配信する（API と Realtime の WebSocket に直接つなぐ）。
+  `BLOCKS_API_URL=… npm run dev` での中継は使えない。手元のサーバーが起動時に画面のクライアントを
+  ローカル用に作り直し、Realtime がクラウドの WebSocket に接続用のトークンを付けずに繋ぐため、403 で弾かれて応答が届かない
 
 ## クラウド deploy（Amplify Gen2）
 

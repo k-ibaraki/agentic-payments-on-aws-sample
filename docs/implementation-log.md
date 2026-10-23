@@ -30,6 +30,8 @@
 - そこで `npm run build:amplify`（Amplify Hosting と同じ組み立て）で作った `dist/` を `vite preview` で配信し、sandbox の
   API と WebSocket に直接つないで確かめた
 - OTP は数分で期限が切れ、転記が遅れると「Not authorized」で弾かれる。2 回送り直した
+- ユーザーの了承を得て、CLAUDE.md と agent-app の README の「手元の画面を sandbox につなぐ」手順を、
+  `npm run build:amplify && npx vite preview --port 4173` に書き換えた（`BLOCKS_API_URL=… npm run dev` は使えない理由も添えた）
 
 ## 2026-10-23: createChat への移行の後のセルフレビュー（決定26・46・73 追記）
 

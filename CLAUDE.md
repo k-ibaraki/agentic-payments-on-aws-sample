@@ -107,7 +107,9 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   （手元の npm は同梱依存の記述を削ることがあり、そのまま出すと CI の `npm ci` が落ちる）
 - `npm run amplify:sandbox -- --once` / `npm run amplify:sandbox:delete` — Amplify の sandbox へ deploy・削除。
   **AWS 上に資源を作り課金が発生する。実行前に必ず確認を取ること**。ローカルのフロントを繋ぐには
-  `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`
+  `npm run build:amplify && npx vite preview --port 4173` で、本番と同じ組み立ての画面を配信する。
+  `BLOCKS_API_URL=… npm run dev` は使わない（手元のサーバーがローカル用の Realtime クライアントで組み直し、
+  クラウドの WebSocket が 403 で弾くので、応答が届かない）
 - `npm run build:amplify` — Amplify Hosting 用ビルド（`amplify.yml` が呼ぶ。`amplify_outputs.json` が要る）
 - `npm run test:e2e` — ローカルサーバーに対する e2e（node:test。CI では回さない）
 - `npx tsx scripts/payments-setup.ts` — AgentCore Payments のセットアップ（冪等。`.env` に CDP 資格情報と
