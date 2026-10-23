@@ -296,21 +296,26 @@ export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaiti
 }
 
 /**
- * 終わりの知らせ（done / error）を受けないまま応答が終わったときの後始末を、createChat の onLoadingChange(false) から
- * 呼ぶ関数を作る。createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを
- * 差し替えて応答中の印（loading）を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の
- * 取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたままなら、ここで拾う。
- * 判定は一拍おいてから行う。createChat は印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt
- * （承認待ち。経過はまだ終わっていない）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
+ * createChat の onLoadingChange(false) から呼ぶ関数を作る。応答中の印が戻ったら一拍おいて状態を読み、次の 2 つを知らせる。
+ * 一拍おくのは、createChat が印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を呼び、
+ * それらが途中経過を閉じたり承認の欄を出したりした後で見るため
+ * - onMissedEnd: 終わりの知らせ（done / error）を取りこぼした。createChat は繋ぎ直した後に会話を読み直し、切れている間に
+ *   応答が終わっていれば、吹き出しを差し替えて印を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と
+ *   残高の取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたまま（承認待ちを除く）なら拾う
+ * - onStaleSubscription: 終わりのチャンク（done / error / interrupt）を受けずに終わった（繋ぎ直し後の読み直し・安全弁）。
+ *   createChat はこのとき購読を外さず、次の依頼を送るとその購読の後始末が新しい回の印を消してしまうので、
+ *   送る前にインスタンスを作り直させる
  */
 export function watchTurnEnd(
-  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
-  onEnded: () => void,
+  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean; endedByChunk: boolean },
+  on: { onMissedEnd: () => void; onStaleSubscription: () => void },
 ): () => void {
   return () => {
     setTimeout(() => {
       const state = read();
-      if (!state.loading && state.timelineOpen && !state.awaitingApproval) onEnded();
+      if (state.loading) return;
+      if (!state.endedByChunk) on.onStaleSubscription();
+      if (state.timelineOpen && !state.awaitingApproval) on.onMissedEnd();
     }, 0);
   };
 }

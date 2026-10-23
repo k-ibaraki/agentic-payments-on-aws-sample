@@ -502,43 +502,66 @@ describe('watchTurnEnd', () => {
   // 戻す。そのときの後始末を拾う。印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を
   // 呼ぶので、判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const idle = { loading: false, timelineOpen: true, awaitingApproval: false, endedByChunk: false };
+
+  function watch(state: typeof idle) {
+    const calls = { missedEnd: 0, stale: 0 };
+    const onLoadingEnded = watchTurnEnd(() => state, {
+      onMissedEnd: () => calls.missedEnd++,
+      onStaleSubscription: () => calls.stale++,
+    });
+    return { calls, onLoadingEnded };
+  }
 
   it('印が戻った直後に承認待ちになったら、終わったとはみなさない', async () => {
-    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
-    let ended = 0;
-    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    const state = { ...idle };
+    const { calls, onLoadingEnded } = watch(state);
     onLoadingEnded();
     state.awaitingApproval = true;
     await flush();
-    expect(ended).toBe(0);
+    expect(calls.missedEnd).toBe(0);
   });
 
   it('印が戻った直後にエラーで途中経過が閉じたら、終わったとはみなさない', async () => {
-    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
-    let ended = 0;
-    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    const state = { ...idle };
+    const { calls, onLoadingEnded } = watch(state);
     onLoadingEnded();
     state.timelineOpen = false;
     await flush();
-    expect(ended).toBe(0);
+    expect(calls.missedEnd).toBe(0);
   });
 
   it('何も続かなければ、終わりの知らせを取りこぼしたとみなす', async () => {
-    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
-    let ended = 0;
-    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    const { calls, onLoadingEnded } = watch({ ...idle });
     onLoadingEnded();
     await flush();
-    expect(ended).toBe(1);
+    expect(calls.missedEnd).toBe(1);
   });
 
-  it('一拍の間に次の応答が始まったら、終わったとはみなさない', async () => {
-    const state = { loading: false, timelineOpen: true, awaitingApproval: false };
-    let ended = 0;
-    watchTurnEnd(() => state, () => ended++)();
+  it('一拍の間に次の応答が始まったら、何もしない', async () => {
+    const state = { ...idle };
+    const { calls, onLoadingEnded } = watch(state);
+    onLoadingEnded();
     state.loading = true;
     await flush();
-    expect(ended).toBe(0);
+    expect(calls).toEqual({ missedEnd: 0, stale: 0 });
+  });
+
+  // 終わりのチャンク（done / error / interrupt）を受けずに終わった回は、createChat の中に購読が残る。次の依頼を
+  // 送るとその購読の後始末が新しい回の応答中の印を消すので、送る前にインスタンスを作り直させる
+  it('終わりのチャンクを受けずに終わったら、購読が残っていると知らせる（承認待ちでも）', async () => {
+    const state = { ...idle, awaitingApproval: true };
+    const { calls, onLoadingEnded } = watch(state);
+    onLoadingEnded();
+    await flush();
+    expect(calls.stale).toBe(1);
+  });
+
+  it('終わりのチャンクを受けて終わったなら、購読は残っていない', async () => {
+    const { calls, onLoadingEnded } = watch({ ...idle, timelineOpen: false, endedByChunk: true });
+    onLoadingEnded();
+    await flush();
+    expect(calls.stale).toBe(0);
   });
 });
 
