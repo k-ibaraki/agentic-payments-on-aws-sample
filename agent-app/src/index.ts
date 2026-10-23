@@ -381,8 +381,8 @@ function describeChunk(chunk: AgentStreamChunk): string {
 }
 
 // 依頼のたびに購読し直し、応答が終わると購読を外す（決定73）。待っていない間は WebSocket を張らないので、
-// 放置しても切れたままの購読に送ることが無い（終わりの知らせを受けずに終わった回の購読だけは、次に送る直前まで残る）。読み込み直した会話の続きを待つ観察用の購読（observeRunningReply）も
-// 同じ transport を使う
+// 放置しても切れたままの購読に送ることが無い（終わりの知らせを受けずに終わった回の購読だけは、次に送る直前まで残る）。
+// 読み込み直した会話の続きを待つ観察用の購読（observeRunningReply）も同じ transport を使う
 const realtime = realtimeTransport({
   // createChat が渡す購読の指定（繋ぎ直し・切断・トークンの取り直し）は、そのまま Realtime に渡す
   subscribe: async (channelId, sub) => {
@@ -642,7 +642,7 @@ function discardConversation() {
   observing?.stop();
   chat.destroy();
   chat = newChat();
-  // 捨てたインスタンスは応答中の印の変化を知らせない（destroy の後は黙る）ので、送信ボタンはここで戻す
+  // 捨てたインスタンスの知らせは受けない（newChat の live）ので、送信ボタンはここで戻す
   syncSendButton();
   messageCount = 0;
   lastMessages = [];
@@ -950,10 +950,11 @@ async function sendCurrentInput() {
   // 入力を消す前に止める（Enter は送信ボタンの無効を通らない）
   if (!text || isBusy()) return;
   input.value = '';
-  await dropLeftoverTurn();
   // 再開した会話で買い置きを読めていなければ、購入が届く前に読み直す。読めないままだと
   // 次の購入の取り直し（autoShow）で買い置きまで自動で載ってしまう。ここでも失敗したら諦める
   if (chat.getConversationId() && !purchasesLoaded) await refreshPurchases(false).catch(() => {});
+  // 前の回の残った購読は送る直前に外す（購入一覧を待つ間に承認で始まった回が残る場合も拾えるよう、待ちの後に置く）
+  await dropLeftoverTurn();
   // 待つ間に承認への応答などで応答中になっていたら送らない（createChat は黙って捨てる）。ここから送るまでは待たないので、
   // 確かめた後に状態は変わらない
   if (isBusy()) {

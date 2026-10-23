@@ -650,10 +650,10 @@ describe('trackTurnStreams', () => {
         createConversation: async () => ({ conversationId: 'conv' }),
         getConversation: async () => ({ messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: '済み' }] }),
       },
-      // 購読が切れて繋ぎ直したことにする（onDisconnect が来ないので安全弁は張られない）
       onError: () => {},
     });
     await chat.sendMessage('a');
+    // 購読が切れて繋ぎ直したことにする（onDisconnect が来ないので安全弁は張られない）
     onReconnect?.();
     await flush();
     expect(chat.isLoading()).toBe(false);
