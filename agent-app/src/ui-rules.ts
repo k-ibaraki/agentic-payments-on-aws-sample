@@ -285,14 +285,15 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
 // 繋ぎ直した後の会話の読み直しは createChat に任せ、ここには画面の側で要る規則だけを置く
 
 /**
- * 読み込み直した会話で、エージェントがまだ応答を作っているか。createChat の loadConversation は履歴を
- * 読むだけで購読しないので、作っている最中なら観察用に購読して終わりを待つ。末尾が依頼か承認への応答なら
- * 作っている最中とみなす（エージェントは応答を保存してから終わりを知らせる）。承認待ちなら止まっている
+ * 会話で、エージェントがまだ応答を作っているか。createChat の loadConversation は履歴を読むだけで購読しないので、
+ * 作っている最中なら観察用に購読して終わりを待つ。末尾が応答なら終わっている（エージェントは応答を保存してから
+ * 終わりを知らせる）。承認待ちなら止まっている。履歴は 2 通りの形で来る。loadConversation の後の履歴（依頼・応答・
+ * 承認への応答だけ。承認待ちは awaitingApproval で伝える）と、サーバーの生の履歴（ツールの行と承認待ちの行も入る）
  */
 export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaitingApproval: boolean): boolean {
   if (awaitingApproval) return false;
   const last = messages[messages.length - 1];
-  return last !== undefined && last.role !== 'assistant';
+  return last !== undefined && last.role !== 'assistant' && last.role !== 'interrupt';
 }
 
 /**

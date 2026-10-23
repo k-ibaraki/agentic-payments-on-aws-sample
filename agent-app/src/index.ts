@@ -457,7 +457,10 @@ function newChat() {
       getPendingInterrupts: (id) => buyer.getPendingInterrupts(id),
     },
     refresh: refreshChannel,
-    onMessagesChange: renderMessages,
+    // 捨てたインスタンスの読み直し（loadConversation は destroy 後でも知らせる）が、新しい画面に古い会話を描かないように
+    onMessagesChange: (messages) => {
+      if (instance === chat) renderMessages(messages);
+    },
     onLoadingChange: (loading) => {
       (el<HTMLButtonElement>('chat-send-btn')).disabled = loading;
       // 生成が終わった時点で、素のまま出していた最後の応答を Markdown で描き直す。
@@ -480,7 +483,10 @@ function newChat() {
       if (chunk.type === 'tool-result' || chunk.type === 'done' || chunk.type === 'error') stopBalanceWatch();
       if (chunk.type === 'tool-result' || chunk.type === 'done') refreshAfterReply();
     },
-    onError: (error) => {
+    onError: (error, cause) => {
+      // cause があるのは送信そのものの失敗（handleSendFailure）。購読の消費ループは始まっていないか自分で終えているので、
+      // 購読は残らない（作り直さなくてよい）
+      if (cause !== undefined) endedByChunk = true;
       // ストリームが落ちるとチャンクは以後届かない。取り直しもここで止める（決定47）
       appendEvent(`エラー: ${error}`);
       stopBalanceWatch();
@@ -492,6 +498,7 @@ function newChat() {
       }
     },
     onInterrupt: (interrupts) => {
+      if (instance !== chat) return;
       // 中断中は done も tool-result も出ないので、ここで止めないと承認待ちの間ずっと回る。繋ぎ直した後の読み直しで
       // 承認待ちが分かったとき（interrupt のチャンクは流れない）もここを通る
       stopBalanceWatch();
@@ -508,19 +515,22 @@ let chatStale = false;
 // createChat は、終わりのチャンクを受けずに終わった回（繋ぎ直し後の読み直し・安全弁）の購読を外さない。そのまま
 // 次の依頼を送ると、残った購読の後始末が新しい回の応答中の印を消し、途中経過が閉じて送信ボタンも戻ってしまう。
 // destroy() で残った購読を黙らせ、新しいインスタンスで会話を読み直してから送る
-async function renewStaleChat() {
-  if (!chatStale) return;
+// 戻り値は、送ってよいか（作り直しの間に新規会話・サインアウトで会話を捨てたら false）
+async function renewStaleChat(): Promise<boolean> {
+  if (!chatStale) return true;
   chatStale = false;
   const conversationId = chat.getConversationId();
   chat.destroy();
-  chat = newChat();
-  if (!conversationId) return;
+  const next = newChat();
+  chat = next;
+  if (!conversationId) return true;
   try {
-    await chat.loadConversation(conversationId);
+    await next.loadConversation(conversationId);
   } catch (error) {
     // 会話 ID は読み込みの前に覚えるので、読めなくても送れる（応答は届く）
-    appendEvent(`会話を読み直せませんでした: ${describeError(error)}`);
+    if (chat === next) appendEvent(`会話を読み直せませんでした: ${describeError(error)}`);
   }
+  return chat === next;
 }
 
 // ── 読み込み直した会話の続きを待つ（決定73。判断の規則は ui-rules.ts） ──
@@ -591,6 +601,8 @@ async function observeRunningReply(conversationId: string) {
   }
   appendEvent('エージェントはまだ応答を作っています。終わるまで待ちます');
   arm();
+  // 履歴を読んでから購読が確立するまでの間に終わっていたら、知らせはもう来ないので確かめる
+  void checkFinished();
   try {
     for await (const chunk of stream) {
       if (observing !== handle) break;
@@ -606,22 +618,30 @@ async function observeRunningReply(conversationId: string) {
     appendEvent(`エージェントの応答を待つ途中で受信が切れました: ${describeError(error)}`);
   }
   // 新規会話・サインアウトで会話を捨てたときは、先に stop されている
-  const finished = observing === handle;
-  handle.stop();
-  if (!finished) return;
+  if (observing !== handle) return;
+  clearTimeout(silence);
+  clearTimeout(afterDisconnect);
+  stream.unsubscribe();
+  // 読み直しが済むまでは observing を残して送信を止めておく（読み直しが送った依頼の吹き出しを消さないように）。
+  // 各 await の後は、その間に会話を捨てていないか（stop されていないか）を見る
+  const owner = chat;
   try {
-    await chat.loadConversation(conversationId);
+    await owner.loadConversation(conversationId);
     // 履歴は結果整合なので、終わりの直後には応答がまだ読めないことがある。そのときは一度だけ間をおいて読み直す
-    if (isReplyPending(chat.getMessages(), hasPendingApproval())) {
+    if (observing === handle && isReplyPending(owner.getMessages(), hasPendingApproval())) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      await chat.loadConversation(conversationId);
+      if (observing === handle) await owner.loadConversation(conversationId);
     }
+    if (observing !== handle) return;
+    appendEvent('応答が届いたので、会話を読み直しました');
+    // 再開したときの購入の読み込みに失敗していたら、買い置きまで自動で載せないよう自動表示しない
+    refreshPurchases(purchasesLoaded).catch(() => {});
+    refreshWallet().catch(() => {});
   } catch (error) {
-    appendEvent(`会話を読み直せませんでした: ${describeError(error)}`);
-    return;
+    if (observing === handle) appendEvent(`会話を読み直せませんでした: ${describeError(error)}`);
+  } finally {
+    handle.stop();
   }
-  appendEvent('応答が届いたので、会話を読み直しました');
-  refreshAfterReply();
 }
 
 // 会話の状態（フック・画面）を捨てて新しいインスタンスにする。localStorage の会話 ID は触らない。
@@ -891,7 +911,12 @@ function renderInterrupts(interrupts: Array<{ interruptId: string; name: string;
             return;
           }
           // 会話を読み直すと承認の欄が描き直されるので、作り直しは欄を空ける前に済ませる
-          await renewStaleChat();
+          if (!(await renewStaleChat())) return;
+          // 読み直しで承認の欄が描き直されたら、押した承認はもう無いかもしれない（別のタブで済んだなど）ので、選び直してもらう
+          if (!button.isConnected) {
+            appendEvent('会話を読み直したので、承認の欄からもう一度選んでください');
+            return;
+          }
           el('interrupts').replaceChildren();
           appendEvent(`承認への応答: ${label}`);
           // 承認への応答も依頼と同じく購読し直してから送る（createChat の sendMessage が担う）
@@ -922,7 +947,10 @@ async function sendCurrentInput() {
   // 入力を消す前に止める。Enter は送信ボタンの無効を通らない）
   if (!text || chat.isLoading() || observing) return;
   input.value = '';
-  await renewStaleChat();
+  if (!(await renewStaleChat())) {
+    input.value = text;
+    return;
+  }
   // 再開した会話で買い置きを読めていなければ、購入が届く前に読み直す。読めないままだと
   // 次の購入の取り直し（autoShow）で買い置きまで自動で載ってしまう。ここでも失敗したら諦める
   if (chat.getConversationId() && !purchasesLoaded) await refreshPurchases(false).catch(() => {});

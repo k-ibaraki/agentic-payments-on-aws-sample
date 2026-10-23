@@ -495,6 +495,16 @@ describe('isReplyPending', () => {
   it('会話が空なら、待つものは無い', () => {
     expect(isReplyPending([], false)).toBe(false);
   });
+
+  // 観察中の確かめ（checkFinished）はサーバーの生の履歴を読む。生の履歴にはツールの行と承認待ちの行も入る
+  it('生の履歴で末尾がツールの行なら、エージェントはまだ応答を作っている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }], false)).toBe(true);
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }, { role: 'tool-result' }], false)).toBe(true);
+  });
+
+  it('生の履歴で末尾が承認待ちの行なら、エージェントは止まっている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }, { role: 'interrupt' }], false)).toBe(false);
+  });
 });
 
 describe('watchTurnEnd', () => {
