@@ -281,7 +281,8 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72・73） ──
 // 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。createChat は依頼のたびに購読し直し、応答が終わると
-// 購読を外すので、待っていない間に切れても次の依頼は新しい接続で受けられる。応答の途中で切れたときの繋ぎ直しと
+// 購読を外す（終わりの知らせを受けずに終わった回の購読だけは、次に送る直前まで残る。trackTurnStreams 参照）ので、
+// 待っていない間に切れても次の依頼は新しい接続で受けられる。応答の途中で切れたときの繋ぎ直しと
 // 繋ぎ直した後の会話の読み直しは createChat に任せ、ここには画面の側で要る規則だけを置く
 
 /**
@@ -318,12 +319,14 @@ export function watchTurnEnd(
 
 /**
  * createChat に渡す transport を包み、回ごとの購読を控える。createChat は終わりのチャンク（done / error / interrupt）で
- * 終わった回の購読は自分で外すが、受けずに終わった回（繋ぎ直し後の読み直し・安全弁・送信の失敗）の購読は外さずに
- * 残す（上流の不具合）。残ったまま次の回を始めると、その購読の後始末が新しい回の応答中の印を消すので、次の回を
- * 始める前に dropLeftover で外す。観察用の購読（observer）は回の購読ではないので控えない。上流が直れば常に何も残らない
- * @returns dropLeftover は、残っていた購読を外したら true
+ * 終わった回の購読は自分で外すが、受けずに終わった回の購読は外さずに残す（上流の不具合）。繋ぎ直し後の読み直しと
+ * 安全弁で終わった回は、残ったまま次の回を始めると、その購読の消費ループの後始末が新しい回の応答中の印を消す。
+ * 送信の失敗で終わった回は消費ループが無いので印は消さないが、接続が残る。どちらも次の回を始める前に dropLeftover で
+ * 外す。観察用の購読（observer）は回の購読ではないので控えない。上流が直れば常に何も残らない
+ * @returns dropLeftover は、残っていた購読を外したら true。外したときは、上流の後始末（マイクロタスクで走る）が
+ *   済むよう一拍待ってから返すので、返った後に次の回を始めてよい
  */
-export function trackTurnStreams(inner: ChatTransport): { transport: ChatTransport; dropLeftover(): boolean } {
+export function trackTurnStreams(inner: ChatTransport): { transport: ChatTransport; dropLeftover(): Promise<boolean> } {
   let live: ChunkStream | null = null;
   return {
     transport: {
@@ -343,9 +346,10 @@ export function trackTurnStreams(inner: ChatTransport): { transport: ChatTranspo
         return tracked;
       },
     },
-    dropLeftover() {
+    async dropLeftover() {
       if (!live) return false;
       live.unsubscribe();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       return true;
     },
   };

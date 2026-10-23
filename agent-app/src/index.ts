@@ -381,7 +381,7 @@ function describeChunk(chunk: AgentStreamChunk): string {
 }
 
 // 依頼のたびに購読し直し、応答が終わると購読を外す（決定73）。待っていない間は WebSocket を張らないので、
-// 放置しても切れたままの購読に送ることが無い。読み込み直した会話の続きを待つ観察用の購読（observeRunningReply）も
+// 放置しても切れたままの購読に送ることが無い（終わりの知らせを受けずに終わった回の購読だけは、次に送る直前まで残る）。読み込み直した会話の続きを待つ観察用の購読（observeRunningReply）も
 // 同じ transport を使う
 const realtime = realtimeTransport({
   // createChat が渡す購読の指定（繋ぎ直し・切断・トークンの取り直し）は、そのまま Realtime に渡す
@@ -422,12 +422,10 @@ const realtime = realtimeTransport({
 const turnStreams = trackTurnStreams(realtime);
 const transport = turnStreams.transport;
 
-// 次の依頼や承認への応答を送る前に、前の回の残った購読を外す。外すと上流の消費ループが抜けて後始末（応答中の印を
-// 戻す）が走るので、それが済んでから送るよう一拍待つ。回が終わった直後ではなく送る直前に外すのは、安全弁で打ち切った
-// 回でも、遅れて届いた応答を次に送るまでは受けられるようにするため
+// 次の依頼や承認への応答を送る前に、前の回の残った購読を外す（上流の後始末が済むまで待ってから返る）。回が終わった
+// 直後ではなく送る直前に外すのは、安全弁で打ち切った回でも、遅れて届いた応答を次に送るまでは受けられるようにするため
 async function dropLeftoverTurn() {
-  if (chat.isLoading() || !turnStreams.dropLeftover()) return;
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!chat.isLoading()) await turnStreams.dropLeftover();
 }
 
 // 繋ぎ直すときに、期限（購読 約 1 時間・接続 約 2 時間）の切れたトークンを使い回さず取り直す
@@ -593,7 +591,7 @@ async function observeRunningReply(conversationId: string) {
     handle.stop();
     return;
   }
-  // 確立を待つ間に会話を捨てていたら（確立の前に外した購読も established は解決する）、何もしない
+  // 確立を待つ間に会話を捨てていたら何もしない。外した時点によっては established が解決せずここには来ないが、それでよい
   if (!current()) return;
   appendEvent('エージェントはまだ応答を作っています。終わるまで待ちます');
   arm();

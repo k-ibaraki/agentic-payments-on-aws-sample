@@ -2,6 +2,7 @@
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
 // 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン、
 // 受信の切断と繋ぎ直しまわり
+import { type AgentStreamChunk, createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -557,15 +558,18 @@ describe('watchTurnEnd', () => {
 
 describe('trackTurnStreams', () => {
   // createChat は終わりのチャンクを受けずに終わった回（繋ぎ直し後の読み直し・安全弁・送信の失敗）の購読を外さない。
-  // 残ったまま次の回を始めると、古い購読の後始末が新しい回の応答中の印を消すので、回ごとの購読を控えて送る前に外す
-  function fakeStream() {
+  // 前の 2 つは、残ったまま次の回を始めると古い購読の後始末が新しい回の応答中の印を消すので、回ごとの購読を控えて
+  // 送る前に外す
+  function fakeStream(chunks: AgentStreamChunk[] = [], established: Promise<void> = Promise.resolve()) {
     const stream = {
       unsubscribed: 0,
-      established: Promise.resolve(),
+      established,
       unsubscribe() {
         stream.unsubscribed += 1;
       },
-      async *[Symbol.asyncIterator]() {},
+      async *[Symbol.asyncIterator]() {
+        yield* chunks;
+      },
     };
     return stream;
   }
@@ -582,38 +586,83 @@ describe('trackTurnStreams', () => {
     };
   }
 
-  it('外されずに残った回の購読を外す', () => {
+  it('外されずに残った回の購読を外す', async () => {
     const inner = fakeTransport();
     const tracker = trackTurnStreams(inner);
     tracker.transport.subscribe('c');
-    expect(tracker.dropLeftover()).toBe(true);
+    expect(await tracker.dropLeftover()).toBe(true);
     expect(inner.streams[0].unsubscribed).toBe(1);
   });
 
-  it('createChat が自分で外した回は、残っていない', () => {
+  it('createChat が自分で外した回は、残っていない', async () => {
     const inner = fakeTransport();
     const tracker = trackTurnStreams(inner);
     tracker.transport.subscribe('c').unsubscribe();
-    expect(tracker.dropLeftover()).toBe(false);
+    expect(await tracker.dropLeftover()).toBe(false);
     expect(inner.streams[0].unsubscribed).toBe(1);
   });
 
-  it('観察用の購読は控えない（回の購読ではない）', () => {
+  it('前の回の購読を後から外しても、次の回の控えは消えない', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    const first = tracker.transport.subscribe('c');
+    tracker.transport.subscribe('c');
+    first.unsubscribe();
+    expect(await tracker.dropLeftover()).toBe(true);
+    expect(inner.streams[1].unsubscribed).toBe(1);
+  });
+
+  it('観察用の購読は控えない（回の購読ではない）', async () => {
     const inner = fakeTransport();
     const tracker = trackTurnStreams(inner);
     tracker.transport.subscribe('c', { observer: true });
-    expect(tracker.dropLeftover()).toBe(false);
+    expect(await tracker.dropLeftover()).toBe(false);
     expect(inner.streams[0].unsubscribed).toBe(0);
   });
 
-  it('控えた購読をそのまま読める（確立の待ちと中身は元のまま）', async () => {
-    const inner = fakeTransport();
-    const tracker = trackTurnStreams(inner);
-    const stream = tracker.transport.subscribe('c');
-    await expect(stream.established).resolves.toBeUndefined();
-    const chunks = [];
+  it('控えた購読は、確立の待ちと中身をそのまま渡す', async () => {
+    const pending = new Promise<void>(() => {});
+    const inner = { run: async () => ({ channelId: 'c' }), subscribe: () => fakeStream([{ type: 'done' }], pending) };
+    const stream = trackTurnStreams(inner).transport.subscribe('c');
+    expect(stream.established).toBe(pending);
+    const chunks: AgentStreamChunk[] = [];
     for await (const chunk of stream) chunks.push(chunk);
-    expect(chunks).toEqual([]);
+    expect(chunks).toEqual([{ type: 'done' }]);
+  });
+
+  // 本物の createChat で、直した不具合そのものを固定する。繋ぎ直した後の読み直しで回が終わる（購読が残る）→ 次を送る
+  it('繋ぎ直した後の読み直しで終わった回の後でも、次の回の応答中の印は消えない', async () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    let onReconnect: (() => void) | undefined;
+    const tracker = trackTurnStreams(
+      realtimeTransport({
+        subscribe: async (_channelId, sub) => {
+          if (typeof sub !== 'function') onReconnect = sub.onReconnect;
+          return { unsubscribe() {}, established: Promise.resolve() };
+        },
+        sendMessage: async () => {},
+        resume: async () => {},
+      }),
+    );
+    const chat = createChat({
+      transport: tracker.transport,
+      api: {
+        createConversation: async () => ({ conversationId: 'conv' }),
+        getConversation: async () => ({ messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: '済み' }] }),
+      },
+      // 購読が切れて繋ぎ直したことにする（onDisconnect が来ないので安全弁は張られない）
+      onError: () => {},
+    });
+    await chat.sendMessage('a');
+    onReconnect?.();
+    await flush();
+    expect(chat.isLoading()).toBe(false);
+
+    expect(await tracker.dropLeftover()).toBe(true);
+    await chat.sendMessage('b');
+    await flush();
+    expect(chat.isLoading()).toBe(true);
+    chat.destroy();
   });
 });
 
