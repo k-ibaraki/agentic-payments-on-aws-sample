@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
 });
 
 // ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
-import { isReplyPending, toChannelDescriptor, watchTurnEnd } from './ui-rules.js';
+import { isReplyPending, toChannelDescriptor, trackTurnStreams, watchTurnEnd } from './ui-rules.js';
 
 describe('isReplyPending', () => {
   // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
@@ -515,54 +515,105 @@ describe('watchTurnEnd', () => {
   const idle = { loading: false, timelineOpen: true, awaitingApproval: false };
 
   function watch(state: typeof idle) {
-    const calls = { missedEnd: 0, idle: 0 };
-    const onLoadingEnded = watchTurnEnd(() => state, {
-      onMissedEnd: () => calls.missedEnd++,
-      onIdle: () => calls.idle++,
-    });
-    return { calls, onLoadingEnded };
+    let ended = 0;
+    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    return { ended: () => ended, onLoadingEnded };
   }
 
   it('印が戻った直後に承認待ちになったら、終わったとはみなさない', async () => {
     const state = { ...idle };
-    const { calls, onLoadingEnded } = watch(state);
-    onLoadingEnded();
+    const w = watch(state);
+    w.onLoadingEnded();
     state.awaitingApproval = true;
     await flush();
-    expect(calls.missedEnd).toBe(0);
+    expect(w.ended()).toBe(0);
   });
 
   it('印が戻った直後にエラーで途中経過が閉じたら、終わったとはみなさない', async () => {
     const state = { ...idle };
-    const { calls, onLoadingEnded } = watch(state);
-    onLoadingEnded();
+    const w = watch(state);
+    w.onLoadingEnded();
     state.timelineOpen = false;
     await flush();
-    expect(calls.missedEnd).toBe(0);
+    expect(w.ended()).toBe(0);
   });
 
   it('何も続かなければ、終わりの知らせを取りこぼしたとみなす', async () => {
-    const { calls, onLoadingEnded } = watch({ ...idle });
-    onLoadingEnded();
+    const w = watch({ ...idle });
+    w.onLoadingEnded();
     await flush();
-    expect(calls.missedEnd).toBe(1);
-  });
-
-  // 応答が終わった後の片付け（残った購読を外す）は、終わり方によらず一拍おいて必ず呼ぶ
-  it('印が戻ったまま一拍たてば、片付けを呼ぶ（承認待ちでも）', async () => {
-    const { calls, onLoadingEnded } = watch({ ...idle, timelineOpen: false, awaitingApproval: true });
-    onLoadingEnded();
-    await flush();
-    expect(calls.idle).toBe(1);
+    expect(w.ended()).toBe(1);
   });
 
   it('一拍の間に次の応答が始まったら、何もしない', async () => {
     const state = { ...idle };
-    const { calls, onLoadingEnded } = watch(state);
-    onLoadingEnded();
+    const w = watch(state);
+    w.onLoadingEnded();
     state.loading = true;
     await flush();
-    expect(calls).toEqual({ missedEnd: 0, idle: 0 });
+    expect(w.ended()).toBe(0);
+  });
+});
+
+describe('trackTurnStreams', () => {
+  // createChat は終わりのチャンクを受けずに終わった回（繋ぎ直し後の読み直し・安全弁・送信の失敗）の購読を外さない。
+  // 残ったまま次の回を始めると、古い購読の後始末が新しい回の応答中の印を消すので、回ごとの購読を控えて送る前に外す
+  function fakeStream() {
+    const stream = {
+      unsubscribed: 0,
+      established: Promise.resolve(),
+      unsubscribe() {
+        stream.unsubscribed += 1;
+      },
+      async *[Symbol.asyncIterator]() {},
+    };
+    return stream;
+  }
+  function fakeTransport() {
+    const streams: ReturnType<typeof fakeStream>[] = [];
+    return {
+      streams,
+      run: async () => ({ channelId: 'c' }),
+      subscribe: () => {
+        const s = fakeStream();
+        streams.push(s);
+        return s;
+      },
+    };
+  }
+
+  it('外されずに残った回の購読を外す', () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c');
+    expect(tracker.dropLeftover()).toBe(true);
+    expect(inner.streams[0].unsubscribed).toBe(1);
+  });
+
+  it('createChat が自分で外した回は、残っていない', () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c').unsubscribe();
+    expect(tracker.dropLeftover()).toBe(false);
+    expect(inner.streams[0].unsubscribed).toBe(1);
+  });
+
+  it('観察用の購読は控えない（回の購読ではない）', () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c', { observer: true });
+    expect(tracker.dropLeftover()).toBe(false);
+    expect(inner.streams[0].unsubscribed).toBe(0);
+  });
+
+  it('控えた購読をそのまま読める（確立の待ちと中身は元のまま）', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    const stream = tracker.transport.subscribe('c');
+    await expect(stream.established).resolves.toBeUndefined();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks).toEqual([]);
   });
 });
 

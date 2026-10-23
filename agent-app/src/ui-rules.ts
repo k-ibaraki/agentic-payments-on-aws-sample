@@ -1,5 +1,5 @@
 // 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69・72・73）。index.ts から呼び、テストはここで固定する
-import type { ChatChannelDescriptor } from '@aws-blocks/bb-agent/client';
+import type { ChatChannelDescriptor, ChatTransport, ChunkStream } from '@aws-blocks/bb-agent/client';
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -297,24 +297,57 @@ export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaiti
 }
 
 /**
- * createChat の onLoadingChange(false) から呼ぶ関数を作る。応答中の印が戻ったら一拍おいて状態を読み、印が戻ったままなら
- * onIdle（応答が終わった後の片付け）を呼び、終わりの知らせを取りこぼしていれば onMissedEnd も呼ぶ。
- * createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを差し替えて印を戻すだけで
- * done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の取り直し・残高の監視を止める）は done を受けて走るので、
- * 印が戻ったのに途中経過が開いたまま（承認待ちを除く）なら拾う。一拍おくのは、createChat が印を戻した直後に同じ流れで
- * onError（送信の失敗）や onInterrupt（承認待ち）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
+ * 終わりの知らせ（done / error）を受けないまま応答が終わったときの後始末を、createChat の onLoadingChange(false) から
+ * 呼ぶ関数を作る。createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを
+ * 差し替えて応答中の印（loading）を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の
+ * 取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたままなら、ここで拾う。
+ * 判定は一拍おいてから行う。createChat は印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt
+ * （承認待ち。経過はまだ終わっていない）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
  */
 export function watchTurnEnd(
   read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
-  on: { onMissedEnd: () => void; onIdle: () => void },
+  onMissedEnd: () => void,
 ): () => void {
   return () => {
     setTimeout(() => {
       const state = read();
-      if (state.loading) return;
-      on.onIdle();
-      if (state.timelineOpen && !state.awaitingApproval) on.onMissedEnd();
+      if (!state.loading && state.timelineOpen && !state.awaitingApproval) onMissedEnd();
     }, 0);
+  };
+}
+
+/**
+ * createChat に渡す transport を包み、回ごとの購読を控える。createChat は終わりのチャンク（done / error / interrupt）で
+ * 終わった回の購読は自分で外すが、受けずに終わった回（繋ぎ直し後の読み直し・安全弁・送信の失敗）の購読は外さずに
+ * 残す（上流の不具合）。残ったまま次の回を始めると、その購読の後始末が新しい回の応答中の印を消すので、次の回を
+ * 始める前に dropLeftover で外す。観察用の購読（observer）は回の購読ではないので控えない。上流が直れば常に何も残らない
+ * @returns dropLeftover は、残っていた購読を外したら true
+ */
+export function trackTurnStreams(inner: ChatTransport): { transport: ChatTransport; dropLeftover(): boolean } {
+  let live: ChunkStream | null = null;
+  return {
+    transport: {
+      run: (turn) => inner.run(turn),
+      subscribe(channelId, opts) {
+        const stream = inner.subscribe(channelId, opts);
+        if (opts?.observer) return stream;
+        const tracked: ChunkStream = {
+          established: stream.established,
+          [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+          unsubscribe() {
+            if (live === tracked) live = null;
+            stream.unsubscribe();
+          },
+        };
+        live = tracked;
+        return tracked;
+      },
+    },
+    dropLeftover() {
+      if (!live) return false;
+      live.unsubscribe();
+      return true;
+    },
   };
 }
 
