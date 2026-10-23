@@ -63,10 +63,11 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - Block の id（`Scope('app')` / `Agent 'buyer'` / `BlocksBackend 'b'`）は AWS 上の物理名。S3 の 63 文字制限に
   合わせて短くしてあり、deploy 後は変えない（変えると資源が作り直されデータが消える）。`.blocks/config.json` の
   `stackId` も `cdk deploy` 経路のスタック名と S3 バケット名の元になる（gitignore しない。fork 先で使うなら書き換える）
-- AWS Blocks は本体を `~0.3.1` に、`@aws-blocks/*` の部品を lockfile の版に留めている（決定70）。0.4 以降は
-  エージェントが AgentCore Runtime で動き、`wireRuntime` の環境変数（`PAYMENT_*` など）が届かない。素の `npm update` は
-  部品を上げて core を混在させるので、更新するときは `@aws-blocks/*` を除いた名前を指定する。その後は `@aws-sdk/core` が
-  入れ子で重複していないかを見る（重複すると共有 Lambda のバンドルが膨らむ。直し方は決定70）
+- AWS Blocks は本体を `~0.8.0` に固定している（決定72）。エージェントのループは AgentCore Runtime で動き、
+  共有 Lambda の環境変数は届かないので、実行時設定は `registerConfig`（S3 の設定 JSON。Lambda も Runtime も起動時に読む）で渡す。
+  `handler.addEnvironment` に戻さない。版を上げると構成ごと変わることがあるので、上げるときは合成結果を前後で比べる。
+  素の `npm update` は部品を上げて core を混在させるので、更新するときは `@aws-blocks/*` を除いた名前を指定する。
+  その後は `@aws-sdk/core` が入れ子で重複していないかを見る（重複すると共有 Lambda のバンドルが膨らむ。直し方は決定70）
 
 ## リージョン
 
@@ -121,7 +122,8 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
   付けて開ける。クラウドの利用者は Cognito コンソールで作る
 - 実行時設定（`PAYMENT_*` / `BILLING_MCP_URL` など）は合成時の環境変数（Amplify はコンソールのアプリ単位・ブランチ単位、
   `cdk deploy` 経路はシェルと `.env.production`、sandbox はシェル）から `aws-blocks/runtime-env.ts` の許可リストで拾い、
-  `aws-blocks/runtime.cdk.ts` の `wireRuntime` が AgentCore Payments の IAM と併せて共有 Lambda に載せる（決定34）。
+  `aws-blocks/runtime.cdk.ts` の `wireRuntime` が `registerConfig` で登録し、AgentCore Payments の IAM を共有ロールに付ける
+  （決定34・72。共有 Lambda と AgentCore Runtime が同じ設定とロールを使う）。
   Amplify 経路と `cdk deploy` 経路の両方から呼ぶ。必須値が無いと合成で落ちるのは deploy のときだけで、
   sandbox と `npm run destroy` / `cdk diff` は欠けても通る
 - `npx tsx scripts/faucet.ts <アドレス>` — CDP faucet でテスト USDC を供給

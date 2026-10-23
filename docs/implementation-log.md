@@ -2,6 +2,79 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-23: AWS Blocks を 0.8 系へ上げ、エージェントのループを AgentCore Runtime へ移す（決定72、決定31・32・33・34・69・70・U5 追記）
+
+ユーザーの依頼は「そろそろ AWS Blocks を更新したい」。決定70 で待つと決めた条件（上流の #497・#501・#503 の公開）が
+0.8.0（2026-10-16 公開）で揃ったので、移行を前提に grill-me で範囲を詰めた。
+
+### やったこと
+
+- 下調べ。0.8.0 は core 0.7.0・bb-agent 0.6.0・bb-realtime 0.4.0 を引き込む。bb-realtime 0.4.0 に繋ぎ直し、
+  bb-agent 0.6.0 の useChat に繋ぎ直した後の会話の読み直し（`onReconnect`）とトークンの取り直し（`refresh`）がある。
+  AgentCore Runtime に直接渡る環境変数は 4 つのままだが、Runtime は起動時に `loadConfigToProcessEnv()` で
+  アプリの設定（S3 の JSON）を読むので、`registerConfig` に移せば `PAYMENT_*` が届くと見立てた
+- 調査用の worktree（`/tmp/blk-upgrade-wt`）で 0.8.0 に上げ、合成結果を前後で比べた（Cognito・DynamoDB・S3・秘密値は
+  作り直されない。共有 Lambda と REST API は作り直され URL が変わる。SQS のジョブキューが消え、Runtime が増える）
+- grill-me で決めたこと: 決定69 の回避策は外して上流に任せる、呼び出し上限は既定の 20、15 分の天井は残す、
+  production の既定（PITR など）は受け入れる、sandbox で実決済まで確かめる
+- 本体の作業（ブランチ `chore/aws-blocks-0.8`）。TDD で進めた
+  - `~0.8.0` に上げた。`@aws-sdk/core` の写しは main と同じ 3 個
+  - `wireRuntime` を `registerConfig` と共有ロールへの配線に書き換えた（テストは設定の登録とポリシーを見る形に）
+  - `BLOCKS_SANDBOX` / `BLOCKS_CROSS_DOMAIN` を `registerConfig` に、Amplify の CORS は `defaults.allowedOrigins`
+    （`blocksDefaults`）に、`amplify_outputs.json` の URL は `publicApiUrl` にした。amplify/ を create-blocks-app 0.3.0 の
+    テンプレートに合わせ直し、bb-data の暗号化の既定（`encryptStorageByDefault`）も写した（cdk.json にも）
+  - 決定69 の回避策を、送る前と承認に応える前の接続の確かめだけに縮めた（`isSubscriptionClosed`）。
+    `planRecovery`・`isReplyFinished`・`applyDisconnect`・online / visibilitychange の監視・`createSingleFlight` の
+    `again` を外し、テストも消した
+  - トークンの取り直しのため、チャンネルの生の記述を返す API を 2 つ足した（`getChannelDescriptor` /
+    `getProgressChannelDescriptor`。所有検証は元の API と同じ。e2e で他人の会話の分を取れないことを固定）
+  - `SHARED_LAMBDA_TIMEOUT_MS` を `TOOL_TIMEOUT_CEILING_MS` に改名し、根拠の注記を書き換えた
+  - README（ルート・agent-app）、構成図、CLAUDE.md を 0.8 の構成に合わせた
+- セルフレビュー（5 件、すべて直した）: 繋ぎ直した後の読み直しで応答が終わっていたと分かったときに画面の後始末が
+  走らない（`isTurnEndedWithoutChunk` で拾う）、CLAUDE.md が 0.3 系の前提のまま、`@aws-blocks/hosting` の 2 版並存の説明、
+  wiring.test.ts の見出し、決定33 への追記漏れ
+
+### 確かめたこと
+
+- 単体テスト 307 件・型検査・フロントのビルド・e2e 5 件・偽 LLM でのブラウザ確認（依頼 1 回で応答と done が出る）
+- きれいな状態からの `npm ci`（npm 10.9.4・11.12.0・11.16.0）
+- 合成結果: 両経路とも設定 JSON に `PAYMENT_*` が入り（Amplify 経路は `BLOCKS_CROSS_DOMAIN` も）、Runtime の実行ロールが
+  AgentCore Payments の権限を持つ共有ロールで、Amplify 経路の Lambda に `CORS_ALLOWED_ORIGINS` が載る
+- sandbox（Amplify、`npm run amplify:sandbox -- --once`、作成 2 分・削除 1 分）での実決済。実行時設定は本番の Amplify アプリの
+  環境変数を読んで渡した。1 回目は Runtime の中で `Config loaded: 16 keys` → PaymentSession の作成 → 売り手の 402（梅・$0.1）
+  → `ProcessPayment` まで進み、AgentCore Payments が「Delegated signing grant is not active」で断った（支払いは起きていない）。
+  ユーザーが WalletHub で委任し直した後の 2 回目で、支払い（$0.1、tx `0x5ca01315…d3b0213`）から HTML の受け取り
+  （9,530 バイト）・保存まで通った（購入が記録されるまで 35 秒）
+
+### 分かったこと
+
+- bb-realtime 0.4.0 は繋ぎ直しを 5 回（1・2・4・8・16 秒、約 31 秒）で諦めて接続を畳み、useChat 0.6.0 はそれを受けても
+  購読済みの印を消さない。0.6.0 の `destroy()` は以後のチャンクを捨てるので、決定69 の「購読だけ外す」は使えない。
+  そこで送る前の確かめだけを残した（ユーザー決定）
+- WalletHub の委任が切れていても、`GetPaymentInstrument` の `redirectUrl` は読めるので、`payments-setup.ts` を流さずに
+  委任の URL を取り出せる（ウォレットが既にあれば `PAYMENTS_LINK_EMAIL` も要らない）。前回の委任は 2026-09-19 で、
+  7 日の期限が切れていた。本番も同じウォレットなので、委任し直すまでは本番でも支払いは通らなかったはず
+- 0.8.0 の Runtime の資産は依存を丸ごと束ね、依存のテストファイルまで `.amplify/artifacts/cdk.out/` に書き出す。
+  `npm run test` の絞り込み（`amplify`）がそれを拾って落ちたので、`vite.config.ts` の `test.exclude` に
+  `.amplify/**` と `cdk.out/**` を足した（ユーザー決定）
+
+### つまずき
+
+- 手元の npm が Amplify の同梱依存（data-construct / graphql-api-construct 配下の zod と @opentelemetry/core）の記述を
+  書き換え、`npm ci` が落ちた。親の版は変わっていないので、その 6 件を main の lockfile から戻した
+- `buy-via-cloud.ts` は購入の記録だけを数えて待つので、1 回目は支払いを断られた返答が来ていても 10 分の時間切れまで
+  待った。原因は会話の記録（DynamoDB）を読んで分かった
+- 構成図の書き換えで、正規表現の置き換えが子要素を持つ `mxGeometry` を途中で切って XML を壊した。XML パーサで
+  編集し直した
+
+### 残したこと（未検証）
+
+- 上流が繋ぎ直しを諦めた後に送ると、送る前の確かめで会話を読み直して応答が届くこと（ブラウザでオフラインを 31 秒より
+  長く続ける確かめ）は、sandbox では行わなかった（ユーザー決定）
+- トークンの取り直し（`refresh`）は、購読から 1 時間を超える応答でしか効かないので確かめていない
+- 本番（Amplify の main ブランチ）への反映は、マージ後の Amplify Hosting のビルドで行われる。API と Amplify 経路の
+  WebSocket の URL が変わる（フロントは `amplify_outputs.json` から読み直すので追随する）
+
 ## 2026-10-11: 価格帯の判定に使う Haiku を 5.5 へ上げる（決定71、決定53 追記）
 
 ユーザーの依頼は「jp リージョンで 5.5 が使えるのは Haiku だけなので、Haiku を 5.5 にしたい」。grill-me（依頼の前提と目的を 1 問ずつ問い直す、Claude Code のスキル）で前提から詰めた。
