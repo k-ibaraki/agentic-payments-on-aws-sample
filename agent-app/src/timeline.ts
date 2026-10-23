@@ -22,8 +22,10 @@ export interface TimelineRow {
 export interface Timeline {
   rows: TimelineRow[];
   startedAt: number;
-  /** 依頼への応答が終わった時刻（done / error）。終わるまで null */
+  /** 依頼への応答が終わった時刻（done / error。知らせを受けずに閉じたときは closeTimeline が立てる）。終わるまで null */
   endedAt: number | null;
+  /** 承認待ち（interrupt）になった時刻。承認の後に動き出したら null に戻す */
+  awaitingApprovalSince: number | null;
   /** 支払いの証明を送ってから結果が返るまでの、待ち始めの時刻。待っていなければ null */
   waitingSince: number | null;
   /** 署名した額の表記（要約に出す） */
@@ -108,6 +110,7 @@ export function startTimeline(now: number): Timeline {
     rows: [{ actor: 'agent', text: 'エージェントに依頼を送りました', term: 'AWS Blocks の Agent' }],
     startedAt: now,
     endedAt: null,
+    awaitingApprovalSince: null,
     waitingSince: null,
     paid: null,
     failed: false,
@@ -127,6 +130,8 @@ export function applyChunk(
   chunk: Pick<AgentStreamChunk, 'type'> & Partial<AgentStreamChunk>,
   now: number,
 ) {
+  // 承認の後に動き出したら、承認待ちの時刻は忘れる（閉じるときの終わりの時刻に使わない）
+  if (chunk.type !== 'interrupt') timeline.awaitingApprovalSince = null;
   switch (chunk.type) {
     case 'tool-call':
       timeline.rows.push(
@@ -144,6 +149,7 @@ export function applyChunk(
       return;
     case 'interrupt':
       stopWaiting(timeline);
+      timeline.awaitingApprovalSince = now;
       timeline.rows.push({ actor: 'agent', text: '支払いを続けるかどうか、あなたの確認を待っています' });
       return;
     case 'error':
@@ -163,13 +169,14 @@ export function applyChunk(
 
 /**
  * 経過を閉じる。終わりの知らせ（done / error）を受けずに閉じるとき（承認待ちのまま会話を読み直した・次の依頼を
- * 送った）は、閉じた時刻を終わりにする。interrupt は終わりの時刻を立てないので、立てないと見出しが
- * 「進行中・N 秒」のまま止まって残る。既に終わっていれば何もしない
+ * 送った）に終わりの時刻を立てる。interrupt は終わりの時刻を立てないので、立てないと見出しが
+ * 「進行中・N 秒」のまま止まって残る。承認待ちのまま閉じるなら、承認待ちになった時刻を終わりにする
+ * （人が待たせた時間を所要に入れない）。既に終わっていれば何もしない
  */
 export function closeTimeline(timeline: Timeline, now: number) {
   if (timeline.endedAt !== null) return;
   stopWaiting(timeline);
-  timeline.endedAt = now;
+  timeline.endedAt = timeline.awaitingApprovalSince ?? now;
 }
 
 /**

@@ -180,12 +180,27 @@ describe('依頼 1 回の経過', () => {
 
   // 承認待ちのまま閉じる（会話の読み直し・次の依頼）。interrupt は終わりの時刻を立てないので、閉じた時点で立てる。
   // 立てないと、見出しが「進行中・N 秒」のまま止まって残る
-  it('終わっていない経過を閉じると、閉じた時刻で終わりにする', () => {
+  // 人が承認を待たせた時間は所要に入れない（10 分放置すると「所要 620 秒」のように見えてしまう）
+  it('承認待ちのまま閉じると、承認待ちになった時刻で終わりにする', () => {
     const t = startTimeline(0);
     applyChunk(t, { type: 'interrupt' }, 1000);
+    closeTimeline(t, 600000);
+    expect(t.endedAt).toBe(1000);
+    expect(timelineSummary(t, 900000)).toBe('途中経過（2 件・所要 1 秒）');
+  });
+
+  it('承認の後に動き出してから閉じたら、閉じた時刻で終わりにする', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'interrupt' }, 1000);
+    applyChunk(t, { type: 'tool-call', toolName: 'generateHtml' }, 2000);
     closeTimeline(t, 5000);
     expect(t.endedAt).toBe(5000);
-    expect(timelineSummary(t, 9000)).toBe('途中経過（2 件・所要 5 秒）');
+  });
+
+  it('終わりの知らせを受けずに閉じると、閉じた時刻で終わりにする', () => {
+    const t = startTimeline(0);
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(5000);
   });
 
   it('終わった経過を閉じても、終わりの時刻は変えない', () => {

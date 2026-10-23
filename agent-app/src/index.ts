@@ -815,9 +815,14 @@ function renderInterrupts(interrupts: Array<{ id: string; name: string; reason?:
             return;
           }
           // 読み直しで承認の欄が描き直されたら、押した承認はもう無いかもしれない（別のタブで済んだなど）。
-          // 古い ID で送るとサーバーに弾かれ、useChat の応答中の印が残って送信が戻らないので、選び直してもらう
+          // 古い ID はサーバーに弾かれてエラーになるだけなので、選び直してもらう
           if (!button.isConnected) {
             appendEvent('会話を読み直したので、承認の欄からもう一度選んでください');
+            return;
+          }
+          // 応答中は useChat が承認への応答を黙って捨てる（送信と同じ）。欄を空ける前に止め、承認待ちを画面から消さない
+          if (chat.isLoading()) {
+            appendEvent('応答中は承認に応えられません。応答が終わってからもう一度選んでください');
             return;
           }
           box.replaceChildren();
