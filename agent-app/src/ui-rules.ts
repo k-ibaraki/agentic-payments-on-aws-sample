@@ -278,67 +278,52 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
     : { label: '拡大', title: '画面いっぱいに広げる' };
 }
 
-// ── 応答の受信が切れたときの立て直し（決定69） ──
-// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。接続は 2 時間で必ず切られ、放置したタブでは
-// 生存確認（9 分ごと）が遅れて 10 分の無通信でも切られ得る。クラウド用の購読は繋ぎ直さず、useChat も
-// 購読済みのまま送信するので、画面の側で切断を拾って購読し直す
-
-export type SubscriptionRecovery = 'ignore' | 'resubscribe-on-send' | 'reload-now';
+// ── 送る前に受信が生きているかの確かめ（決定69・72） ──
+// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。切れたときの繋ぎ直しと、繋ぎ直した後の会話の
+// 読み直しは上流（bb-realtime 0.4・bb-agent 0.6）に任せる。ただし上流は繋ぎ直しを 5 回（約 31 秒）で諦めて
+// 接続を畳み、useChat は購読済みのまま次の依頼を送るので、応答が画面に届かない。そこで送る前にだけ確かめる
 
 /**
- * 切断の知らせ（`onDisconnect` の理由）から立て直し方を決める。
- * - client: 自分で購読を外した（会話の作り直しや読み直し）ので何もしない
- * - 待っている応答が無ければ、購読だけ外して次の送信で useChat に購読し直させる。会話と吹き出しは残る
- * - 応答の途中か承認待ちなら、その場で会話を読み直す。useChat は応答中の印（loading）を戻さず
- *   次の送信を黙って捨てるうえ、承認への応答では購読し直さないため
- * - 読み直した後でエージェントの応答を待っている間（awaitingRecoveredReply）も、その場で読み直す。
- *   読み直したフックは loading を持たないが、送信は応答の終わりの知らせが来るまで止めている。
- *   購読を外すだけにすると、その知らせが届かなくなり送信が戻らない
+ * 応答を受ける接続が切れているか（WebSocket の readyState）。閉じかけ（2）と閉じた（3）を切れたとみなす。
+ * 上流が繋ぎ直しを待っている間も閉じた接続が見えるが、その場合も会話を読み直せば新しい接続で受け直せる
  */
-export function planRecovery(
-  reason: string,
-  state: { loading: boolean; awaitingApproval: boolean; awaitingRecoveredReply: boolean },
-): SubscriptionRecovery {
-  if (reason === 'client') return 'ignore';
-  return state.loading || state.awaitingApproval || state.awaitingRecoveredReply ? 'reload-now' : 'resubscribe-on-send';
+export function isSubscriptionClosed(readyState: number | undefined): boolean {
+  return readyState === 2 || readyState === 3;
 }
 
 /**
- * 読み直した会話で、応答が終わっているか。エージェントは応答を保存してから done を送るので、
- * 末尾が応答なら終わっている（受信が切れている間に done を取りこぼしていても分かる）
+ * 終わりの知らせ（done / error）を受けないまま応答が終わったか。useChat は繋ぎ直した後に会話を読み直し、
+ * 切れている間に応答が終わっていれば、吹き出しを差し替えて応答中の印（loading）を戻すだけで done を流さない。
+ * 画面の後始末（途中経過を閉じる・購入一覧と残高の取り直し・残高の監視を止める）は done を受けて走るので、
+ * 応答中の印が戻ったのに途中経過が開いたままなら、ここで拾う。承認待ちで印が戻ったときは経過は終わっていない
  */
-export function isReplyFinished(messages: ReadonlyArray<{ role: string }>): boolean {
-  const last = messages[messages.length - 1];
-  return !last || last.role === 'assistant';
+export function isTurnEndedWithoutChunk(state: {
+  loading: boolean;
+  timelineOpen: boolean;
+  awaitingApproval: boolean;
+}): boolean {
+  return !state.loading && state.timelineOpen && !state.awaitingApproval;
+}
+
+/** サーバーが識別子を外して返したチャンネルの記述に、付け直す（useChat の refresh が求める形） */
+export function toChannelDescriptor<T extends { channel: string }>(raw: T): T & { __blocks: 'realtime/channel' } {
+  return { ...raw, __blocks: 'realtime/channel' };
 }
 
 /**
  * 1 本ずつしか走らせない非同期の処理（決定69 の会話の読み直し）。走っている間の呼び出しは同じ結果を待つ。
- * - again を付けた呼び出しは、走っている処理が成功した後にもう一度走らせる。読み直しの最中に応答が終わると、
- *   その読み直しは応答を保存する前の履歴を読んだかもしれないため
- * - reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
- *   印は消さず、もう一度走ることもしない
+ * reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
+ * 印は消さない
  */
 export function createSingleFlight(task: () => Promise<boolean>) {
   let running: Promise<boolean> | null = null;
-  let again = false;
   // 今の処理の番号。reset と新しい処理のたびに進め、捨てた処理が自分の番かどうかを見分ける
   let flight = 0;
   return {
-    run(options: { again?: boolean } = {}): Promise<boolean> {
-      if (running) {
-        if (options.again) again = true;
-        return running;
-      }
+    run(): Promise<boolean> {
+      if (running) return running;
       const id = ++flight;
-      running = (async () => {
-        let ok: boolean;
-        do {
-          again = false;
-          ok = await task();
-        } while (ok && again && flight === id);
-        return ok;
-      })().finally(() => {
+      running = task().finally(() => {
         if (flight === id) running = null;
       });
       return running;
@@ -346,7 +331,6 @@ export function createSingleFlight(task: () => Promise<boolean>) {
     reset() {
       flight += 1;
       running = null;
-      again = false;
     },
   };
 }

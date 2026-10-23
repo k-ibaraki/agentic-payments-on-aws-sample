@@ -1,12 +1,12 @@
 import { MIN_SESSION_MINUTES } from './payments/payment-session.js';
 
 /**
- * 合成時の環境変数から、共有 Lambda に写す実行時設定を決める（決定34）。
+ * 合成時の環境変数から、実行時設定として登録するものを決める（決定34・72）。
  *
  * 取得元は合成を走らせたプロセスの環境変数で、Amplify 経路ではコンソールのアプリ／ブランチの
  * 環境変数（ビルドにしか届かないため合成時に拾うしかない）、cdk deploy 経路ではシェルと
  * .env.production になる。許可リストの変数だけを拾い、runtime.cdk.ts の wireRuntime が
- * handler.addEnvironment で Lambda に写す。値はいずれも識別子や URL で秘密ではない。
+ * registerConfig で登録する（S3 の平文の JSON に入る）。値はいずれも識別子や URL で秘密ではない。
  */
 
 /**
@@ -32,8 +32,12 @@ export const RUNTIME_ENV_KEYS = [
 /** 揃っていなければ実決済が通らない変数。deploy 時は合成で落として気づけるようにする */
 export const REQUIRED_ENV_KEYS = ['PAYMENT_MANAGER_ARN', 'PAYMENT_INSTRUMENT_ID', 'BILLING_MCP_URL'] as const;
 
-/** @aws-blocks/core の BlocksBackend が共有 Lambda に設定するタイムアウト（15 分） */
-export const SHARED_LAMBDA_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * 有料ツールの待ち時間の天井（15 分）。もとは共有 Lambda のタイムアウト（エージェントのループが Lambda で
+ * 動いていた）。0.8.0 からループは AgentCore Runtime（最長 8 時間）で動くので、この天井は根拠を失ったが、
+ * 長い待ちを実機で確かめるまでは広げずに残す（決定72）
+ */
+export const TOOL_TIMEOUT_CEILING_MS = 15 * 60 * 1000;
 
 /**
  * @param options.requireAll  REQUIRED_ENV_KEYS の欠落を例外にするか（決定34 の改訂）。
@@ -66,12 +70,10 @@ export function runtimeEnvironment(
     if (!Number.isFinite(ms) || ms <= 0) {
       throw new Error(`BUYER_TOOL_TIMEOUT_MS が数値ではありません: ${timeout}`);
     }
-    // 決定31 の注記: Agent を実行する Lambda のタイムアウトが有料ツールの待ち時間を包含していないと、
-    // 決済後に Lambda が先に打ち切られて成果物を失う
-    if (ms > SHARED_LAMBDA_TIMEOUT_MS) {
-      throw new Error(
-        `BUYER_TOOL_TIMEOUT_MS=${timeout} は共有 Lambda のタイムアウト（${SHARED_LAMBDA_TIMEOUT_MS} ms）を超えています`,
-      );
+    // 決定31 の注記: エージェントを動かす側の打ち切りが有料ツールの待ち時間を包含していないと、
+    // 決済後に先に打ち切られて成果物を失う。いまの天井は保守的な値（TOOL_TIMEOUT_CEILING_MS 参照）
+    if (ms > TOOL_TIMEOUT_CEILING_MS) {
+      throw new Error(`BUYER_TOOL_TIMEOUT_MS=${timeout} は天井（${TOOL_TIMEOUT_CEILING_MS} ms）を超えています`);
     }
   }
 

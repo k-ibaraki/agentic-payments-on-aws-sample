@@ -1,5 +1,5 @@
 /**
- * Blocks の Lambda に渡す CORS_ALLOWED_ORIGINS を決める（決定33）。
+ * Blocks の CORS の許可オリジン（defaults.allowedOrigins に足す正規表現）を決める（決定33・72）。
  *
  * 各項目は ^…$ で括った正規表現として評価される（@aws-blocks/core README「CORS Configuration」）。
  * Amplify Hosting のブランチ URL は https://<branch>.<appId>.amplifyapp.com で、ブランチ名は

@@ -33,7 +33,7 @@ describe('runtimeEnvironment', () => {
     );
   });
 
-  it('BUYER_TOOL_TIMEOUT_MS が共有 Lambda のタイムアウト（900 秒）を超えると落とす', () => {
+  it('BUYER_TOOL_TIMEOUT_MS が天井（900 秒。もとは共有 Lambda のタイムアウト）を超えると落とす', () => {
     expect(() =>
       runtimeEnvironment({ ...FULL, BUYER_TOOL_TIMEOUT_MS: '900001' }, { requireAll: false }),
     ).toThrow(/BUYER_TOOL_TIMEOUT_MS/);
