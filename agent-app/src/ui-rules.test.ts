@@ -471,7 +471,7 @@ describe('previewExpandButton', () => {
   });
 });
 
-// ── 受信の切断と繋ぎ直しまわり（決定69・72） ──
+// ── 受信の切断と繋ぎ直しまわり（決定69・72・73） ──
 import { isReplyPending, toChannelDescriptor, trackTurnStreams, watchTurnEnd } from './ui-rules.js';
 
 describe('isReplyPending', () => {
