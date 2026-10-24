@@ -1,4 +1,4 @@
-// 合成時の環境変数から Lambda に写す実行時設定を決めるモジュールのテスト（決定34）
+// 合成時の環境変数から、設定に登録する実行時設定を決めるモジュールのテスト（決定34・72）
 import { describe, expect, it } from 'vitest';
 import { runtimeEnvironment } from './runtime-env.js';
 
@@ -33,7 +33,7 @@ describe('runtimeEnvironment', () => {
     );
   });
 
-  it('BUYER_TOOL_TIMEOUT_MS が共有 Lambda のタイムアウト（900 秒）を超えると落とす', () => {
+  it('BUYER_TOOL_TIMEOUT_MS が天井（900 秒。もとは共有 Lambda のタイムアウト）を超えると落とす', () => {
     expect(() =>
       runtimeEnvironment({ ...FULL, BUYER_TOOL_TIMEOUT_MS: '900001' }, { requireAll: false }),
     ).toThrow(/BUYER_TOOL_TIMEOUT_MS/);

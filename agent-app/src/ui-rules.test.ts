@@ -1,7 +1,8 @@
-// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69）。
+// 画面の振る舞いのうち DOM に依存しない規則を固定する（決定44・47・48・49・50・62・67・68・69・72・73）。
 // 新規会話の確認の要否、「内部情報」の折りたたみ状態、帯の表示と光らせる判定、失敗した購入の見出し、
 // 会話の中の購入カードの並び、購入履歴の表示中の行とプレビューのホストの置き場、購入カードの拡大ボタン、
-// 応答の受信が切れたときの立て直し
+// 受信の切断と繋ぎ直しまわり
+import { type AgentStreamChunk, createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import { describe, expect, it } from 'vitest';
 import { findLastAssistant, shouldConfirmNewConversation, readInternalsOpen, storeInternalsOpen } from './ui-rules.js';
 
@@ -470,162 +471,229 @@ describe('previewExpandButton', () => {
   });
 });
 
-// ── 応答の受信が切れたときの立て直し（決定69） ──
-import { isReplyFinished, planRecovery } from './ui-rules.js';
+// ── 受信の切断と繋ぎ直しまわり（決定69・72・73） ──
+import { isReplyPending, toChannelDescriptor, trackTurnStreams, watchTurnEnd } from './ui-rules.js';
 
-describe('planRecovery', () => {
-  const idle = { loading: false, awaitingApproval: false, awaitingRecoveredReply: false };
-
-  it('自分で購読を外したとき（client）は何もしない', () => {
-    expect(planRecovery('client', idle)).toBe('ignore');
-    expect(planRecovery('client', { loading: true, awaitingApproval: true, awaitingRecoveredReply: true })).toBe('ignore');
+describe('isReplyPending', () => {
+  // createChat の loadConversation は履歴を読むだけで購読しない。応答の途中で画面を読み込み直したら、
+  // エージェントがまだ動いているかを履歴から判断し、動いていれば観察用に購読して終わりを待つ
+  it('末尾が依頼なら、エージェントはまだ応答を作っている', () => {
+    expect(isReplyPending([{ role: 'assistant' }, { role: 'user' }], false)).toBe(true);
   });
 
-  it('待っている応答が無ければ、次の送信で購読し直させる（会話と吹き出しはそのまま）', () => {
-    for (const reason of ['timeout', 'error', 'unknown']) {
-      expect(planRecovery(reason, idle)).toBe('resubscribe-on-send');
-    }
+  it('末尾が承認への応答なら、承認の後の続きを作っている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'approval' }], false)).toBe(true);
   });
 
-  it('応答の途中で切れたら、その場で会話を読み直す（次の送信を待つと送信ボタンが戻らない）', () => {
-    expect(planRecovery('timeout', { ...idle, loading: true })).toBe('reload-now');
+  it('末尾が応答なら、待つものは無い（エージェントは応答を保存してから終わりを知らせる）', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'assistant' }], false)).toBe(false);
   });
 
-  it('承認待ちで切れたら、その場で会話を読み直す（承認への応答は購読し直さない）', () => {
-    expect(planRecovery('error', { ...idle, awaitingApproval: true })).toBe('reload-now');
+  it('承認待ちなら、エージェントは止まっている', () => {
+    expect(isReplyPending([{ role: 'user' }], true)).toBe(false);
   });
 
-  it('会話を読み直した後、エージェントの応答を待つ間に切れたら、その場でもう一度会話を読み直す（購読を外すだけだと、応答の終わりの知らせが届かず送信が戻らない）', () => {
-    expect(planRecovery('timeout', { ...idle, awaitingRecoveredReply: true })).toBe('reload-now');
-  });
-});
-
-describe('isReplyFinished', () => {
-  it('読み直した会話の末尾が応答なら、応答は終わっている（エージェントは応答を保存してから done を送る）', () => {
-    expect(isReplyFinished([{ role: 'user' }, { role: 'assistant' }])).toBe(true);
+  it('会話が空なら、待つものは無い', () => {
+    expect(isReplyPending([], false)).toBe(false);
   });
 
-  it('末尾が依頼か承認なら、エージェントはまだ動いている', () => {
-    expect(isReplyFinished([{ role: 'assistant' }, { role: 'user' }])).toBe(false);
-    expect(isReplyFinished([{ role: 'user' }, { role: 'approval' }])).toBe(false);
+  // 観察中の確かめ（checkFinished）はサーバーの生の履歴を読む。生の履歴にはツールの行と承認待ちの行も入る
+  it('生の履歴で末尾がツールの行なら、エージェントはまだ応答を作っている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }], false)).toBe(true);
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }, { role: 'tool-result' }], false)).toBe(true);
   });
 
-  it('会話が空なら、待つ応答は無い', () => {
-    expect(isReplyFinished([])).toBe(true);
+  it('生の履歴で末尾が承認待ちの行なら、エージェントは止まっている', () => {
+    expect(isReplyPending([{ role: 'user' }, { role: 'tool-call' }, { role: 'interrupt' }], false)).toBe(false);
   });
 });
 
-// ── 会話の読み直しを 1 本ずつ走らせる（決定69） ──
-import { createSingleFlight } from './ui-rules.js';
+describe('watchTurnEnd', () => {
+  // createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、done を流さずに応答中の印だけを
+  // 戻す。そのときの後始末を拾う。印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt（承認待ち）を
+  // 呼ぶので、判定を一拍おかないと、承認待ちを「応答が終わった」と取り違える
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const idle = { loading: false, timelineOpen: true, awaitingApproval: false };
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
+  function watch(state: typeof idle) {
+    let ended = 0;
+    const onLoadingEnded = watchTurnEnd(() => state, () => ended++);
+    return { ended: () => ended, onLoadingEnded };
+  }
 
-describe('createSingleFlight', () => {
-  it('走っている間の呼び出しは同じ結果を待ち、処理は 1 回だけ走る', async () => {
-    const gate = deferred<boolean>();
-    let calls = 0;
-    const flight = createSingleFlight(() => {
-      calls += 1;
-      return gate.promise;
+  it('印が戻った直後に承認待ちになったら、終わったとはみなさない', async () => {
+    const state = { ...idle };
+    const w = watch(state);
+    w.onLoadingEnded();
+    state.awaitingApproval = true;
+    await flush();
+    expect(w.ended()).toBe(0);
+  });
+
+  it('印が戻った直後にエラーで途中経過が閉じたら、終わったとはみなさない', async () => {
+    const state = { ...idle };
+    const w = watch(state);
+    w.onLoadingEnded();
+    state.timelineOpen = false;
+    await flush();
+    expect(w.ended()).toBe(0);
+  });
+
+  it('何も続かなければ、終わりの知らせを取りこぼしたとみなす', async () => {
+    const w = watch({ ...idle });
+    w.onLoadingEnded();
+    await flush();
+    expect(w.ended()).toBe(1);
+  });
+
+  it('一拍の間に次の応答が始まったら、何もしない', async () => {
+    const state = { ...idle };
+    const w = watch(state);
+    w.onLoadingEnded();
+    state.loading = true;
+    await flush();
+    expect(w.ended()).toBe(0);
+  });
+});
+
+describe('trackTurnStreams', () => {
+  // createChat は終わりのチャンクを受けずに終わった回（繋ぎ直し後の読み直し・安全弁・送信の失敗）の購読を外さない。
+  // 前の 2 つは、残ったまま次の回を始めると古い購読の後始末が新しい回の応答中の印を消すので、回ごとの購読を控えて
+  // 送る前に外す
+  function fakeStream(chunks: AgentStreamChunk[] = [], established: Promise<void> = Promise.resolve()) {
+    const stream = {
+      unsubscribed: 0,
+      established,
+      unsubscribe() {
+        stream.unsubscribed += 1;
+      },
+      async *[Symbol.asyncIterator]() {
+        yield* chunks;
+      },
+    };
+    return stream;
+  }
+  function fakeTransport() {
+    const streams: ReturnType<typeof fakeStream>[] = [];
+    return {
+      streams,
+      run: async () => ({ channelId: 'c' }),
+      subscribe: () => {
+        const s = fakeStream();
+        streams.push(s);
+        return s;
+      },
+    };
+  }
+
+  it('外されずに残った回の購読を外す', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c');
+    expect(await tracker.dropLeftover()).toBe(true);
+    expect(inner.streams[0].unsubscribed).toBe(1);
+  });
+
+  it('createChat が自分で外した回は、残っていない', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c').unsubscribe();
+    expect(await tracker.dropLeftover()).toBe(false);
+    expect(inner.streams[0].unsubscribed).toBe(1);
+  });
+
+  it('前の回の購読を後から外しても、次の回の控えは消えない', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    const first = tracker.transport.subscribe('c');
+    tracker.transport.subscribe('c');
+    first.unsubscribe();
+    expect(await tracker.dropLeftover()).toBe(true);
+    expect(inner.streams[1].unsubscribed).toBe(1);
+  });
+
+  it('観察用の購読は控えない（回の購読ではない）', async () => {
+    const inner = fakeTransport();
+    const tracker = trackTurnStreams(inner);
+    tracker.transport.subscribe('c', { observer: true });
+    expect(await tracker.dropLeftover()).toBe(false);
+    expect(inner.streams[0].unsubscribed).toBe(0);
+  });
+
+  it('控えた購読は、確立の待ちと中身をそのまま渡す', async () => {
+    const pending = new Promise<void>(() => {});
+    const inner = { run: async () => ({ channelId: 'c' }), subscribe: () => fakeStream([{ type: 'done' }], pending) };
+    const stream = trackTurnStreams(inner).transport.subscribe('c');
+    expect(stream.established).toBe(pending);
+    const chunks: AgentStreamChunk[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks).toEqual([{ type: 'done' }]);
+  });
+
+  // 本物の createChat で、直した不具合そのものを固定する。繋ぎ直した後の読み直しで回が終わる（購読が残る）→ 次を送る
+  it('繋ぎ直した後の読み直しで終わった回の後でも、次の回の応答中の印は消えない', async () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    let onReconnect: (() => void) | undefined;
+    const tracker = trackTurnStreams(
+      realtimeTransport({
+        subscribe: async (_channelId, sub) => {
+          if (typeof sub !== 'function') onReconnect = sub.onReconnect;
+          return { unsubscribe() {}, established: Promise.resolve() };
+        },
+        sendMessage: async () => {},
+        resume: async () => {},
+      }),
+    );
+    const chat = createChat({
+      transport: tracker.transport,
+      api: {
+        createConversation: async () => ({ conversationId: 'conv' }),
+        getConversation: async () => ({ messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: '済み' }] }),
+      },
+      onError: () => {},
     });
-    const a = flight.run();
-    const b = flight.run();
-    gate.resolve(true);
-    expect(await a).toBe(true);
-    expect(await b).toBe(true);
-    expect(calls).toBe(1);
-  });
+    await chat.sendMessage('a');
+    // 購読が切れて繋ぎ直したことにする（onDisconnect が来ないので安全弁は張られない）
+    onReconnect?.();
+    await flush();
+    expect(chat.isLoading()).toBe(false);
 
-  it('again を付けて呼ぶと、走っている処理の後にもう一度走らせる（古い履歴を読んだかもしれないとき）', async () => {
-    const gates = [deferred<boolean>(), deferred<boolean>()];
-    let calls = 0;
-    const flight = createSingleFlight(() => gates[calls++].promise);
-    const a = flight.run();
-    void flight.run({ again: true });
-    gates[0].resolve(true);
-    await Promise.resolve();
-    gates[1].resolve(true);
-    expect(await a).toBe(true);
-    expect(calls).toBe(2);
+    expect(await tracker.dropLeftover()).toBe(true);
+    await chat.sendMessage('b');
+    await flush();
+    expect(chat.isLoading()).toBe(true);
+    chat.destroy();
   });
+});
 
-  it('失敗したら、again があってももう一度は走らせない（やり直しは接続が戻ったときに任せる）', async () => {
-    let calls = 0;
-    const flight = createSingleFlight(async () => {
-      calls += 1;
-      return false;
+describe('toChannelDescriptor', () => {
+  // サーバーは識別子を外した生の記述を返す（付いたままだと、応答の途中で購読できるチャンネルに
+  // 組み立て直されてしまう）。繋ぎ直しのトークンの取り直し（refresh）は生の記述を求めるので付け直す
+  it('サーバーが返した生の記述に Realtime のチャンネルの識別子を付け直す', () => {
+    expect(toChannelDescriptor({ channel: 'c-1', token: 't' })).toEqual({
+      __blocks: 'realtime/channel',
+      channel: 'c-1',
+      token: 't',
     });
-    const a = flight.run();
-    void flight.run({ again: true });
-    expect(await a).toBe(false);
-    expect(calls).toBe(1);
+  });
+});
+
+import { isStaleReply } from './ui-rules.js';
+
+describe('isStaleReply', () => {
+  // 応答を保存しないまま止まった会話（Runtime の強制終了など）は、末尾が依頼のまま残る。読み込み直すたびに
+  // 観察で送信を止めないよう、最後の記録から待つ天井を過ぎていたら、もう応答は来ないとみなす
+  const limit = 16 * 60 * 1000;
+
+  it('最後の記録から天井を過ぎていたら、もう応答は来ない', () => {
+    expect(isStaleReply(1_000, 1_000 + limit, limit)).toBe(true);
   });
 
-  it('終わった後の呼び出しは新しく走らせる', async () => {
-    let calls = 0;
-    const flight = createSingleFlight(async () => {
-      calls += 1;
-      return true;
-    });
-    await flight.run();
-    await flight.run();
-    expect(calls).toBe(2);
+  it('天井の内なら、まだ応答を作っているかもしれない', () => {
+    expect(isStaleReply(1_000, 1_000 + limit - 1, limit)).toBe(false);
   });
 
-  it('reset の後に始めた処理は、捨てた処理が後から終わっても 1 本として扱う', async () => {
-    const gates = [deferred<boolean>(), deferred<boolean>()];
-    let calls = 0;
-    const flight = createSingleFlight(() => gates[calls++].promise);
-    const old = flight.run({ again: true });
-    flight.reset();
-    const fresh = flight.run();
-    gates[0].resolve(true);
-    await old;
-    // 捨てた処理が終わっても、走っている新しい処理に相乗りする（二重に走らせない）
-    const joined = flight.run();
-    gates[1].resolve(true);
-    expect(await fresh).toBe(true);
-    expect(await joined).toBe(true);
-    expect(calls).toBe(2);
-  });
-
-  it('reset の前に付けた again は、新しく始めた処理に持ち越さない', async () => {
-    const gates = [deferred<boolean>(), deferred<boolean>(), deferred<boolean>()];
-    let calls = 0;
-    const flight = createSingleFlight(() => gates[calls++].promise);
-    const old = flight.run();
-    void flight.run({ again: true });
-    flight.reset();
-    const fresh = flight.run();
-    gates[0].resolve(true);
-    gates[1].resolve(true);
-    await old;
-    expect(await fresh).toBe(true);
-    expect(calls).toBe(2);
-  });
-
-  it('捨てた処理は、新しい処理に付いた again を横取りしてもう一度走ったりしない', async () => {
-    const gates = [deferred<boolean>(), deferred<boolean>(), deferred<boolean>()];
-    let calls = 0;
-    const flight = createSingleFlight(() => gates[calls++].promise);
-    const old = flight.run();
-    flight.reset();
-    const fresh = flight.run();
-    void flight.run({ again: true });
-    let settled = false;
-    void fresh.then(() => (settled = true));
-    gates[0].resolve(true);
-    await old;
-    gates[1].resolve(true);
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-    // 新しい処理が自分の again でもう一度走っている（捨てた処理が again を使い切っていない）
-    expect(settled).toBe(false);
-    expect(calls).toBe(3);
-    gates[2].resolve(true);
-    expect(await fresh).toBe(true);
+  it('記録の時刻が分からなければ、待つ側に倒す', () => {
+    expect(isStaleReply(undefined, 1_000 + limit, limit)).toBe(false);
   });
 });

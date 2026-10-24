@@ -8,6 +8,7 @@ import {
   sellerInfoFromEnv,
   walletStatus,
 } from './buyer-agent.js';
+import { rawChannelDescriptor } from './channel-descriptor.js';
 import { assertOwnedConversation } from './conversation-guard.js';
 import { assertPendingInterrupts } from './interrupt-guard.js';
 import { extractPurchases, purchaseHistory } from './purchases.js';
@@ -143,6 +144,20 @@ export const buyer = new ApiNamespace(scope, 'buyer', (context) => ({
     const user = await auth.requireAuth(context);
     await requireOwnedConversation(user.userSub, conversationId);
     return purchaseProgress.getChannel('steps', conversationId);
+  },
+
+  // 繋ぎ直しのときにトークンを取り直すための、チャンネルの生の記述（決定72。createChat の refresh）。
+  // 中身は接続と購読のトークンそのものなので、getChannel / getProgressChannel と同じ所有検証を通す
+  async getChannelDescriptor(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    await requireOwnedConversation(user.userSub, conversationId);
+    return rawChannelDescriptor(await buyerAgent.getChannel(conversationId));
+  },
+
+  async getProgressChannelDescriptor(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    await requireOwnedConversation(user.userSub, conversationId);
+    return rawChannelDescriptor(await purchaseProgress.getChannel('steps', conversationId));
   },
 
   // 会話中の購入一覧（決定29）。tool-result チャンクは toolName しか運ばないため、

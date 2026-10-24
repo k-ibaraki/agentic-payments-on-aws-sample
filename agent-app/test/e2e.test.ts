@@ -125,6 +125,14 @@ test('サインインした利用者は会話を作り、依頼を送り、履�
   assert.ok(channel);
   // 途中経過（決定65）のチャンネルも所有者なら取れる
   assert.ok(await buyer.getProgressChannel(conversationA));
+  // 繋ぎ直しでトークンを取り直すための生の記述（決定72）。識別子は外して返す
+  for (const raw of [
+    await buyer.getChannelDescriptor(conversationA),
+    await buyer.getProgressChannelDescriptor(conversationA),
+  ]) {
+    assert.strictEqual(typeof raw.channel, 'string');
+    assert.ok(!('__blocks' in raw));
+  }
 
   // 存在しない購入物は null
   assert.strictEqual(await buyer.getPurchasedHtml('no-such-result'), null);
@@ -168,7 +176,7 @@ test('自分の 1 回の支払い上限を変えられる', async () => {
   assert.strictEqual((await buyer.getWalletStatus()).maxAmount.maxAmount, '200000');
 });
 
-test('他人の会話には発注・閲覧・購読・購入一覧・承認のいずれもできない', async () => {
+test('他人の会話には発注・閲覧・購読・トークンの取り直し・購入一覧・承認のいずれもできない', async () => {
   await signOut();
   await signUpAndSignIn(userB);
 
@@ -182,6 +190,9 @@ test('他人の会話には発注・閲覧・購読・購入一覧・承認の�
   await assert.rejects(buyer.getChannel(conversationA));
   // 途中経過（決定65）のチャンネルも同じ所有検証を通す
   await assert.rejects(buyer.getProgressChannel(conversationA));
+  // トークンを取り直す口（決定72）も、チャンネルを渡す口と同じ所有検証を通す
+  await assert.rejects(buyer.getChannelDescriptor(conversationA));
+  await assert.rejects(buyer.getProgressChannelDescriptor(conversationA));
   await assert.rejects(buyer.listPurchases(conversationA));
   // 再購入の承認（決定31）は実費に直結するため、読み取り系と同じく所有者に限る
   await assert.rejects(

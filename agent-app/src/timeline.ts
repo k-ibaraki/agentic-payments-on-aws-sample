@@ -22,15 +22,15 @@ export interface TimelineRow {
 export interface Timeline {
   rows: TimelineRow[];
   startedAt: number;
-  /** 依頼への応答が終わった時刻（done / error）か、受信が途中で切れて打ち切った時刻（決定69）。終わるまで null */
+  /** 依頼への応答が終わった時刻（done / error。知らせを受けずに閉じたときは closeTimeline が立てる）。終わるまで null */
   endedAt: number | null;
+  /** 承認待ち（interrupt）になった時刻。承認の後に動き出したら null に戻す */
+  awaitingApprovalSince: number | null;
   /** 支払いの証明を送ってから結果が返るまでの、待ち始めの時刻。待っていなければ null */
   waitingSince: number | null;
   /** 署名した額の表記（要約に出す） */
   paid: string | null;
   failed: boolean;
-  /** 画面への受信が途中で切れて打ち切ったか（決定69）。成否は分からないので failed とは分ける */
-  cut: boolean;
   /** 「返事を書いています」を出したか（text-delta ごとに行を足さない） */
   writing: boolean;
   /** 届いた購入の経過（購入 ID と通し番号。二重配信を捨てる） */
@@ -110,10 +110,10 @@ export function startTimeline(now: number): Timeline {
     rows: [{ actor: 'agent', text: 'エージェントに依頼を送りました', term: 'AWS Blocks の Agent' }],
     startedAt: now,
     endedAt: null,
+    awaitingApprovalSince: null,
     waitingSince: null,
     paid: null,
     failed: false,
-    cut: false,
     writing: false,
     seen: new Set(),
     progressRows: [],
@@ -130,6 +130,8 @@ export function applyChunk(
   chunk: Pick<AgentStreamChunk, 'type'> & Partial<AgentStreamChunk>,
   now: number,
 ) {
+  // 承認の後に動き出したら、承認待ちの時刻は忘れる（閉じるときの終わりの時刻に使わない）
+  if (chunk.type !== 'interrupt') timeline.awaitingApprovalSince = null;
   switch (chunk.type) {
     case 'tool-call':
       timeline.rows.push(
@@ -147,6 +149,7 @@ export function applyChunk(
       return;
     case 'interrupt':
       stopWaiting(timeline);
+      timeline.awaitingApprovalSince = now;
       timeline.rows.push({ actor: 'agent', text: '支払いを続けるかどうか、あなたの確認を待っています' });
       return;
     case 'error':
@@ -165,20 +168,15 @@ export function applyChunk(
 }
 
 /**
- * 画面への受信が途中で切れた（決定69）。以後のチャンクと経過は届かないので、そう書いて打ち切る。
- * エージェントは動き続けている見込みが高く、成否は分からないため失敗の印は付けない
+ * 経過を閉じる。終わりの知らせ（done / error）を受けずに閉じるとき（承認待ちのまま次の依頼を送った・会話を捨てた。
+ * 承認を待つ間も依頼は送れる）に終わりの時刻を立てる。interrupt は終わりの時刻を立てないので、立てないと見出しが
+ * 「進行中・N 秒」のまま止まって残る。承認待ちのまま閉じるなら、承認待ちになった時刻を終わりにする
+ * （人が待たせた時間を所要に入れない）。既に終わっていれば何もしない
  */
-export function applyDisconnect(timeline: Timeline, now: number) {
-  // 切れる前に終わっていた経過は、そのまま残す（切れたのは次の依頼を待つ間）
+export function closeTimeline(timeline: Timeline, now: number) {
   if (timeline.endedAt !== null) return;
-  timeline.rows.push({
-    actor: 'agent',
-    text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',
-    term: 'Realtime（WebSocket）',
-  });
-  timeline.cut = true;
   stopWaiting(timeline);
-  timeline.endedAt = now;
+  timeline.endedAt = timeline.awaitingApprovalSince ?? now;
 }
 
 /**
@@ -219,16 +217,12 @@ export function waitingLabel(timeline: Timeline, now: number): string | null {
   return `売り手の応答を待っています… ${Math.floor((now - timeline.waitingSince) / 1000)} 秒`;
 }
 
-/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額。受信が途中で切れたら所要の代わりにそう言う（決定69） */
+/** 折りたたみの見出し。進行中は経過秒、終われば件数・所要・支払額 */
 export function timelineSummary(timeline: Timeline, now: number): string {
   if (timeline.endedAt === null) {
     return `途中経過（進行中・${Math.floor((now - timeline.startedAt) / 1000)} 秒）`;
   }
-  const parts = [
-    `${timeline.rows.length} 件`,
-    // 切れた時点までの秒数は所要ではないので出さない
-    timeline.cut ? '受信が途中で切れました' : `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`,
-  ];
+  const parts = [`${timeline.rows.length} 件`, `所要 ${Math.round((timeline.endedAt - timeline.startedAt) / 1000)} 秒`];
   if (timeline.paid) parts.push(`支払い ${timeline.paid}`);
   if (timeline.failed) parts.push('失敗あり');
   return `途中経過（${parts.join('・')}）`;

@@ -37,7 +37,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
 - AWS Blocks は Infrastructure from Code のフレームワーク。`aws-blocks/` に書いた Block の宣言から
   AWS CDK の構成を生成するので、AWS へ載せるときは中身が CDK になる（deploy の経路は下記「クラウド deploy」）
 - 使用ブロック（確定）: Agent / AuthCognito / KVStore / ApiNamespace / Realtime の5つ。
-  Realtime は Agent ブロック内蔵の分をブラウザから `useChat`（`@aws-blocks/bb-agent/client`）で購読する。
+  エージェントの会話ループ（LLM 呼び出し・MCP ツール呼び出し・x402 の署名）は、Agent ブロックが作る
+  Bedrock AgentCore Runtime の中で動く。API を受ける共有 Lambda は、依頼を受けると Runtime を呼び出すだけになる
+  （手元の `npm run dev` では同じプロセスで動く）。AWS Blocks は 0.8 系に固定している（版を上げると構成が変わることがあるため）。
+  Realtime は Agent ブロック内蔵の分をブラウザから `createChat`（`@aws-blocks/bb-agent/client`）で購読する。
   これとは別に、購入の途中経過を運ぶ Realtime（`progress`）を 1 つ持つ（WebSocket API は共有）。
   共有の接続表とトークンの秘密値は、最初に作られた `progress` の配下に置かれる。作る順を deploy 後に変えると、
   接続表とトークンの秘密値が作り直されるので変えない
@@ -58,11 +61,14 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   進行中は開き、終われば閉じて要約だけを残す。その場限りで、読み込み直すと消える。規則は `src/timeline.ts`、
   購入の経過の形と送信処理は `aws-blocks/progress.ts`
 - 応答と途中経過を受ける WebSocket（API Gateway）は、接続から 2 時間で必ず切られる。放置したタブでは、
-  ブラウザがタイマーを間引くため生存確認が遅れ、10 分の無通信で切られることもある。AWS Blocks のクラウド用の購読は
-  切れても繋ぎ直さないので、画面の側で切断を拾って購読し直す。待っている応答が無ければ、次に送るときに購読し直す
-  （画面はそのまま）。応答の途中か承認待ちで切れたら、その場で会話を読み直す。このとき、その回の途中経過は
-  「受信が途中で切れた」で打ち切られ、会話の中の購入カードは会話の末尾へ移る（画面を読み込み直したときと同じ）。
-  判断の規則は `src/ui-rules.ts`
+  ブラウザがタイマーを間引くため生存確認が遅れ、10 分の無通信で切られることもある。`createChat` は依頼のたびに
+  購読し直し、応答が終わると購読を外すので、応答を待っていない間は WebSocket を張らず、放置しても切れた購読に
+  送ることは無い（ただし、終わりの知らせを受けずに終わった回の購読は、次に送る直前まで残る）。
+  応答の途中で切れたときの繋ぎ直しと、繋ぎ直した後の会話の読み直しも `createChat` に任せる。
+  繋ぎ直すときは、期限の切れたトークンを使い回さないよう、サーバーから取り直す（`getChannelDescriptor` /
+  `getProgressChannelDescriptor`。チャンネルを渡す API と同じ所有検証を通す）。`createChat` の `loadConversation` は
+  履歴を読むだけで購読しないので、応答の途中で画面を読み込み直したときは、観察用に購読して終わりを待ち、
+  届いたら会話を読み直す（待つ間は送信を止める）。判断の規則は `src/ui-rules.ts`
 - 支払額は購入 1 件ごとに見せる。売り手の価格は依頼の規模で変わるため、
   購入カード・購入履歴の行・エージェントの報告に「いくら払ったか」を添える。表記は `$0.15（150000）`の形で、
   ドル表記に最小単位を併記する。桁数を知らない資産では最小単位だけを出す（`aws-blocks/payments/amount.ts`）
@@ -121,8 +127,10 @@ PAYMENT_MANAGER_ARN=... PAYMENT_INSTRUMENT_ID=... BILLING_MCP_URL=http://localho
   `--once` を外すとファイル監視で再 deploy し続ける。`npm run amplify:sandbox:delete` で削除
 - `npm run build:amplify` — Amplify Hosting 用のフロントのビルド（`client.js` 生成 → `tsc` + `vite build` →
   `amplify_outputs.json` から `dist/.blocks-sandbox/config.json`）。`amplify.yml` が呼ぶ
-- sandbox の API にローカルのフロントを繋ぐ:
-  `BLOCKS_API_URL=$(node -p "require('./amplify_outputs.json').custom.blocks_api_url") npm run dev`
+- sandbox の API にローカルのフロントを繋ぐ: `npm run build:amplify && npx vite preview --port 4173` で、
+  Amplify Hosting と同じ組み立ての画面を配信する（API と Realtime の WebSocket に直接つなぐ）。
+  `BLOCKS_API_URL=… npm run dev` での中継は使えない。手元のサーバーが起動時に画面のクライアントを
+  ローカル用に作り直し、Realtime がクラウドの WebSocket に接続用のトークンを付けずに繋ぐため、403 で弾かれて応答が届かない
 
 ## クラウド deploy（Amplify Gen2）
 
@@ -145,10 +153,10 @@ AWS Blocks が生成するのは CDK の構成なので、AWS へ載せる作業
 ### ネットワークと命名
 
 - フロント（Amplify Hosting）と API（API Gateway）は別オリジン。ブラウザは `/.blocks-sandbox/config.json` の
-  `apiUrl` で API の絶対 URL を知る。Lambda には `CORS_ALLOWED_ORIGINS`（`amplify/cors-origins.ts` が
-  `AWS_APP_ID` から導く。独自ドメインは Amplify の環境変数 `CORS_ALLOWED_ORIGINS` で上書き。
-  Amplify Hosting 以外から `ampx pipeline-deploy` する場合はどちらかを環境変数で渡さないと合成で落ちる）と
-  `BLOCKS_CROSS_DOMAIN=true`（Cookie を `SameSite=None; Secure; Partitioned` に）を渡す
+  `apiUrl` で API の絶対 URL を知る。CORS の許可オリジン（`amplify/cors-origins.ts` が `AWS_APP_ID` から導く。
+  独自ドメインは Amplify の環境変数 `CORS_ALLOWED_ORIGINS` で上書き。Amplify Hosting 以外から `ampx pipeline-deploy`
+  する場合はどちらかを環境変数で渡さないと合成で落ちる）は、BlocksBackend の既定値 `allowedOrigins` に足して渡す。
+  `BLOCKS_CROSS_DOMAIN=true`（Cookie を `SameSite=None; Secure; Partitioned` に）は設定として登録する（`registerConfig`）
 - Amplify Hosting のビルド設定はリポジトリ直下の `amplify.yml`（モノレポなので `appRoot: agent-app`）。
   Amplify コンソールでアプリを作るときは GitHub 連携でモノレポの `agent-app` を選び、
   バックエンド deploy 用のサービスロール（`AmplifyBackendDeployFullAccess`）を付ける
@@ -164,8 +172,10 @@ AWS Blocks が生成するのは CDK の構成なので、AWS へ載せる作業
 - 実決済に要る実行時設定（下記「環境変数」の `PAYMENT_*` など）は、合成時の環境変数
   （Amplify 経路はコンソールのアプリまたはブランチの環境変数、`cdk deploy` 経路はシェルと `.env.production`、sandbox はシェル）から
   `aws-blocks/runtime-env.ts` の許可リストで拾い、
-  共有 Lambda の環境変数に写す（AppSetting 化はしない）。AgentCore Payments の IAM も同じ場所で共有 Lambda のロールに付ける。
-  写す処理は `aws-blocks/runtime.cdk.ts` の `wireRuntime` にまとめてあり、Amplify 経路（`amplify/blocks.ts`）と
+  `registerConfig` で設定として登録する（AppSetting 化はしない）。登録した値は S3 の設定 JSON（平文。値は識別子と URL だけ）に入り、
+  共有 Lambda も AgentCore Runtime も起動時に環境変数へ読み込む。Lambda の環境変数に直接載せると、支払いを行う Runtime には
+  届かない。AgentCore Payments の IAM も同じ場所で、共有 Lambda と Runtime が使う共有ロールに付ける。
+  登録する処理は `aws-blocks/runtime.cdk.ts` の `wireRuntime` にまとめてあり、Amplify 経路（`amplify/blocks.ts`）と
   `cdk deploy` 経路（`aws-blocks/index.cdk.ts`）の両方が呼ぶ。deploy のときは
   `PAYMENT_MANAGER_ARN` / `PAYMENT_INSTRUMENT_ID` / `BILLING_MCP_URL` が無いと合成で落ちる。sandbox と、
   deploy を伴わない合成（`npm run destroy` / `cdk diff`）では欠けても通る——値が手元に無いと

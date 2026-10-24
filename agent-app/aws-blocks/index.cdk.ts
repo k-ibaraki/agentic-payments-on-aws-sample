@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getStackName } from '@aws-blocks/blocks/scripts';
@@ -23,7 +23,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 if (sandboxMode) {
   // Tell the runtime that cookies need cross-domain attributes (frontend on
   // localhost, API on API Gateway — different registrable domains).
-  blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');}
+  registerConfig(blocksStack, 'BLOCKS_SANDBOX', 'true');}
 
 // 実決済の実行時設定（PAYMENT_* など）と AgentCore Payments の IAM（決定34）。
 // Amplify 経路（amplify/blocks.ts）と同じものを載せる。
@@ -33,7 +33,7 @@ if (sandboxMode) {
 // 起動するので、sandbox 以外なら常に落とす作りだと「値が手元に無いとスタックを畳めない」状態に
 // なる（cdk diff / synth も同じ）。deploy の意思は scripts/deploy.ts が BUYER_CDK_DEPLOY で伝える
 const requireAll = !sandboxMode && process.env.BUYER_CDK_DEPLOY === 'true';
-wireRuntime(blocksStack.handler, process.env, { requireAll });
+wireRuntime(blocksStack, process.env, { requireAll });
 
 // Add static site hosting only when deploying (not in sandbox mode)
 if (!sandboxMode) {

@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyChunk,
-  applyDisconnect,
   applyProgress,
+  closeTimeline,
   describeStep,
   startTimeline,
   timelineSummary,
@@ -178,35 +178,35 @@ describe('依頼 1 回の経過', () => {
     expect(timelineSummary(t, 2000)).toBe('途中経過（2 件・所要 2 秒・失敗あり）');
   });
 
-  it('受信が途中で切れたら、そう書いて打ち切る（成否は分からないので失敗とは言わない）', () => {
-    const t = startTimeline(0);
-    applyProgress(t, progress(1, { step: 'paid', amount: '100000', asset: USDC }), 1000);
-    applyDisconnect(t, 5000);
-    expect(t.rows.at(-1)).toEqual({
-      actor: 'agent',
-      text: '画面への受信が途中で切れたため、ここから先の経過は出せません。応答は会話を読み直して表示します',
-      term: 'Realtime（WebSocket）',
-    });
-    expect(t.failed).toBe(false);
-    expect(waitingLabel(t, 9000)).toBeNull();
-    expect(timelineSummary(t, 9000)).toBe('途中経過（3 件・受信が途中で切れました・支払い 0.1 USDC）');
-  });
-
-  it('承認待ちで切れても打ち切る（interrupt では経過は終わっていない）', () => {
+  // 承認待ちのまま閉じる（次の依頼を送った・会話を捨てた）。interrupt は終わりの時刻を立てないので、閉じた時点で立てる。
+  // 立てないと、見出しが「進行中・N 秒」のまま止まって残る
+  // 人が承認を待たせた時間は所要に入れない（10 分放置すると「所要 620 秒」のように見えてしまう）
+  it('承認待ちのまま閉じると、承認待ちになった時刻で終わりにする', () => {
     const t = startTimeline(0);
     applyChunk(t, { type: 'interrupt' }, 1000);
-    applyDisconnect(t, 5000);
-    expect(t.cut).toBe(true);
-    expect(timelineSummary(t, 9000)).toBe('途中経過（3 件・受信が途中で切れました）');
+    closeTimeline(t, 600000);
+    expect(t.endedAt).toBe(1000);
+    expect(timelineSummary(t, 900000)).toBe('途中経過（2 件・所要 1 秒）');
   });
 
-  it('終わった経過には何も足さない（切れる前に done が届いていた）', () => {
+  it('承認の後に動き出してから閉じたら、閉じた時刻で終わりにする', () => {
+    const t = startTimeline(0);
+    applyChunk(t, { type: 'interrupt' }, 1000);
+    applyChunk(t, { type: 'tool-call', toolName: 'generateHtml' }, 2000);
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(5000);
+  });
+
+  it('終わりの知らせを受けずに閉じると、閉じた時刻で終わりにする', () => {
+    const t = startTimeline(0);
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(5000);
+  });
+
+  it('終わった経過を閉じても、終わりの時刻は変えない', () => {
     const t = startTimeline(0);
     applyChunk(t, { type: 'done' }, 3000);
-    const rows = [...t.rows];
-    applyDisconnect(t, 5000);
-    expect(t.rows).toEqual(rows);
-    expect(t.cut).toBe(false);
-    expect(timelineSummary(t, 9000)).toBe('途中経過（1 件・所要 3 秒）');
+    closeTimeline(t, 5000);
+    expect(t.endedAt).toBe(3000);
   });
 });

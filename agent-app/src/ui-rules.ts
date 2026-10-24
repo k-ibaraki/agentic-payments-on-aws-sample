@@ -1,4 +1,5 @@
-// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69）。index.ts から呼び、テストはここで固定する
+// 画面の振る舞いのうち DOM に依存しない規則（決定44・47・48・49・50・62・67・68・69・72・73）。index.ts から呼び、テストはここで固定する
+import type { ChatChannelDescriptor, ChatTransport, ChunkStream } from '@aws-blocks/bb-agent/client';
 import { PURCHASE_TOOL_NAME } from '../aws-blocks/purchases.js';
 
 /** 新規会話は会話をブラウザから捨てる操作。吹き出しが 1 つでもあれば確認を挟む */
@@ -278,75 +279,92 @@ export function previewExpandButton(expanded: boolean): { label: string; title: 
     : { label: '拡大', title: '画面いっぱいに広げる' };
 }
 
-// ── 応答の受信が切れたときの立て直し（決定69） ──
-// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。接続は 2 時間で必ず切られ、放置したタブでは
-// 生存確認（9 分ごと）が遅れて 10 分の無通信でも切られ得る。クラウド用の購読は繋ぎ直さず、useChat も
-// 購読済みのまま送信するので、画面の側で切断を拾って購読し直す
-
-export type SubscriptionRecovery = 'ignore' | 'resubscribe-on-send' | 'reload-now';
-
-/**
- * 切断の知らせ（`onDisconnect` の理由）から立て直し方を決める。
- * - client: 自分で購読を外した（会話の作り直しや読み直し）ので何もしない
- * - 待っている応答が無ければ、購読だけ外して次の送信で useChat に購読し直させる。会話と吹き出しは残る
- * - 応答の途中か承認待ちなら、その場で会話を読み直す。useChat は応答中の印（loading）を戻さず
- *   次の送信を黙って捨てるうえ、承認への応答では購読し直さないため
- * - 読み直した後でエージェントの応答を待っている間（awaitingRecoveredReply）も、その場で読み直す。
- *   読み直したフックは loading を持たないが、送信は応答の終わりの知らせが来るまで止めている。
- *   購読を外すだけにすると、その知らせが届かなくなり送信が戻らない
- */
-export function planRecovery(
-  reason: string,
-  state: { loading: boolean; awaitingApproval: boolean; awaitingRecoveredReply: boolean },
-): SubscriptionRecovery {
-  if (reason === 'client') return 'ignore';
-  return state.loading || state.awaitingApproval || state.awaitingRecoveredReply ? 'reload-now' : 'resubscribe-on-send';
-}
+// ── 受信の切断と繋ぎ直しまわり（決定69・72・73） ──
+// 応答と途中経過は 1 本の WebSocket（API Gateway）で受ける。createChat は依頼のたびに購読し直し、応答が終わると
+// 購読を外す（終わりの知らせを受けずに終わった回の購読だけは、次に送る直前まで残る。trackTurnStreams 参照）ので、
+// 待っていない間に切れても次の依頼は新しい接続で受けられる。応答の途中で切れたときの繋ぎ直しと
+// 繋ぎ直した後の会話の読み直しは createChat に任せ、ここには画面の側で要る規則だけを置く
 
 /**
- * 読み直した会話で、応答が終わっているか。エージェントは応答を保存してから done を送るので、
- * 末尾が応答なら終わっている（受信が切れている間に done を取りこぼしていても分かる）
+ * 会話で、エージェントがまだ応答を作っているか。createChat の loadConversation は履歴を読むだけで購読しないので、
+ * 作っている最中なら観察用に購読して終わりを待つ。末尾が応答なら終わっている（エージェントは応答を保存してから
+ * 終わりを知らせる）。承認待ちなら止まっている。履歴は 2 通りの形で来る。loadConversation の後の履歴（依頼・応答・
+ * 承認への応答だけ。承認待ちは awaitingApproval で伝える）と、サーバーの生の履歴（ツールの行と承認待ちの行も入る）
  */
-export function isReplyFinished(messages: ReadonlyArray<{ role: string }>): boolean {
+export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaitingApproval: boolean): boolean {
+  if (awaitingApproval) return false;
   const last = messages[messages.length - 1];
-  return !last || last.role === 'assistant';
+  return last !== undefined && last.role !== 'assistant' && last.role !== 'interrupt';
 }
 
 /**
- * 1 本ずつしか走らせない非同期の処理（決定69 の会話の読み直し）。走っている間の呼び出しは同じ結果を待つ。
- * - again を付けた呼び出しは、走っている処理が成功した後にもう一度走らせる。読み直しの最中に応答が終わると、
- *   その読み直しは応答を保存する前の履歴を読んだかもしれないため
- * - reset は走っている処理を忘れる（会話を捨てたとき）。捨てた処理が後から終わっても、その後に始めた処理の
- *   印は消さず、もう一度走ることもしない
+ * 応答待ちに見える会話が、もう応答の来ないものか。エージェントは失敗しても応答の行を保存するが、Runtime の強制終了
+ * などでは何も残らず、末尾が依頼のままになる。最後の記録（ツールの行も含む生の履歴の末尾）から観察の天井を過ぎて
+ * いたら待たない。時刻が分からなければ待つ側に倒す（観察は天井で打ち切られる）
  */
-export function createSingleFlight(task: () => Promise<boolean>) {
-  let running: Promise<boolean> | null = null;
-  let again = false;
-  // 今の処理の番号。reset と新しい処理のたびに進め、捨てた処理が自分の番かどうかを見分ける
-  let flight = 0;
+export function isStaleReply(lastRecordAt: number | undefined, now: number, limitMs: number): boolean {
+  return lastRecordAt !== undefined && now - lastRecordAt >= limitMs;
+}
+
+/**
+ * 終わりの知らせ（done / error）を受けないまま応答が終わったときの後始末を、createChat の onLoadingChange(false) から
+ * 呼ぶ関数を作る。createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを
+ * 差し替えて応答中の印（loading）を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の
+ * 取り直し・残高の監視を止める）は done を受けて走るので、印が戻ったのに途中経過が開いたままなら、ここで拾う。
+ * 判定は一拍おいてから行う。createChat は印を戻した直後に同じ流れで onError（送信の失敗）や onInterrupt
+ * （承認待ち。経過はまだ終わっていない）を呼び、それらが途中経過を閉じたり承認の欄を出したりした後で見るため
+ */
+export function watchTurnEnd(
+  read: () => { loading: boolean; timelineOpen: boolean; awaitingApproval: boolean },
+  onMissedEnd: () => void,
+): () => void {
+  return () => {
+    setTimeout(() => {
+      const state = read();
+      if (!state.loading && state.timelineOpen && !state.awaitingApproval) onMissedEnd();
+    }, 0);
+  };
+}
+
+/**
+ * createChat に渡す transport を包み、回ごとの購読を控える。createChat は終わりのチャンク（done / error / interrupt）で
+ * 終わった回の購読は自分で外すが、受けずに終わった回の購読は外さずに残す（上流の不具合）。繋ぎ直し後の読み直しと
+ * 安全弁で終わった回は、残ったまま次の回を始めると、その購読の消費ループの後始末が新しい回の応答中の印を消す。
+ * 送信の失敗で終わった回は消費ループが無いので印は消さないが、接続が残る。どちらも次の回を始める前に dropLeftover で
+ * 外す。観察用の購読（observer）は回の購読ではないので控えない。上流が直れば常に何も残らない
+ * @returns dropLeftover は、残っていた購読を外したら true。外したときは、上流の後始末（マイクロタスクで走る）が
+ *   済むよう一拍待ってから返すので、返った後に次の回を始めてよい
+ */
+export function trackTurnStreams(inner: ChatTransport): { transport: ChatTransport; dropLeftover(): Promise<boolean> } {
+  let live: ChunkStream | null = null;
   return {
-    run(options: { again?: boolean } = {}): Promise<boolean> {
-      if (running) {
-        if (options.again) again = true;
-        return running;
-      }
-      const id = ++flight;
-      running = (async () => {
-        let ok: boolean;
-        do {
-          again = false;
-          ok = await task();
-        } while (ok && again && flight === id);
-        return ok;
-      })().finally(() => {
-        if (flight === id) running = null;
-      });
-      return running;
+    transport: {
+      run: (turn) => inner.run(turn),
+      subscribe(channelId, opts) {
+        const stream = inner.subscribe(channelId, opts);
+        if (opts?.observer) return stream;
+        const tracked: ChunkStream = {
+          established: stream.established,
+          [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+          unsubscribe() {
+            if (live === tracked) live = null;
+            stream.unsubscribe();
+          },
+        };
+        live = tracked;
+        return tracked;
+      },
     },
-    reset() {
-      flight += 1;
-      running = null;
-      again = false;
+    async dropLeftover() {
+      if (!live) return false;
+      live.unsubscribe();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return true;
     },
   };
+}
+
+/** サーバーが識別子を外して返したチャンネルの記述に、付け直す（createChat の refresh が求める形） */
+export function toChannelDescriptor(raw: { channel: string; [key: string]: unknown }): ChatChannelDescriptor {
+  return { ...raw, __blocks: 'realtime/channel' };
 }

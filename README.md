@@ -41,6 +41,7 @@ AWS 上にこの一連の流れを組んだサンプルです。
 | MCP / MCP Apps | Model Context Protocol は、エージェントにツールを使わせるための規格。MCP Apps はその拡張で、ツールに画面（HTML UI）を添えて配布できる |
 | AgentCore Payments | Amazon Bedrock AgentCore のマネージドウォレット。エージェントに代わって支払いへ署名する。人は最初に一度、署名権限を委ねるだけでよい |
 | AWS Blocks | インフラをコードで定義するフレームワーク。買い手のアプリはこれを使って書いている |
+| AgentCore Runtime | Amazon Bedrock AgentCore のエージェント実行環境。買い手エージェントの会話ループ（LLM・ツール呼び出し・支払いの署名）はここで動く。この実行環境は AWS Blocks の Agent ブロックが自動で作る |
 | Amplify Gen2 | 買い手アプリをクラウドにデプロイする仕組み。AWS Blocks のスタックをネストして載せ、フロントは Amplify Hosting が配信する。git push でデプロイできる |
 | AWS CDK | 売り手のインフラをコードで定義する。TypeScript で書いたスタックを合成してデプロイする |
 | Lambda Function URL | 売り手の MCP サーバーの置き場。認証は付けず、x402 の支払いだけが認可を担う |
