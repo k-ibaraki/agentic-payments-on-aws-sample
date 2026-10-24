@@ -298,6 +298,15 @@ export function isReplyPending(messages: ReadonlyArray<{ role: string }>, awaiti
 }
 
 /**
+ * 応答待ちに見える会話が、もう応答の来ないものか。エージェントは失敗しても応答の行を保存するが、Runtime の強制終了
+ * などでは何も残らず、末尾が依頼のままになる。最後の記録（ツールの行も含む生の履歴の末尾）から観察の天井を過ぎて
+ * いたら待たない。時刻が分からなければ待つ側に倒す（観察は天井で打ち切られる）
+ */
+export function isStaleReply(lastRecordAt: number | undefined, now: number, limitMs: number): boolean {
+  return lastRecordAt !== undefined && now - lastRecordAt >= limitMs;
+}
+
+/**
  * 終わりの知らせ（done / error）を受けないまま応答が終わったときの後始末を、createChat の onLoadingChange(false) から
  * 呼ぶ関数を作る。createChat は繋ぎ直した後に会話を読み直し、切れている間に応答が終わっていれば、吹き出しを
  * 差し替えて応答中の印（loading）を戻すだけで done を流さない。画面の後始末（途中経過を閉じる・購入一覧と残高の

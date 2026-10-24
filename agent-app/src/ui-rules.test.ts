@@ -677,3 +677,23 @@ describe('toChannelDescriptor', () => {
     });
   });
 });
+
+import { isStaleReply } from './ui-rules.js';
+
+describe('isStaleReply', () => {
+  // 応答を保存しないまま止まった会話（Runtime の強制終了など）は、末尾が依頼のまま残る。読み込み直すたびに
+  // 観察で送信を止めないよう、最後の記録から待つ天井を過ぎていたら、もう応答は来ないとみなす
+  const limit = 16 * 60 * 1000;
+
+  it('最後の記録から天井を過ぎていたら、もう応答は来ない', () => {
+    expect(isStaleReply(1_000, 1_000 + limit, limit)).toBe(true);
+  });
+
+  it('天井の内なら、まだ応答を作っているかもしれない', () => {
+    expect(isStaleReply(1_000, 1_000 + limit - 1, limit)).toBe(false);
+  });
+
+  it('記録の時刻が分からなければ、待つ側に倒す', () => {
+    expect(isStaleReply(undefined, 1_000 + limit, limit)).toBe(false);
+  });
+});

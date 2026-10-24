@@ -34,6 +34,7 @@ import {
   isPaidToolCall,
   isReplyPending,
   isSelectedPurchase,
+  isStaleReply,
   orderChatNodes,
   previewExpandButton,
   purchaseDetail,
@@ -449,6 +450,9 @@ function syncSendButton() {
   el<HTMLButtonElement>('chat-send-btn').disabled = isBusy();
 }
 
+// 最後に読んだ履歴の末尾の記録の時刻（getConversation で控える。isStaleReply 用）
+let lastRecordAt: number | undefined;
+
 // 会話を捨てる（新規会話・サインアウト・再開失敗）ときは、インスタンスごと作り直す
 // （destroy() の後は届いたチャンクを捨てる）
 function newChat() {
@@ -472,7 +476,12 @@ function newChat() {
     transport,
     api: {
       createConversation: () => buyer.createConversation(),
-      getConversation: (id) => buyer.getMessages(id),
+      // createChat は履歴の時刻を落とすので、読み込み直したときの判定（isStaleReply）用にここで控える
+      getConversation: async (id) => {
+        const history = await buyer.getMessages(id);
+        lastRecordAt = history.messages.at(-1)?.createdAt;
+        return history;
+      },
       getPendingInterrupts: (id) => buyer.getPendingInterrupts(id),
     },
     refresh: refreshChannel,
@@ -584,6 +593,9 @@ async function observeRunningReply(conversationId: string) {
       handle.stop();
     }, OBSERVE_SILENCE_MS);
   };
+  // 確立を待つ前から数える。確立前に checkFinished が購読を外すと established は解決しないので、ここで仕掛けないと
+  // 観察が終わらず送信が戻らない
+  arm();
   try {
     await stream.established;
   } catch (error) {
@@ -1356,7 +1368,13 @@ async function resumeLastConversation() {
   el('conversation-id').textContent = conversationId;
   appendEvent(`前回の会話 ${conversationId} を再開しました`);
   // 応答の途中で読み込み直したなら、続きを待つ（決定73）。待つ間は送信を止めるので、購入の読み込みより先に始める
-  if (isReplyPending(chat.getMessages(), hasPendingApproval())) void observeRunningReply(conversationId);
+  // 応答を残さず止まった会話で、読み込み直すたびに送信を止めないよう、古ければ待たない
+  if (
+    isReplyPending(chat.getMessages(), hasPendingApproval()) &&
+    !isStaleReply(lastRecordAt, Date.now(), OBSERVE_SILENCE_MS)
+  ) {
+    void observeRunningReply(conversationId);
+  }
   // 一覧の取得に失敗しても会話は捨てない（一時的な不調で履歴を見失わせない）。
   // 失敗は refreshPurchases が画面に出す。再開した会話のページは自動では描かない
   await refreshPurchases(false).catch(() => {});
