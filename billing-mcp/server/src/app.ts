@@ -34,7 +34,7 @@ export const MCP_PATH = "/mcp";
 /**
  * 見積もりの呼び出し予算の既定値（決定57）。
  *
- * コンテナごとに持つので、全体の天井は「同時実行数 × この値」になる。
+ * 実行環境ごとに持つので、全体の天井は「環境数（maxEnvironments）× この値」になる（決定74）。
  * 正規の買い手は 1 回の購入につき見積もりを 1 度しか要さないため、
  * この程度あれば通常の売買は妨げない
  */
@@ -79,6 +79,9 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+/** MCP を処理する fetch ハンドラの形。HTTP の待受（server.ts）との境界 */
+export type FetchHandler = (request: Request) => Promise<Response>;
+
 /**
  * MCP を処理する fetch ハンドラを作る。
  *
@@ -86,8 +89,6 @@ function jsonResponse(status: number, body: unknown): Response {
  * （Web Functions は待ち始めるまで 10 秒）を避けるため初回リクエストまで遅延させる。
  * 失敗した場合は次のリクエストで作り直す。
  */
-/** MCP を処理する fetch ハンドラの形。HTTP の待受（server.ts）との境界 */
-export type FetchHandler = (request: Request) => Promise<Response>;
 
 export function createMcpFetchHandler(
   options: BillingMcpServerOptions,
@@ -277,8 +278,8 @@ export function closeWhenDone(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          // 閉じる前に後始末を済ませる。閉じた時点で読み手（Lambda の pipeline）は終わり、
-          // 実行環境が止められて後始末が途中で切れ得るため
+          // 閉じる前に後始末を済ませる。閉じた時点で読み手（HTTP サーバー）は応答を終え、
+          // 後始末がその後に回ると、終わったかどうかを誰も待たなくなるため
           await finish();
           controller.close();
           return;

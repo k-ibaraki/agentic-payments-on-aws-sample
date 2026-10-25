@@ -67,6 +67,7 @@ describe("createAppConfigDataReader", () => {
       ApplicationIdentifier: "app-1",
       EnvironmentIdentifier: "env-1",
       ConfigurationProfileIdentifier: "profile-1",
+      RequiredMinimumPollIntervalInSeconds: 15,
     });
     expect((commands[1] as GetLatestConfigurationCommand).input).toEqual({
       ConfigurationToken: "initial-token",

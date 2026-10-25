@@ -61,6 +61,25 @@
   AppConfigData クライアントのリージョンの既定を他のクライアントと揃える、不要な export と assertion を外す
 - 見送り: CDK の Asset bundling（`tryBundle`）への載せ替え（差分が広い）、ログ権限を `grantWrite` ×2 に分ける案（いまの 1 文のほうが読みやすい）
 
+### セルフレビュー 1 巡目（同日）
+
+`/goal` でセルフレビューと修正を繰り返した（最大 4 巡）。1 巡目は 7 件、すべて直した。
+
+- 本文の大きさに上限が無かった。Function URL の 6MB が支払いより前に本文を切っていた保護が消え、実行環境 1 つを最大 64 件で分け合うので、
+  巨大な本文で環境ごと落とされると同じ環境で生成中の有料依頼も道連れになる（推測。実測はしていない）。Hono の `bodyLimit` で 10MB の上限を
+  掛け、超えたら 413 を返す。テストを 2 本足した
+- AppConfigData のセッションを `RequiredMinimumPollIntervalInSeconds` 無しで開いていた。既定の下限は 60 秒で、持ち回し 30 秒ごとの取得が
+  弾かれ得る。15 秒（API の最小値）を渡すようにした。deploy 済みの環境ではログに取得失敗は出ていなかったが、表の読み直しが起きるほど
+  間隔をあけた呼び出しをしていないので、確かめられてはいない
+- 旧構成が前提の文言を直した: `set-tier-table` の反映の案内（「2 回ほど要る」→「最大 30 秒」）、買い手のエラー文の「売り手の Function URL」、
+  判定予算の天井の説明（「同時実行数 × 予算」→「環境数 × 予算」）、テストの見出し、`buy-once` の URL の例、`closeWhenDone` のコメント
+- `@aws-sdk/core` が 3 版に分かれていた（新しく足した AppConfigData のクライアントだけ版が新しい）。3 つのクライアントを 3.1156 系に揃え、
+  1 版にまとめた。束ねた `index.js` が 3.9MB から 2.6MB に減った
+- `createMcpFetchHandler` の JSDoc が `FetchHandler` 型の側に付いていた（並び順を直した）。`tierTableLoaderFromEnv` がリージョンだけ
+  引数の `env` ではなく `process.env` を読んでいた
+- SSE が `@hono/node-server` 越しに途中で届くかのテストが無かった（旧 `handler.test.ts` が持っていた検証の代わり）。一時ポートで立てて、
+  最初のイベントが後続より先に届くことを確かめるテストを足した
+
 ### 買い手側の追随
 
 - 買い手（Amplify アプリ）のアプリ単位の環境変数 `BILLING_MCP_URL` を、API（`UpdateApp`。他の環境変数は据え置き）で新しい endpoint の

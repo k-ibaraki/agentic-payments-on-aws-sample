@@ -13,7 +13,7 @@ import { PREVIEW_VIEW_RESOURCE_URI } from "./tools/generate-html.js";
 const PAY_TO = "0x2222222222222222222222222222222222222222";
 const ORIGIN = "https://billing-mcp.example.test";
 
-describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => {
+describe("MCP fetch ハンドラ（Web Functions / ローカル共通）", () => {
   let facilitator: Awaited<ReturnType<typeof startFakeFacilitator>>;
   let app: (request: Request) => Promise<Response>;
 
@@ -133,7 +133,7 @@ describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => 
   });
 
   it("GET（SSE ストリーム要求）は 405 を返し、応答を待たせない", async () => {
-    // SSE を返すと Function URL が待ち続ける不具合の固定（app.ts の isStreamingResponse 参照）
+    // SSE を返すと応答が終わらない不具合の固定（Function URL 時代にクラウドで踏んだ。app.ts の isStreamingResponse 参照）
     const response = await Promise.race([
       app(
         new Request(`${ORIGIN}${MCP_PATH}`, {

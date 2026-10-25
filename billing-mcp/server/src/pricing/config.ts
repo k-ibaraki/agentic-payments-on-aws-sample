@@ -21,6 +21,9 @@ import {
 } from "@aws-sdk/client-appconfigdata";
 import { DEFAULT_TIER_TABLE, parseTierTable, type TierTable } from "./tiers.js";
 
+/** AppConfigData のセッションに求める、取りに行ける間隔の下限（秒）。API が受ける最小値 */
+export const MIN_POLL_INTERVAL_SECONDS = 15;
+
 export interface AppConfigTarget {
   application: string;
   environment: string;
@@ -60,6 +63,9 @@ export function createAppConfigDataReader(options: {
             ApplicationIdentifier: target.application,
             EnvironmentIdentifier: target.environment,
             ConfigurationProfileIdentifier: target.profile,
+            // 取りに行ける間隔の下限。指定しないと AppConfig の既定（60 秒）になり、
+            // それより早い呼び出しは弾かれる。持ち回し（既定 30 秒）より短い最小値にしておく
+            RequiredMinimumPollIntervalInSeconds: MIN_POLL_INTERVAL_SECONDS,
           }),
         );
         token = started.InitialConfigurationToken;
@@ -155,7 +161,7 @@ export function tierTableLoaderFromEnv(
     read: createAppConfigDataReader({
       // リージョンの既定は他のクライアント（Secrets Manager・Bedrock）と揃える
       client: new AppConfigDataClient({
-        region: process.env.AWS_REGION ?? "ap-northeast-1",
+        region: env.AWS_REGION ?? "ap-northeast-1",
       }),
       target: { application, environment, profile },
     }),

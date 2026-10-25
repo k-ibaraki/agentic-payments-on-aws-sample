@@ -135,11 +135,11 @@ async function main(): Promise<void> {
     );
     console.log(content);
     console.log("");
-    console.log("反映は即時ではない。間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取った回には旧値を返す）。");
+    console.log("反映は即時ではない。実行環境ごとに最大 30 秒（APPCONFIG_TTL_MS）遅れて効く。");
     console.log(
       "反映後、CloudWatch Logs に「価格表の内容が妥当でないため」「判定モデルの指定を読み取れませんでした」が出ていないか確かめること",
     );
-    console.log("（deploy 済みの Lambda が手元のコードより古いと、ここで通った表でも退けられる）");
+    console.log("（deploy 済みの売り手が手元のコードより古いと、ここで通った表でも退けられる）");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
