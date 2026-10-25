@@ -1,19 +1,25 @@
-// 価格表を AWS AppConfig から読む（DESIGN.md 決定56）。
+// 価格表を AWS AppConfig から読む（DESIGN.md 決定56・74）。
 //
-// Lambda には AppConfig の拡張（レイヤー）を載せる。拡張が設定の取得・キャッシュ・
-// 定期更新を担い、関数からは localhost の決まった口に GET するだけでよい。
-// 資格情報も SDK も要らない。
+// AppConfigData の API を SDK で直接呼ぶ。セッションを開き（StartConfigurationSession）、
+// 以後はトークンを引き継いで最新を取る（GetLatestConfiguration）。変更が無い回は本文が
+// 空で返るので、直前に読めた表をそのまま使う。
+//
+// 当初は Lambda の拡張（レイヤー）が localhost で配っていたが、Web Functions には
+// レイヤーが無いので SDK に置き換えた（決定74）。表は実行環境の中に一定時間持ち回す。
+// 1 つの実行環境が多数の依頼を同時にさばくので、依頼ごとに取りに行く必要はない。
 //
 // 読めない設定は退け、直前に読めた表（無ければ既定の表）を使い続ける。設定の
 // 書き損じで売り手が止まるより、古い表で売り続けるほうが害が小さい。
 //
-// 価格を差し替えても飛行中の取引は壊れない。提示済みの価格は見積書
+// 価格を差し替えても進行中の取引（価格を提示してから決済が終わるまでのもの）は壊れない。提示済みの価格は見積書
 // （`accepts[].extra.quote`、決定55）としてそのまま往復し、価格表と食い違えば
 // 使わずに判定し直すため。
+import {
+  AppConfigDataClient,
+  GetLatestConfigurationCommand,
+  StartConfigurationSessionCommand,
+} from "@aws-sdk/client-appconfigdata";
 import { DEFAULT_TIER_TABLE, parseTierTable, type TierTable } from "./tiers.js";
-
-/** AppConfig Lambda 拡張が待ち受ける口。拡張の既定値 */
-export const APPCONFIG_EXTENSION_PORT = 2772;
 
 export interface AppConfigTarget {
   application: string;
@@ -21,26 +27,63 @@ export interface AppConfigTarget {
   profile: string;
 }
 
-/** 拡張から設定を取る URL を組み立てる */
-export function appConfigEndpoint(target: AppConfigTarget): string {
-  return (
-    `http://localhost:${APPCONFIG_EXTENSION_PORT}` +
-    `/applications/${target.application}` +
-    `/environments/${target.environment}` +
-    `/configurations/${target.profile}`
-  );
+/** AppConfigDataClient のうち使う口だけ（テストで差し替えるため） */
+export interface AppConfigDataClientLike {
+  send(
+    command: StartConfigurationSessionCommand,
+  ): Promise<{ InitialConfigurationToken?: string }>;
+  send(command: GetLatestConfigurationCommand): Promise<{
+    Configuration?: Uint8Array;
+    NextPollConfigurationToken?: string;
+  }>;
+}
+
+/**
+ * 最新の設定を返す。変更が無ければ undefined。失敗は投げる。
+ * 投げた後の次回はセッションを開き直す（トークンは 24 時間で切れる）
+ */
+export type ConfigReader = () => Promise<unknown>;
+
+/** AppConfigData から設定 JSON を読む読み手を作る */
+export function createAppConfigDataReader(options: {
+  client: AppConfigDataClientLike;
+  target: AppConfigTarget;
+}): ConfigReader {
+  const { client, target } = options;
+  let token: string | undefined;
+
+  return async () => {
+    try {
+      if (!token) {
+        const started = await client.send(
+          new StartConfigurationSessionCommand({
+            ApplicationIdentifier: target.application,
+            EnvironmentIdentifier: target.environment,
+            ConfigurationProfileIdentifier: target.profile,
+          }),
+        );
+        token = started.InitialConfigurationToken;
+        if (!token) throw new Error("AppConfig のセッションを開けませんでした");
+      }
+      const latest = await client.send(
+        new GetLatestConfigurationCommand({ ConfigurationToken: token }),
+      );
+      token = latest.NextPollConfigurationToken;
+      if (!latest.Configuration || latest.Configuration.byteLength === 0) {
+        return undefined;
+      }
+      return JSON.parse(new TextDecoder().decode(latest.Configuration));
+    } catch (error) {
+      token = undefined;
+      throw error;
+    }
+  };
 }
 
 export interface TierTableLoaderOptions {
-  endpoint: string;
-  /**
-   * 関数内で表を持ち回す時間。
-   *
-   * 拡張自身も取得結果を抱えるため短くする意味は薄いが、毎リクエストの
-   * localhost 往復を省く分だけ置く
-   */
+  read: ConfigReader;
+  /** 実行環境の中で表を持ち回す時間 */
   ttlMs: number;
-  fetchImpl?: typeof fetch;
   now?: () => number;
 }
 
@@ -54,7 +97,6 @@ export type TierTableLoader = () => Promise<TierTable>;
 export function createTierTableLoader(
   options: TierTableLoaderOptions,
 ): TierTableLoader {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
 
   let cached: TierTable = DEFAULT_TIER_TABLE;
@@ -64,15 +106,13 @@ export function createTierTableLoader(
     if (now() - fetchedAt < options.ttlMs) return cached;
 
     try {
-      const response = await fetchImpl(options.endpoint);
-      if (!response.ok) {
-        console.warn(
-          `[pricing] 価格表を取得できませんでした（HTTP ${response.status}）。直前の表を使います`,
-        );
+      const raw = await options.read();
+      if (raw === undefined) {
+        // 変更なし。いまの表のまま
         fetchedAt = now();
         return cached;
       }
-      const table = parseTierTable(await response.json());
+      const table = parseTierTable(raw);
       if (!table) {
         console.warn(
           "[pricing] 価格表の内容が妥当でないため、直前の表を使います",
@@ -98,7 +138,7 @@ export function createTierTableLoader(
  * 環境変数から読み手を組み立てる。
  *
  * AppConfig の指定が揃っていなければ undefined を返し、呼び出し側は既定の表を使う。
- * ローカル開発では拡張が居ないため、これが通常の経路になる
+ * ローカル開発では AppConfig を指さないため、これが通常の経路になる
  */
 export function tierTableLoaderFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -109,7 +149,10 @@ export function tierTableLoaderFromEnv(
   if (!application || !environment || !profile) return undefined;
 
   return createTierTableLoader({
-    endpoint: appConfigEndpoint({ application, environment, profile }),
+    read: createAppConfigDataReader({
+      client: new AppConfigDataClient({}),
+      target: { application, environment, profile },
+    }),
     ttlMs: Number(env.APPCONFIG_TTL_MS ?? 30_000),
   });
 }

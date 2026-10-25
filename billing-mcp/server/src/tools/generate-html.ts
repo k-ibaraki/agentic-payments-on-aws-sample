@@ -202,12 +202,13 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
   previousHtml: z.string().optional().describe("前回生成したHTML（修正時）"),
   attachments: z
     .array(AttachmentSchema)
-    // Function URL のリクエスト上限 6MB に収めるため1件に絞る（DESIGN.md 決定23）
+    // 1 件に絞る（DESIGN.md 決定23）。当初は Function URL のリクエスト上限 6MB に収めるためだったが、
+    // Lambda Web Functions に移して上限は消えた（決定74）。増やすなら説明文と買い手側の扱いも含めて別の作業で見直す
     .max(1)
     .optional()
     .describe(
       "添付ファイル（画像・ドキュメント、最大1件、base64エンコード。" +
-        "リクエスト全体で base64 後 6MB 以内 = 元データ約4.4MB まで）",
+        "大きさは Bedrock が受け付ける範囲（画像 3.75MB・文書 4.5MB）まで）",
     ),
 };
 

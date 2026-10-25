@@ -1,5 +1,5 @@
-// MCP の HTTP 層。Lambda Function URL とローカル開発サーバーの共通実装。
-// Web 標準の Request/Response で完結させ、express は使わない（DESIGN.md 決定22）
+// MCP の HTTP 層。Lambda Web Functions とローカルで共通の fetch ハンドラ。
+// Web 標準の Request/Response で完結させ、HTTP の待受（server.ts の Hono）からは独立させる（DESIGN.md 決定22・74）
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   type BillingMcpServerOptions,
@@ -28,7 +28,7 @@ import {
   createDefaultConverse,
 } from "./tools/generate-html.js";
 
-/** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
+/** MCP のエンドポイント。ローカルもクラウドも同じパス（決定4） */
 export const MCP_PATH = "/mcp";
 
 /**
@@ -41,7 +41,7 @@ export const MCP_PATH = "/mcp";
 export const DEFAULT_JUDGE_BUDGET = { capacity: 20, refillPerSecond: 0.2 };
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
-// Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
+// 実行基盤の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
@@ -82,8 +82,8 @@ function jsonResponse(status: number, body: unknown): Response {
 /**
  * MCP を処理する fetch ハンドラを作る。
  *
- * facilitator への /supported 照会を伴う支払いラッパーの構築は、Lambda の
- * INIT フェーズ（10 秒制限）を避けるため初回リクエストまで遅延させる。
+ * facilitator への /supported 照会を伴う支払いラッパーの構築は、起動の制限時間
+ * （Web Functions は待ち始めるまで 10 秒）を避けるため初回リクエストまで遅延させる。
  * 失敗した場合は次のリクエストで作り直す。
  */
 export function createMcpFetchHandler(
