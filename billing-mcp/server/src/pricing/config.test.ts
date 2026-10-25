@@ -79,11 +79,16 @@ describe("createAppConfigDataReader", () => {
 
   // トークンは期限が切れる（24 時間）。取得に失敗したら次回はセッションを開き直す
   it("取得に失敗したら次回はセッションを開き直す", async () => {
-    const client = fakeClient([]);
-    client.send.mockRejectedValueOnce(new Error("BadRequestException"));
+    // 1 回目は成功してトークンを持つ
+    const client = fakeClient([{ Configuration: encode(VALID) }]);
     const read = createAppConfigDataReader({ client, target: TARGET });
+    expect(await read()).toEqual(VALID);
 
+    // 2 回目: トークンを持った状態で GetLatestConfiguration が失敗する（期限切れなど）
+    client.send.mockRejectedValueOnce(new Error("BadRequestException"));
     await expect(read()).rejects.toThrow();
+
+    // 3 回目: 古いトークンを使わず、セッションから開き直す
     client.send.mockClear();
     client.send.mockImplementationOnce(async () => ({
       InitialConfigurationToken: "initial-token",

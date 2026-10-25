@@ -100,6 +100,19 @@ describe("createApp", () => {
     expect(handle).not.toHaveBeenCalled();
   });
 
+  // 実際の依頼は Content-Length 付きで届き、bodyLimit はヘッダの値だけで判定する
+  it("Content-Length が上限を超えていれば 413 を返す", async () => {
+    const handle = vi.fn(async () => new Response("unexpected"));
+    const app = createApp(handle);
+    const response = await app.request(MCP_PATH, {
+      method: "POST",
+      body: "x",
+      headers: { "content-length": String(MAX_REQUEST_BODY_BYTES + 1) },
+    });
+    expect(response.status).toBe(413);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
   it("上限ちょうどの本文はそのまま渡す", async () => {
     const handle = vi.fn(
       async (request: Request) =>

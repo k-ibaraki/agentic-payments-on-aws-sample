@@ -100,7 +100,7 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  // 乱発への防護（決定57、詳細は pricing/judge-guard.ts）。バケツはコンテナに 1 つ
+  // 乱発への防護（決定57、詳細は pricing/judge-guard.ts）。バケツは実行環境に 1 つ
   const judgeBudget = createJudgeBudget(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
@@ -173,7 +173,7 @@ export function createMcpFetchHandler(
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
     // 判定モデルは価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
-    // 予算はコンテナ共有のバケツから取る
+    // 予算は実行環境で共有するバケツから取る
     const judge = judgeBudget.wrap(await selectJudge(table.judge));
     const quote = await resolveQuote(body, { table, judge });
 

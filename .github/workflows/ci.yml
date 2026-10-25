@@ -59,8 +59,8 @@ jobs:
         run: |
           pnpm typecheck
           pnpm test
-      # 合成した成果物が実際に読み込めるかまで見る。ESM 出力に CJS 配布の依存を
-      # 同梱すると実行時に落ちるが、これはデプロイするまで露見しないため
+      # 合成したうえで、CDK と同じ束ね（stacks/bundle.ts）を実行環境と同じ要領で起動して応答を見る。
+      # ESM 出力に CJS 配布の依存を同梱すると実行時に落ちるが、これはデプロイするまで露見しないため
       - name: 合成とバンドル検証
         working-directory: billing-mcp
         run: |

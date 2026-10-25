@@ -203,7 +203,8 @@ export const GENERATE_HTML_INPUT_SCHEMA = {
   attachments: z
     .array(AttachmentSchema)
     // 1 件に絞る（DESIGN.md 決定23）。当初は Function URL のリクエスト上限 6MB に収めるためだったが、
-    // Lambda Web Functions に移して上限は消えた（決定74）。増やすなら説明文と買い手側の扱いも含めて別の作業で見直す
+    // Lambda Web Functions に移して実行基盤の上限は消えた（決定74。本文はサーバーが 10MB で切る）。
+    // 増やすなら説明文と買い手側の扱いも含めて別の作業で見直す
     .max(1)
     .optional()
     .describe(

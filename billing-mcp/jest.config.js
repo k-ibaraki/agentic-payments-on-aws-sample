@@ -6,6 +6,6 @@ module.exports = {
   transform: {
     "^.+\\.(t|j)sx?$": ["@swc/jest", { jsc: { target: "es2022" } }],
   },
-  // NodejsFunction のバンドル（esbuild）を伴うため既定より長めにする
+  // 合成のたびにサーバーを esbuild で束ねる（stacks/bundle.ts）ため既定より長めにする
   testTimeout: 120000,
 };
