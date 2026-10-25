@@ -89,7 +89,6 @@ export type FetchHandler = (request: Request) => Promise<Response>;
  * （Web Functions は待ち始めるまで 10 秒）を避けるため初回リクエストまで遅延させる。
  * 失敗した場合は次のリクエストで作り直す。
  */
-
 export function createMcpFetchHandler(
   options: BillingMcpServerOptions,
 ): FetchHandler {

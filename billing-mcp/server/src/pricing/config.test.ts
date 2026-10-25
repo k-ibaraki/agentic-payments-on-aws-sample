@@ -105,6 +105,18 @@ describe("createAppConfigDataReader", () => {
 });
 
 describe("createAppConfigDataReader の取りやめ", () => {
+  // トークンを持たない状態（起動直後・失敗の直後）はセッションを開くところから始まる。そこにも届ける
+  it("セッションを開く呼び出しにも signal を渡す", async () => {
+    const client = fakeClient([{ Configuration: encode(VALID) }]);
+    const read = createAppConfigDataReader({ client, target: TARGET });
+    const controller = new AbortController();
+    await read(controller.signal);
+    const [startCall, latestCall] = client.send.mock.calls;
+    expect(startCall[0]).toBeInstanceOf(StartConfigurationSessionCommand);
+    expect(startCall[1]).toEqual({ abortSignal: controller.signal });
+    expect(latestCall[1]).toEqual({ abortSignal: controller.signal });
+  });
+
   it("signal を SDK の呼び出しに渡し、取りやめたら次回はセッションを開き直す", async () => {
     const client = fakeClient([{ Configuration: encode(VALID) }]);
     const read = createAppConfigDataReader({ client, target: TARGET });
