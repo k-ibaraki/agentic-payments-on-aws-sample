@@ -34,18 +34,22 @@ export interface AppConfigTarget {
 export interface AppConfigDataClientLike {
   send(
     command: StartConfigurationSessionCommand,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<{ InitialConfigurationToken?: string }>;
-  send(command: GetLatestConfigurationCommand): Promise<{
+  send(
+    command: GetLatestConfigurationCommand,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<{
     Configuration?: Uint8Array;
     NextPollConfigurationToken?: string;
   }>;
 }
 
 /**
- * 最新の設定を返す。変更が無ければ undefined。失敗は投げる。
+ * 最新の設定を返す。変更が無ければ undefined。失敗（signal による取りやめを含む）は投げる。
  * 投げた後の次回はセッションを開き直す（トークンは 24 時間で切れる）
  */
-export type ConfigReader = () => Promise<unknown>;
+export type ConfigReader = (signal?: AbortSignal) => Promise<unknown>;
 
 /** AppConfigData から設定 JSON を読む読み手を作る */
 export function createAppConfigDataReader(options: {
@@ -55,7 +59,9 @@ export function createAppConfigDataReader(options: {
   const { client, target } = options;
   let token: string | undefined;
 
-  return async () => {
+  return async (signal) => {
+    // 取りやめは SDK の呼び出しまで届ける。届けないと止まった通信が残り、トークンも捨てられない
+    const sendOptions = signal ? { abortSignal: signal } : undefined;
     try {
       if (!token) {
         const started = await client.send(
@@ -67,12 +73,14 @@ export function createAppConfigDataReader(options: {
             // それより早い呼び出しは弾かれる。持ち回し（既定 30 秒）より短い最小値にしておく
             RequiredMinimumPollIntervalInSeconds: MIN_POLL_INTERVAL_SECONDS,
           }),
+          sendOptions,
         );
         token = started.InitialConfigurationToken;
         if (!token) throw new Error("AppConfig のセッションを開けませんでした");
       }
       const latest = await client.send(
         new GetLatestConfigurationCommand({ ConfigurationToken: token }),
+        sendOptions,
       );
       token = latest.NextPollConfigurationToken;
       if (!latest.Configuration || latest.Configuration.byteLength === 0) {
@@ -92,7 +100,7 @@ export interface TierTableLoaderOptions {
   ttlMs: number;
   /**
    * 1 回の取得を待つ上限。取得は 1 本に束ねて皆で待つので、止まると実行環境の全依頼が
-   * 道連れになる。超えたら直前の表で売り続ける（省略時 READ_TIMEOUT_MS）
+   * 道連れになる。超えたら読み手に取りやめを伝えて、直前の表で売り続ける（省略時 READ_TIMEOUT_MS）
    */
   readTimeoutMs?: number;
   now?: () => number;
@@ -121,15 +129,19 @@ export function createTierTableLoader(
 
   const readTimeoutMs = options.readTimeoutMs ?? READ_TIMEOUT_MS;
   const readWithTimeout = (): Promise<unknown> => {
+    // SDK の requestTimeout は警告を出すだけで通信を止めない（@smithy/node-http-handler）。
+    // AbortController で本当に取りやめ、読み手の失敗の経路（トークンを捨てる）に流す
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`${readTimeoutMs}ms 以内に取れませんでした`)),
-        readTimeoutMs,
-      );
+      timer = setTimeout(() => {
+        const error = new Error(`${readTimeoutMs}ms 以内に取れませんでした`);
+        controller.abort(error);
+        reject(error);
+      }, readTimeoutMs);
     });
-    return Promise.race([options.read(), timeout]).finally(() =>
-      clearTimeout(timer),
+    return Promise.race([options.read(controller.signal), timeout]).finally(
+      () => clearTimeout(timer),
     );
   };
 
@@ -184,9 +196,6 @@ export function tierTableLoaderFromEnv(
       // リージョンの既定は他のクライアント（Secrets Manager・Bedrock）と揃える
       client: new AppConfigDataClient({
         region: env.AWS_REGION ?? "ap-northeast-1",
-        // SDK の既定には時間制限が無い。止まった接続を待ち続けないよう、
-        // 取得を待つ上限（READ_TIMEOUT_MS）に収まる値で切る
-        requestHandler: { connectionTimeout: 1_000, requestTimeout: 2_000 },
       }),
       target: { application, environment, profile },
     }),

@@ -35,7 +35,7 @@ function fakeClient(
     NextPollConfigurationToken?: string;
   }>,
 ) {
-  const send = vi.fn(async (command: unknown) => {
+  const send = vi.fn(async (command: unknown, _options?: unknown) => {
     if (command instanceof StartConfigurationSessionCommand) {
       return { InitialConfigurationToken: "initial-token" };
     }
@@ -89,6 +89,40 @@ describe("createAppConfigDataReader", () => {
     await expect(read()).rejects.toThrow();
 
     // 3 回目: 古いトークンを使わず、セッションから開き直す
+    client.send.mockClear();
+    client.send.mockImplementationOnce(async () => ({
+      InitialConfigurationToken: "initial-token",
+    }));
+    client.send.mockImplementationOnce(async () => ({
+      Configuration: encode(VALID),
+      NextPollConfigurationToken: "next-token",
+    }));
+    expect(await read()).toEqual(VALID);
+    expect(client.send.mock.calls[0][0]).toBeInstanceOf(
+      StartConfigurationSessionCommand,
+    );
+  });
+});
+
+describe("createAppConfigDataReader の取りやめ", () => {
+  it("signal を SDK の呼び出しに渡し、取りやめたら次回はセッションを開き直す", async () => {
+    const client = fakeClient([{ Configuration: encode(VALID) }]);
+    const read = createAppConfigDataReader({ client, target: TARGET });
+    expect(await read()).toEqual(VALID);
+
+    const controller = new AbortController();
+    client.send.mockImplementationOnce(
+      (_command: unknown, sendOptions?: { abortSignal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          sendOptions?.abortSignal?.addEventListener("abort", () =>
+            reject(sendOptions.abortSignal?.reason),
+          );
+        }),
+    );
+    const pending = read(controller.signal);
+    controller.abort(new Error("timeout"));
+    await expect(pending).rejects.toThrow("timeout");
+
     client.send.mockClear();
     client.send.mockImplementationOnce(async () => ({
       InitialConfigurationToken: "initial-token",
@@ -213,6 +247,9 @@ describe("価格表の読み込み", () => {
     now += 1_001;
     expect(priceOf(await load(), "take")).toBe("$0.3");
     expect(read).toHaveBeenCalledTimes(2);
+    // 待つのをやめるだけでなく、読み手に取りやめを伝える
+    const signal = read.mock.calls[1][0] as AbortSignal;
+    expect(signal.aborted).toBe(true);
   });
 
   // AppConfigData は変更が無ければ空を返す。それは失敗ではなく「いまの表のまま」
