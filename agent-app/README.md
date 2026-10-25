@@ -197,7 +197,7 @@ AWS Blocks が生成するのは CDK の構成なので、AWS へ載せる作業
 | `PAYMENT_CONNECTOR_ID` | 〃。画面のウォレット残高（`GetPaymentInstrumentBalance`）にだけ要る。無くても決済は通る | 同上 |
 | `BILLING_MCP_URL` | 売り手のスタックの `McpEndpointUrl` 出力 | `billing-mcp/` で `pnpm outputs` |
 
-`BILLING_MCP_URL` は売り手の Function URL で、**売り手を作り直すたびに変わる**。
+`BILLING_MCP_URL` は売り手の endpoint（Lambda Web Functions）の URL で、**売り手を作り直すたびに変わる**。
 過去のログに載っている URL をそのまま使わず、`pnpm outputs` で取り直すこと。
 
 Coinbase CDP の資格情報 3 点（`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET`）は

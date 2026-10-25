@@ -2,6 +2,55 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-25: 売り手を Lambda Function URL から Lambda Web Functions へ移す（決定74）
+
+依頼は `/grill-me` で詰めてから着工した。目的は「新機能を試す」「コードの単純化」「レイヤー廃止」を合わせたもの。
+
+### やったこと
+
+- 下調べ: Web Functions（2026-10 公開。ポートで待つ HTTP サーバーをそのまま動かす Lambda の新しい形）の公式ドキュメントと AWS の
+  スキルを読み、①aws-cdk-lib 2.274 に L1 がある（2.267 には無い。CLI は 2.1146.1 以上）②CDK の bootstrap バケットは
+  バケットポリシーが TLS 強制の Deny だけで、Web Functions が revision 作成時に要求する `lambda.amazonaws.com` の読み取り許可が無い
+  ③公式のクォータに本文のサイズ上限は無い（ヘッダ 128 KiB のみ）、の 3 点を確かめた。②により、承認済みの退路どおり専用バケットにした
+- サーバー: `handler.ts`（Function URL 用の変換と `streamifyResponse`）と `dev-server.ts` を消し、Hono + `@hono/node-server` の
+  `index.ts` / `server.ts` に置き換えた。`AWS_LAMBDA_HTTP_ENDPOINT` の host:port で待ち、無ければ PORT（既定 8000）。MCP の処理は
+  `app.ts` の fetch ハンドラのまま。価格表は AppConfigData の API を SDK で直接読む形に書き直した（`pricing/config.ts`。
+  セッションのトークンを引き継ぎ、変更なしの空応答は直前の表を保つ、失敗したら次回は開き直す）。テストは先に書いて赤を確認してから実装した
+- CDK: `NodejsFunction` + Function URL をやめ、`stacks/bundle.ts` で esbuild を直接呼んで `index.js` + `preview-view.html` +
+  `package.json`（type: module）に束ね、専用のバージョニング付きバケットへ `BucketDeployment`（extract/prune とも false）で置き、
+  `CfnWebFunction` / `CfnWebFunctionRevision` / `CfnWebFunctionEndpoint` を組んだ。実行ロールとロググループ（本体と `.local`）も自前。
+  パラメータは `reservedConcurrency` / `appConfigExtensionLayerArn` を外し、`maxEnvironments` / `rateLimit` を必須にした。
+  `verify:bundle` は束ねた `index.js` を実行環境と同じ要領で起動して `OPTIONS /mcp` 204 と他パス 404 を見る形に改めた
+- deploy と検証: 既存の `BillingMcpStack-dev` に deploy（97 秒。旧 Lambda と Function URL は消えた）。OPTIONS 204 + CORS、GET 405、
+  他パス 404、initialize 200（0.6 秒）、`progressToken` 付きの依頼は `text/event-stream`（chunked）で返った。7MB と 20MB の本文も通った。
+  `pnpm buy:once` で実オンチェーン決済が 1 回成功（売り手残高 7.075 → 7.175 USDC）
+
+### 判断
+
+- 専用バケットへ zip を運ぶ手段は BucketDeployment（ユーザー判断）。補助 Lambda が 2 つ（配置とバケットの後始末）増えるが、
+  `pnpm cdk deploy` 一発で済む
+- AppConfig は opt-in のパラメータをやめて常に配線する。拡張レイヤーの ARN を受ける理由が無くなったため
+- 添付ファイルは「最大 1 件」のまま。6MB の根拠は消えたので、理由を「増やすなら別の作業」に書き換え、ツールの説明文の大きさの目安は
+  Bedrock が受け付ける大きさに改めた（ユーザー判断）
+- 束ねた成果物は `server/dist/bundle` の固定の場所に出す。source map の相対パスが安定し、中身が変わらなければアセットのハッシュも
+  変わらない。2 度目の deploy で revision が作り直されなかったことで確かめた
+
+### つまずき
+
+- 最初の deploy ではログが一切届かなかった。Web Functions はまず `<グループ>.local` に書いてから本体へ集めるので、`.local` への
+  `CreateLogGroup` / `CreateLogStream` / `PutLogEvents` が要る（公式の権限の案内のとおり。`grantWrite` では足りない）。`.local` も CDK で作り、
+  両方への書き込みを許して解決。2 度目の deploy 直後に `.local` に JSON 形式のログ（起動 0.5 秒）が届くことを確認した
+- `cdk synth` / `deploy` が「Unknown resource type 'AWS::Lambda::WebFunction'」と警告する。CDK の検証の定義が古いだけで deploy は通る
+- 手元の `aws-cdk`（CLI）が aws-cdk-lib 2.274 の cloud assembly（schema 55）を読めず、`synth` が止まった。CLI を 2.1146.1 に上げた
+- `verify:bundle` が CDK の補助関数（配置と後始末）の `index.js` も拾った。`preview-view.html` を同梱している方だけを売り手のバンドルとみなすようにした
+
+### 買い手側の追随
+
+- 買い手（Amplify アプリ）のアプリ単位の環境変数 `BILLING_MCP_URL` を、API（`UpdateApp`。他の環境変数は据え置き）で新しい endpoint の
+  URL に書き換えた（ユーザー承認）。値は合成時に読まれるので、次に Amplify のビルドが走るまで効かない
+- 構成図（`docs/architecture.drawio.png`）は PNG に埋め込まれた XML を取り出してラベル 3 つ（売り手の Lambda・AppConfig・認可の注記）を直し、
+  同じ寸法で書き出し直した
+
 ## 2026-10-24: PR #45 のレビューで見つかった、観察が終わらない 2 つの経路を直す
 
 PR レビュー（4 観点）で、読み込み直したときの観察（`observeRunningReply`）が送信を止めたままになる経路が 2 つ見つかった。どちらも頻度は低い。
