@@ -172,6 +172,24 @@ describe("価格表の読み込み", () => {
     expect(priceOf(await load(), "take")).toBe("$0.3");
   });
 
+  // 1 つの実行環境が多数の依頼を同時にさばく。有効期間が切れた瞬間に依頼の数だけ取りに行かない
+  it("有効期間が切れた直後の同時呼び出しは取得を 1 本にまとめる", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    const read = vi.fn(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const load = createTierTableLoader({ ...options, read });
+    const first = load();
+    const second = load();
+    expect(read).toHaveBeenCalledOnce();
+    resolve(VALID);
+    expect(priceOf(await first, "take")).toBe("$0.3");
+    expect(priceOf(await second, "take")).toBe("$0.3");
+  });
+
   // AppConfigData は変更が無ければ空を返す。それは失敗ではなく「いまの表のまま」
   it("変更なし（undefined）なら直前に読めた表を保つ", async () => {
     const read = vi

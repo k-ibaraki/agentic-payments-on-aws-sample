@@ -20,7 +20,7 @@ const BUNDLE_BANNER = [
 ].join("\n");
 
 /** ui:// で配信する HTML（vite singlefile の出力）の、リポジトリ内での場所 */
-export const UI_HTML_RELATIVE_PATH = "server/dist/ui/src/ui/preview-view.html";
+const UI_HTML_RELATIVE_PATH = "server/dist/ui/src/ui/preview-view.html";
 
 /**
  * 束ねた結果の置き場。固定の場所にするのは、source map が書く相対パスを毎回同じにして、

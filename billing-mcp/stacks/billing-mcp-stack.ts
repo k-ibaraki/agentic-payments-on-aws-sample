@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import {
   CfnOutput,
-  Duration,
   Fn,
   RemovalPolicy,
   SecretValue,
@@ -53,11 +52,11 @@ export interface BillingMcpStackProps extends StackProps {
 const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
 
 /**
- * 依頼 1 件の時間制限。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
+ * 依頼 1 件の時間制限（秒）。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
  * Bedrock 由来の具体的なエラーが届く前に打ち切られてしまう。
  * Web Functions の上限は 900 秒（決定20）
  */
-export const REQUEST_TIMEOUT = Duration.seconds(600);
+export const REQUEST_TIMEOUT_SECONDS = 600;
 
 /** Web Functions の実行環境でコードが展開される場所 */
 const LAMBDA_TASK_ROOT = "/var/task";
@@ -271,11 +270,13 @@ export function createBillingMcpStack(
     },
     serviceConfig: {
       executionRoleArn: role.roleArn,
-      timeoutSeconds: REQUEST_TIMEOUT.toSeconds(),
+      timeoutSeconds: REQUEST_TIMEOUT_SECONDS,
       telemetryConfig: {
         loggingConfig: { logGroup: logGroup.logGroupName },
       },
       environmentVariables: {
+        // 同梱した source map でスタックトレースを元のファイル行に戻す（NodejsFunction が付けていたものと同じ）
+        NODE_OPTIONS: "--enable-source-maps",
         PAY_TO_ADDRESS: props.payToAddress,
         ...(props.facilitatorUrl ? { FACILITATOR_URL: props.facilitatorUrl } : {}),
         // 束ねた後は import.meta.dirname が変わるため、場所を推測させず明示する

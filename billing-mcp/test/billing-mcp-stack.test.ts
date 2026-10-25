@@ -2,7 +2,7 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import {
   createBillingMcpStack,
-  REQUEST_TIMEOUT,
+  REQUEST_TIMEOUT_SECONDS,
 } from "../stacks/billing-mcp-stack";
 import type { AppParameter } from "../parameter.sample";
 
@@ -26,6 +26,9 @@ function synth(overrides: Partial<AppParameter> = {}): Template {
   return Template.fromStack(stack);
 }
 
+// 既定のパラメータで合成した Template。合成のたびに esbuild が走るので 1 度だけ作って共有する
+const template = synth();
+
 /** 唯一の revision の環境変数 */
 function revisionEnv(template: Template): Record<string, unknown> {
   const revisions = template.findResources("AWS::Lambda::WebFunctionRevision");
@@ -46,12 +49,6 @@ function policyStatements(template: Template) {
 }
 
 describe("billing-mcp スタック（Lambda Web Functions。決定74）", () => {
-  let template: Template;
-
-  beforeAll(() => {
-    template = synth();
-  });
-
   test("Web Function・revision・endpoint を 1 つずつ作る", () => {
     template.resourceCountIs("AWS::Lambda::WebFunction", 1);
     template.resourceCountIs("AWS::Lambda::WebFunctionRevision", 1);
@@ -63,13 +60,13 @@ describe("billing-mcp スタック（Lambda Web Functions。決定74）", () => 
   test("revision は Node.js 24 で、依頼の時間制限は Bedrock のタイムアウトを包含する", () => {
     // server 側の BEDROCK_TIMEOUT_MS（570秒）より長くないと、Bedrock 由来の
     // 具体的なエラーが届く前に打ち切られる
-    expect(REQUEST_TIMEOUT.toSeconds()).toBeGreaterThan(570);
+    expect(REQUEST_TIMEOUT_SECONDS).toBeGreaterThan(570);
     template.hasResourceProperties("AWS::Lambda::WebFunctionRevision", {
       BuildConfig: Match.objectLike({
         RuntimeConfig: { Runtime: "nodejs24.x" },
       }),
       ServiceConfig: Match.objectLike({
-        TimeoutSeconds: REQUEST_TIMEOUT.toSeconds(),
+        TimeoutSeconds: REQUEST_TIMEOUT_SECONDS,
       }),
     });
   });
@@ -96,6 +93,7 @@ describe("billing-mcp スタック（Lambda Web Functions。決定74）", () => 
   test("環境変数に売り手の設定と UI の場所が入る", () => {
     expect(revisionEnv(template)).toEqual(
       expect.objectContaining({
+        NODE_OPTIONS: "--enable-source-maps",
         PAY_TO_ADDRESS: parameter.payToAddress,
         FACILITATOR_URL: parameter.facilitatorUrl,
         UI_HTML_PATH: expect.stringMatching(/preview-view\.html$/),
@@ -191,12 +189,6 @@ describe("billing-mcp スタック（Lambda Web Functions。決定74）", () => 
 });
 
 describe("コードの置き場（決定74）", () => {
-  let template: Template;
-
-  beforeAll(() => {
-    template = synth();
-  });
-
   // Web Functions は S3 の zip しか読まず、バケットはバージョニングが要る
   test("バージョニング付きの専用バケットを作る", () => {
     template.hasResourceProperties("AWS::S3::Bucket", {
@@ -230,10 +222,9 @@ describe("コードの置き場（決定74）", () => {
   });
 
   test("revision は専用バケットの zip を指し、関数・バケットポリシー・zip の配置の後に作る", () => {
-    const [revisionId, revision] = Object.entries(
+    const revision = Object.values(
       template.findResources("AWS::Lambda::WebFunctionRevision"),
     )[0];
-    expect(revisionId).toBeDefined();
     const s3Object = revision.Properties.BuildConfig.CodeConfig.S3Object;
     const bucketId = Object.keys(template.findResources("AWS::S3::Bucket"))[0];
     expect(JSON.stringify(s3Object.Bucket)).toContain(bucketId);
@@ -260,12 +251,6 @@ describe("コードの置き場（決定74）", () => {
 });
 
 describe("段階制の値付けに要る資源（決定55・56）", () => {
-  let template: Template;
-
-  beforeAll(() => {
-    template = synth();
-  });
-
   it("価格表を置く AppConfig のアプリケーション・環境・設定プロファイル・展開戦略を作る", () => {
     template.resourceCountIs("AWS::AppConfig::Application", 1);
     template.resourceCountIs("AWS::AppConfig::Environment", 1);
@@ -331,12 +316,6 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
 });
 
 describe("Jev の API キー（決定58）", () => {
-  let template: Template;
-
-  beforeAll(() => {
-    template = synth();
-  });
-
   // 値は人が後から入れる。CDK に書くと CloudFormation テンプレートに平文で残る。
   // ランダム生成に任せると、出鱈目な鍵で 401 になり全件が中央の価格帯へ落ちる
   it("鍵ではなく仮の値を入れて作る", () => {

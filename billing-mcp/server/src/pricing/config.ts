@@ -101,36 +101,39 @@ export function createTierTableLoader(
 
   let cached: TierTable = DEFAULT_TIER_TABLE;
   let fetchedAt = Number.NEGATIVE_INFINITY;
+  // 進行中の取得。1 つの実行環境が多数の依頼を同時にさばくので、有効期間が切れた
+  // 瞬間に依頼の数だけ取りに行かないよう、取得は 1 本に束ねて皆で待つ
+  let inflight: Promise<TierTable> | undefined;
 
-  return async () => {
-    if (now() - fetchedAt < options.ttlMs) return cached;
-
+  const refresh = async (): Promise<TierTable> => {
     try {
       const raw = await options.read();
-      if (raw === undefined) {
-        // 変更なし。いまの表のまま
-        fetchedAt = now();
-        return cached;
+      // undefined は「変更なし」。いまの表のまま
+      if (raw !== undefined) {
+        const table = parseTierTable(raw);
+        if (table) cached = table;
+        else
+          console.warn(
+            "[pricing] 価格表の内容が妥当でないため、直前の表を使います",
+          );
       }
-      const table = parseTierTable(raw);
-      if (!table) {
-        console.warn(
-          "[pricing] 価格表の内容が妥当でないため、直前の表を使います",
-        );
-        fetchedAt = now();
-        return cached;
-      }
-      cached = table;
-      fetchedAt = now();
-      return cached;
     } catch (error) {
       console.warn(
         "[pricing] 価格表の取得に失敗しました。直前の表を使います",
         error,
       );
+    } finally {
       fetchedAt = now();
-      return cached;
     }
+    return cached;
+  };
+
+  return () => {
+    if (now() - fetchedAt < options.ttlMs) return Promise.resolve(cached);
+    inflight ??= refresh().finally(() => {
+      inflight = undefined;
+    });
+    return inflight;
   };
 }
 
@@ -150,7 +153,10 @@ export function tierTableLoaderFromEnv(
 
   return createTierTableLoader({
     read: createAppConfigDataReader({
-      client: new AppConfigDataClient({}),
+      // リージョンの既定は他のクライアント（Secrets Manager・Bedrock）と揃える
+      client: new AppConfigDataClient({
+        region: process.env.AWS_REGION ?? "ap-northeast-1",
+      }),
       target: { application, environment, profile },
     }),
     ttlMs: Number(env.APPCONFIG_TTL_MS ?? 30_000),

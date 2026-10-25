@@ -44,6 +44,23 @@
 - 手元の `aws-cdk`（CLI）が aws-cdk-lib 2.274 の cloud assembly（schema 55）を読めず、`synth` が止まった。CLI を 2.1146.1 に上げた
 - `verify:bundle` が CDK の補助関数（配置と後始末）の `index.js` も拾った。`preview-view.html` を同梱している方だけを売り手のバンドルとみなすようにした
 
+### /simplify（同日）
+
+4 観点（再利用・単純化・効率・深さ）で見て、ユーザー承認のうえ次を直した。
+
+- 経路の振り分けが Hono と `app.ts` の 2 層にあり、`app.ts` の `/mcp` 以外の 404 は本番では届かない死んだ経路だった。Hono に一本化し、
+  `app.ts` の判定とそのテストを消した（404 のテストは `server.test.ts` にある）
+- 価格表の読み手: 有効期間が切れた瞬間に同時依頼の数だけ `GetLatestConfiguration` が飛び、セッショントークンを互いに上書きしていた。
+  進行中の取得を 1 本に束ねて皆で待つ形にし、テストを足した。4 分岐で繰り返していた `fetchedAt = now()` は `finally` に寄せた
+- source map（6.3MB。バンドルの 6 割）を同梱しながら誰も読んでいなかった。NodejsFunction が自動で付けていた
+  `NODE_OPTIONS=--enable-source-maps` を revision の環境変数に戻し、CloudWatch のスタックトレースで活きるようにした
+- `verify-bundle` は cdk.out の asset を名前当て（`preview-view.html` の有無）で探していた。`scripts/verify-bundle.ts`（tsx）にして
+  `bundleServer` を直接呼び、その出力を起動する形に改めた。synth への依存と探索が消えた
+- CDK のテストは 4 つの describe がそれぞれ同じ `synth()`（esbuild を伴う）を呼んでいた。ファイルの先頭で 1 度だけ合成して共有する
+- 小さな整理: `REQUEST_TIMEOUT` を秒の数値に（L1 は数値を受けるので `Duration` の往復が無駄）、`FetchHandler` 型を `app.ts` から共有、
+  AppConfigData クライアントのリージョンの既定を他のクライアントと揃える、不要な export と assertion を外す
+- 見送り: CDK の Asset bundling（`tryBundle`）への載せ替え（差分が広い）、ログ権限を `grantWrite` ×2 に分ける案（いまの 1 文のほうが読みやすい）
+
 ### 買い手側の追随
 
 - 買い手（Amplify アプリ）のアプリ単位の環境変数 `BILLING_MCP_URL` を、API（`UpdateApp`。他の環境変数は据え置き）で新しい endpoint の

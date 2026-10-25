@@ -6,7 +6,7 @@
     "cdk": "cdk",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "verify:bundle": "tsx scripts/verify-bundle.ts",
     "synth": "cdk synth --quiet",
     "outputs": "tsx scripts/outputs.ts",
     "set:jev-key": "tsx scripts/set-jev-key.ts",

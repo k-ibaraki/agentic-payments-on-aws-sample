@@ -200,11 +200,4 @@ describe("MCP fetch ハンドラ（Function URL / ローカル共通）", () => 
     await closeWhenDone(never, cancelled).cancel();
     expect(cancelled).toHaveBeenCalledOnce();
   });
-
-  it("MCP エンドポイント以外のパスは 404", async () => {
-    const response = await app(
-      new Request(`${ORIGIN}/somewhere-else`, { method: "POST" }),
-    );
-    expect(response.status).toBe(404);
-  });
 });

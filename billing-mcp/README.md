@@ -52,7 +52,7 @@ billing-mcp/
 ├── stacks/               # 関数ベースのスタック定義（bundle.ts はサーバーを esbuild で zip の形に束ねる）
 ├── test/                 # CDK Template テスト（jest + @swc/jest）
 ├── scripts/
-│   ├── verify-bundle.mjs # 合成したバンドルを実行環境と同じ要領で起動し、応答するかの検証
+│   ├── verify-bundle.ts  # CDK と同じ束ねを行い、実行環境と同じ要領で起動して応答するかの検証
 │   ├── outputs.ts        # deploy 済みスタックの出力を取り出す（pnpm outputs）
 │   ├── set-jev-key.ts    # Jev の API キーを Secrets Manager に入れる（pnpm set:jev-key）
 │   ├── set-tier-table.ts # 価格表を AppConfig に配る（pnpm set:tier-table）
@@ -83,7 +83,7 @@ cd server && pnpm install && pnpm build:ui && cd ..
 pnpm install
 cp parameter.sample.ts parameter.ts   # payToAddress を自分のアドレスに変える
 pnpm typecheck && pnpm test
-pnpm synth && pnpm verify:bundle      # 合成したバンドルが実際に起動して応答するかまで見る
+pnpm synth && pnpm verify:bundle      # 束ねたバンドルが実際に起動して応答するかまで見る
 pnpm cdk diff                         # 差分を確認してから
 pnpm cdk deploy
 ```

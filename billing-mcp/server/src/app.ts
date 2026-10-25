@@ -28,7 +28,7 @@ import {
   createDefaultConverse,
 } from "./tools/generate-html.js";
 
-/** MCP のエンドポイント。ローカルもクラウドも同じパス（決定4） */
+/** MCP のエンドポイント。ローカルもクラウドも同じパス（決定4）。経路の振り分けは server.ts の Hono が担う */
 export const MCP_PATH = "/mcp";
 
 /**
@@ -86,9 +86,12 @@ function jsonResponse(status: number, body: unknown): Response {
  * （Web Functions は待ち始めるまで 10 秒）を避けるため初回リクエストまで遅延させる。
  * 失敗した場合は次のリクエストで作り直す。
  */
+/** MCP を処理する fetch ハンドラの形。HTTP の待受（server.ts）との境界 */
+export type FetchHandler = (request: Request) => Promise<Response>;
+
 export function createMcpFetchHandler(
   options: BillingMcpServerOptions,
-): (request: Request) => Promise<Response> {
+): FetchHandler {
   // ステートレス化でサーバーは毎リクエスト作り直すが、Bedrock クライアント
   // （資格情報チェーンと接続プール）は作り捨てにしない。ここで1度だけ解決して
   // 全リクエストで共有する
@@ -140,10 +143,6 @@ export function createMcpFetchHandler(
         status: 204,
         headers: withCors(new Headers()),
       });
-    }
-
-    if (new URL(request.url).pathname !== MCP_PATH) {
-      return jsonResponse(404, { error: "Not Found" });
     }
 
     // ステートレス + enableJsonResponse では単独の SSE ストリームを提供しない。

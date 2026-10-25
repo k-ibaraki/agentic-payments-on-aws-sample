@@ -2,9 +2,7 @@
 // Lambda Web Functions でもローカルでも、同じ Hono アプリをポートで待たせる。
 // MCP の処理そのものは app.ts の fetch ハンドラに集約し、ここは経路を繋ぐだけ
 import { Hono } from "hono";
-import { MCP_PATH } from "./app.js";
-
-type FetchHandler = (request: Request) => Promise<Response>;
+import { type FetchHandler, MCP_PATH } from "./app.js";
 
 /** 待ち受けるホストとポート */
 export interface ListenAddress {

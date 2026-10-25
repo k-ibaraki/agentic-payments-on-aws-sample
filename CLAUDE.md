@@ -89,7 +89,7 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - `pnpm test` / `pnpm typecheck` — CDK の Template テストと型検査
 - `pnpm synth` — 合成。`server` 側で先に `pnpm install` と `pnpm build:ui` が必要（合成の中で esbuild がサーバーを束ねる）。
   「Unknown resource type 'AWS::Lambda::WebFunction'」の警告は CDK の検証の定義が古いだけで、deploy は通る
-- `pnpm verify:bundle` — 合成したバンドルを実行環境と同じ要領で起動し、`OPTIONS /mcp` に 204 を返すかの検証（synth の後に実行）
+- `pnpm verify:bundle` — CDK と同じ束ね（`stacks/bundle.ts`）を行い、実行環境と同じ要領で起動して `OPTIONS /mcp` に 204 を返すかの検証（synth とは独立）
 - `pnpm outputs` — deploy 済みスタックの出力を取り出す（読み取りのみ。`McpEndpointUrl` は作り直すたびに変わるので、
   記録の値を使わずここで取り直す）
 - `pnpm set:jev-key` — 価格帯の判定に Jev を使うときの API キーを Secrets Manager に入れる（決定58）。
