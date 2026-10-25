@@ -129,7 +129,8 @@ export function createTierTableLoader(
 
   const readTimeoutMs = options.readTimeoutMs ?? READ_TIMEOUT_MS;
   const readWithTimeout = (): Promise<unknown> => {
-    // SDK の requestTimeout は警告を出すだけで通信を止めない（@smithy/node-http-handler）。
+    // AppConfigData のクライアントが使う HTTP/1.1 のハンドラ（@smithy/node-http-handler の NodeHttpHandler）では、
+    // requestTimeout は警告を出すだけで通信を止めない（HTTP/2 の NodeHttp2Handler を使う Bedrock では止まる）。
     // AbortController で本当に取りやめ、読み手の失敗の経路（トークンを捨てる）に流す
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
