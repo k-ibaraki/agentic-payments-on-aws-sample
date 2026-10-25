@@ -2,7 +2,7 @@ import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import {
   createBillingMcpStack,
-  LAMBDA_TIMEOUT,
+  REQUEST_TIMEOUT,
 } from "../stacks/billing-mcp-stack";
 import type { AppParameter } from "../parameter.sample";
 
@@ -11,7 +11,8 @@ const parameter: AppParameter = {
   envName: "test",
   payToAddress: "0x2222222222222222222222222222222222222222",
   facilitatorUrl: "https://x402.org/facilitator",
-  reservedConcurrency: 5,
+  maxEnvironments: 2,
+  rateLimit: 100,
   allowedModelIds: ["jp.anthropic.claude-sonnet-4-6"],
 };
 
@@ -25,58 +26,93 @@ function synth(overrides: Partial<AppParameter> = {}): Template {
   return Template.fromStack(stack);
 }
 
-describe("billing-mcp スタック", () => {
+/** 唯一の revision の環境変数 */
+function revisionEnv(template: Template): Record<string, unknown> {
+  const revisions = template.findResources("AWS::Lambda::WebFunctionRevision");
+  expect(Object.keys(revisions)).toHaveLength(1);
+  return Object.values(revisions)[0].Properties.ServiceConfig
+    .EnvironmentVariables as Record<string, unknown>;
+}
+
+/** IAM ポリシー（インライン）の文を平らに集める */
+function policyStatements(template: Template) {
+  return Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+    (policy) =>
+      policy.Properties.PolicyDocument.Statement as {
+        Action: string | string[];
+        Resource: unknown;
+      }[],
+  );
+}
+
+describe("billing-mcp スタック（Lambda Web Functions。決定74）", () => {
   let template: Template;
 
   beforeAll(() => {
     template = synth();
   });
 
-  test("Lambda 関数は arm64・Node.js 22 で、Bedrock のタイムアウトを包含する", () => {
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Architectures: ["arm64"],
-      Runtime: Match.stringLikeRegexp("^nodejs22"),
-    });
+  test("Web Function・revision・endpoint を 1 つずつ作る", () => {
+    template.resourceCountIs("AWS::Lambda::WebFunction", 1);
+    template.resourceCountIs("AWS::Lambda::WebFunctionRevision", 1);
+    template.resourceCountIs("AWS::Lambda::WebFunctionEndpoint", 1);
+    // 旧構成（Function URL の Lambda）は残さない
+    template.resourceCountIs("AWS::Lambda::Url", 0);
+  });
+
+  test("revision は Node.js 24 で、依頼の時間制限は Bedrock のタイムアウトを包含する", () => {
     // server 側の BEDROCK_TIMEOUT_MS（570秒）より長くないと、Bedrock 由来の
-    // 具体的なエラーが届く前に Lambda が切れる
-    expect(LAMBDA_TIMEOUT.toSeconds()).toBeGreaterThan(570);
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Timeout: LAMBDA_TIMEOUT.toSeconds(),
+    // 具体的なエラーが届く前に打ち切られる
+    expect(REQUEST_TIMEOUT.toSeconds()).toBeGreaterThan(570);
+    template.hasResourceProperties("AWS::Lambda::WebFunctionRevision", {
+      BuildConfig: Match.objectLike({
+        RuntimeConfig: { Runtime: "nodejs24.x" },
+      }),
+      ServiceConfig: Match.objectLike({
+        TimeoutSeconds: REQUEST_TIMEOUT.toSeconds(),
+      }),
     });
   });
 
-  test("Function URL は無認証で公開される（決定19）", () => {
-    template.hasResourceProperties("AWS::Lambda::Url", {
-      AuthType: "NONE",
+  test("endpoint は無認証で公開される（決定19）", () => {
+    template.hasResourceProperties("AWS::Lambda::WebFunctionEndpoint", {
+      AuthType: "ApplicationManaged",
+      EndpointType: "HomeRegion",
+      RevisionWeights: [
+        { RevisionId: Match.anyValue(), Weight: 100 },
+      ],
     });
   });
 
-  // 経過の通知（決定65）を生成の終わりを待たずに届けるため、応答を流す
-  test("Function URL はレスポンスストリーミングで返す（決定65）", () => {
-    template.hasResourceProperties("AWS::Lambda::Url", {
-      InvokeMode: "RESPONSE_STREAM",
+  // reserved concurrency の代わり。環境数は同時に動く実行環境（メモリ課金）の、
+  // rateLimit は秒あたりの依頼数の上限
+  test("無認証のため環境数と秒あたりの依頼数に上限を掛ける（決定19・74）", () => {
+    template.hasResourceProperties("AWS::Lambda::WebFunctionEndpoint", {
+      ScalingConfig: { MaxEnvironments: parameter.maxEnvironments },
+      ThrottleConfig: { RateLimit: parameter.rateLimit },
     });
   });
 
   test("環境変数に売り手の設定と UI の場所が入る", () => {
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Environment: {
-        Variables: Match.objectLike({
-          PAY_TO_ADDRESS: parameter.payToAddress,
-          FACILITATOR_URL: parameter.facilitatorUrl,
-          UI_HTML_PATH: Match.stringLikeRegexp("preview-view\\.html$"),
-        }),
-      },
-    });
+    expect(revisionEnv(template)).toEqual(
+      expect.objectContaining({
+        PAY_TO_ADDRESS: parameter.payToAddress,
+        FACILITATOR_URL: parameter.facilitatorUrl,
+        UI_HTML_PATH: expect.stringMatching(/preview-view\.html$/),
+      }),
+    );
   });
 
-  test("無認証のため同時実行数に上限を掛ける（決定19）", () => {
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      ReservedConcurrentExecutions: parameter.reservedConcurrency,
+  test("実行ロールは Lambda が引き受け、Bedrock の権限は推論プロファイルと跨ぐ全リージョンの基盤モデルを含む", () => {
+    template.hasResourceProperties("AWS::IAM::Role", {
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Principal: { Service: "lambda.amazonaws.com" },
+          }),
+        ]),
+      }),
     });
-  });
-
-  test("Bedrock の権限は推論プロファイルと跨ぐ全リージョンの基盤モデルを含む", () => {
     template.hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -93,8 +129,30 @@ describe("billing-mcp スタック", () => {
     });
   });
 
-  test("CloudWatch Logs のロググループを明示的に作る（初回デプロイから追える）", () => {
-    template.resourceCountIs("AWS::Logs::LogGroup", 1);
+  // Lambda は `.local` のグループへ書いてから名前どおりのグループへ集める。両方を自前で作り、
+  // 両方への書き込みを許す（片方だけだと何も届かない。2026-10-25 に実測）
+  test("CloudWatch Logs のロググループ（本体と .local）を明示的に作り、revision に渡す", () => {
+    template.resourceCountIs("AWS::Logs::LogGroup", 2);
+    template.hasResourceProperties("AWS::Logs::LogGroup", {
+      LogGroupName: {
+        "Fn::Join": ["", [{ Ref: Match.stringLikeRegexp("^McpFunctionLogs") }, ".local"]],
+      },
+    });
+    template.hasResourceProperties("AWS::Lambda::WebFunctionRevision", {
+      ServiceConfig: Match.objectLike({
+        TelemetryConfig: {
+          LoggingConfig: { LogGroup: { Ref: Match.stringLikeRegexp("^McpFunctionLogs") } },
+        },
+      }),
+    });
+    const logs = policyStatements(template).find((statement) =>
+      [statement.Action].flat().includes("logs:PutLogEvents"),
+    );
+    expect(logs).toBeDefined();
+    expect([logs?.Action].flat()).toEqual(
+      expect.arrayContaining(["logs:CreateLogGroup", "logs:CreateLogStream"]),
+    );
+    expect(JSON.stringify(logs?.Resource)).toContain("McpFunctionLocalLogs");
   });
 
   test("payToAddress がゼロアドレスのままなら合成で落とす（売上が焼却されるため）", () => {
@@ -107,10 +165,13 @@ describe("billing-mcp スタック", () => {
     ).toThrow(/ゼロアドレス/);
   });
 
-  test("Function URL とロググループ名を出力する", () => {
+  test("エンドポイントの URL とロググループ名を出力する", () => {
     const outputs = template.findOutputs("*");
     expect(Object.keys(outputs)).toEqual(
       expect.arrayContaining(["McpEndpointUrl", "LogGroupName"]),
+    );
+    expect(JSON.stringify(outputs.McpEndpointUrl.Value)).toMatch(
+      /DomainName[\s\S]*\/mcp/,
     );
   });
 
@@ -124,11 +185,77 @@ describe("billing-mcp スタック", () => {
   // 価格は段階制の価格表が決める（決定56）。単価を環境変数や出力に載せると、
   // 値付けに効かない値を買い手の上限の目安として案内してしまう
   test("単価を環境変数にも出力にも載せない", () => {
-    const functions = template.findResources("AWS::Lambda::Function");
-    const variables = Object.values(functions)[0].Properties.Environment
-      .Variables as Record<string, unknown>;
-    expect(variables.PRICE).toBeUndefined();
+    expect(revisionEnv(template).PRICE).toBeUndefined();
     expect(Object.keys(template.findOutputs("*"))).not.toContain("Price");
+  });
+});
+
+describe("コードの置き場（決定74）", () => {
+  let template: Template;
+
+  beforeAll(() => {
+    template = synth();
+  });
+
+  // Web Functions は S3 の zip しか読まず、バケットはバージョニングが要る
+  test("バージョニング付きの専用バケットを作る", () => {
+    template.hasResourceProperties("AWS::S3::Bucket", {
+      VersioningConfiguration: { Status: "Enabled" },
+      PublicAccessBlockConfiguration: Match.objectLike({
+        BlockPublicAcls: true,
+        RestrictPublicBuckets: true,
+      }),
+    });
+  });
+
+  // Lambda は revision を作るときにサービスプリンシパルの読み取りを検査し、無ければ拒む
+  test("Lambda のサービスプリンシパルに、この関数の revision からの読み取りだけを許す", () => {
+    template.hasResourceProperties("AWS::S3::BucketPolicy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: "Allow",
+            Principal: { Service: "lambda.amazonaws.com" },
+            Action: ["s3:GetObject", "s3:GetObjectVersion"],
+            Condition: {
+              ArnLike: {
+                "aws:SourceArn":
+                  "arn:aws:lambda:ap-northeast-1:123456789012:web-function/billing-mcp-test/revision/*",
+              },
+            },
+          }),
+        ]),
+      }),
+    });
+  });
+
+  test("revision は専用バケットの zip を指し、関数・バケットポリシー・zip の配置の後に作る", () => {
+    const [revisionId, revision] = Object.entries(
+      template.findResources("AWS::Lambda::WebFunctionRevision"),
+    )[0];
+    expect(revisionId).toBeDefined();
+    const s3Object = revision.Properties.BuildConfig.CodeConfig.S3Object;
+    const bucketId = Object.keys(template.findResources("AWS::S3::Bucket"))[0];
+    expect(JSON.stringify(s3Object.Bucket)).toContain(bucketId);
+    // 鍵は配置（BucketDeployment）の結果から引く。中身が変われば鍵が変わり、revision が作り直される
+    expect(JSON.stringify(s3Object.Key)).toContain("SourceObjectKeys");
+
+    const dependsOn = revision.DependsOn as string[];
+    const policyId = Object.keys(
+      template.findResources("AWS::S3::BucketPolicy"),
+    )[0];
+    const functionId = Object.keys(
+      template.findResources("AWS::Lambda::WebFunction"),
+    )[0];
+    expect(dependsOn).toEqual(expect.arrayContaining([policyId, functionId]));
+  });
+
+  // 古い zip を消すと、それを指す revision が Failed になって戻せなくなる
+  test("配置は古い zip を消さない", () => {
+    template.hasResourceProperties("Custom::CDKBucketDeployment", {
+      Prune: false,
+      Extract: false,
+    });
   });
 });
 
@@ -165,26 +292,16 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
     );
   });
 
-  it("拡張レイヤーを渡さなければ AppConfig は参照しない", () => {
-    const functions = template.findResources("AWS::Lambda::Function");
-    const variables = Object.values(functions)[0].Properties.Environment
-      .Variables as Record<string, unknown>;
-    expect(variables.APPCONFIG_APPLICATION).toBeUndefined();
-  });
-
-  it("拡張レイヤーを渡せば AppConfig を参照し、読み取りを許す", () => {
-    const layerArn =
-      "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1";
-    const withLayer = synth({ appConfigExtensionLayerArn: layerArn });
-    withLayer.hasResourceProperties("AWS::Lambda::Function", {
-      Environment: {
-        Variables: Match.objectLike({
-          APPCONFIG_APPLICATION: Match.anyValue(),
-        }),
-      },
-      Layers: Match.arrayWith([layerArn]),
-    });
-    withLayer.hasResourceProperties("AWS::IAM::Policy", {
+  // 拡張レイヤーは無くなり、サーバーが SDK で直接読む（決定74）。参照は常に配線する
+  it("価格表の場所を環境変数で渡し、読み取りを許す", () => {
+    expect(revisionEnv(template)).toEqual(
+      expect.objectContaining({
+        APPCONFIG_APPLICATION: expect.anything(),
+        APPCONFIG_ENVIRONMENT: expect.anything(),
+        APPCONFIG_PROFILE: expect.anything(),
+      }),
+    );
+    template.hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
@@ -197,23 +314,8 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
 
   // 無認証で公開する関数なので、読める設定をこのスタックの価格表だけに絞る
   it("AppConfig の読み取りは、このスタックの価格表に限る", () => {
-    const withLayer = synth({
-      appConfigExtensionLayerArn:
-        "arn:aws:lambda:ap-northeast-1:111111111111:layer:AWS-AppConfig-Extension-Arm64:1",
-    });
-    const statements = Object.values(
-      withLayer.findResources("AWS::IAM::Policy"),
-    ).flatMap(
-      (policy) =>
-        policy.Properties.PolicyDocument.Statement as {
-          Action: string | string[];
-          Resource: unknown;
-        }[],
-    );
-    const appConfig = statements.find((statement) =>
-      [statement.Action]
-        .flat()
-        .includes("appconfig:GetLatestConfiguration"),
+    const appConfig = policyStatements(template).find((statement) =>
+      [statement.Action].flat().includes("appconfig:GetLatestConfiguration"),
     );
     expect(appConfig).toBeDefined();
     expect(appConfig?.Resource).not.toBe("*");
@@ -222,7 +324,7 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
       /application\/.*\/environment\/.*\/configuration\//,
     );
     const profileId = Object.keys(
-      withLayer.findResources("AWS::AppConfig::ConfigurationProfile"),
+      template.findResources("AWS::AppConfig::ConfigurationProfile"),
     )[0];
     expect(resource).toContain(profileId);
   });
@@ -245,14 +347,8 @@ describe("Jev の API キー（決定58）", () => {
     expect(props.GenerateSecretString).toBeUndefined();
   });
 
-  it("Secret の場所を Lambda に環境変数で渡す", () => {
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Environment: {
-        Variables: Match.objectLike({
-          TYPESAFE_API_KEY_SECRET_ARN: Match.anyValue(),
-        }),
-      },
-    });
+  it("Secret の場所を環境変数で渡す", () => {
+    expect(revisionEnv(template).TYPESAFE_API_KEY_SECRET_ARN).toBeDefined();
   });
 
   it("その Secret だけを読める権限を与える", () => {

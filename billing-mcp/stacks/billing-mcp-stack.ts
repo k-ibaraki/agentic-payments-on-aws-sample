@@ -1,8 +1,8 @@
 import * as path from "node:path";
-import * as fs from "node:fs";
 import {
   CfnOutput,
   Duration,
+  Fn,
   RemovalPolicy,
   SecretValue,
   Stack,
@@ -10,17 +10,17 @@ import {
 } from "aws-cdk-lib";
 import * as appconfig from "aws-cdk-lib/aws-appconfig";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import {
-  Architecture,
-  FunctionUrlAuthType,
-  InvokeMode,
-  LayerVersion,
-  Runtime,
+  CfnWebFunction,
+  CfnWebFunctionEndpoint,
+  CfnWebFunctionRevision,
 } from "aws-cdk-lib/aws-lambda";
-import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import type { Construct } from "constructs";
+import { bundleServer, UI_HTML_BUNDLED_NAME } from "./bundle";
 
 /** パラメータ（parameter.ts / parameter.sample.ts が満たす形） */
 export interface BillingMcpStackProps extends StackProps {
@@ -31,22 +31,19 @@ export interface BillingMcpStackProps extends StackProps {
   /** x402 facilitator の URL。省略時はサーバー側の既定（x402.org） */
   readonly facilitatorUrl?: string;
   /**
-   * Lambda の同時実行数の上限。
-   * 無認証で公開する（決定19）ため必ず設定する。押さえられるのは瞬間的な
-   * 流量であって累積コストではない（上限が要るなら AWS Budgets 等を併用）
+   * 同時に動かす実行環境の数の上限（2 以上）。
+   * 無認証で公開する（決定19）ため必ず設定する。1 つの実行環境は既定で 64 件の依頼を
+   * 同時にさばくので、同時実行数の上限ではなくメモリ課金の上限と読む。累積コストの
+   * 上限ではない（上限が要るなら AWS Budgets 等を併用）
    */
-  readonly reservedConcurrency: number;
+  readonly maxEnvironments: number;
+  /**
+   * endpoint が受け付ける秒あたりの依頼数の上限。
+   * 取れる値は 0（全部拒む）、100〜1000（100 刻み）、2000〜10000（1000 刻み）
+   */
+  readonly rateLimit: number;
   /** 呼び出しを許可する Bedrock 推論プロファイル ID（jp. プレフィックス） */
   readonly allowedModelIds: string[];
-  /**
-   * AppConfig の Lambda 拡張レイヤーの ARN（決定56）。
-   *
-   * 指定すると価格表を AppConfig から読む。省略するとサーバー側の既定の表で動く。
-   * ARN はリージョンとアーキテクチャごとに異なり、AWS が随時更新するため、
-   * ここでは固定せず利用者に渡してもらう
-   * （AWS の「AppConfig Agent Lambda extension」の一覧を参照）
-   */
-  readonly appConfigExtensionLayerArn?: string;
 }
 
 /**
@@ -56,29 +53,14 @@ export interface BillingMcpStackProps extends StackProps {
 const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
 
 /**
- * Lambda のタイムアウト。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
- * Bedrock 由来の具体的なエラーが届く前に Lambda が切れてしまう。
- * Function URL の上限は Lambda と同じ 15 分（決定20）
+ * 依頼 1 件の時間制限。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
+ * Bedrock 由来の具体的なエラーが届く前に打ち切られてしまう。
+ * Web Functions の上限は 900 秒（決定20）
  */
-export const LAMBDA_TIMEOUT = Duration.seconds(600);
+export const REQUEST_TIMEOUT = Duration.seconds(600);
 
-/**
- * ESM 出力に require / __filename / __dirname を用意するバナー。
- * CJS 配布のまま動的 require を使う依存（AWS SDK v3 等）を同梱するために要る
- */
-const BUNDLE_BANNER = [
-  "import { createRequire as topLevelCreateRequire } from 'module';",
-  "const require = topLevelCreateRequire(import.meta.url);",
-  "import { fileURLToPath as topLevelFileUrlToPath, URL as topLevelURL } from 'url';",
-  "const __filename = topLevelFileUrlToPath(import.meta.url);",
-  "const __dirname = topLevelFileUrlToPath(new topLevelURL('.', import.meta.url));",
-].join("\n");
-
-/** Lambda の実行環境でコードが展開される場所 */
+/** Web Functions の実行環境でコードが展開される場所 */
 const LAMBDA_TASK_ROOT = "/var/task";
-
-/** ui:// で配信する HTML（vite singlefile の出力）の、リポジトリ内での場所 */
-const UI_HTML_RELATIVE_PATH = "server/dist/ui/src/ui/preview-view.html";
 
 /**
  * jp. 推論プロファイルが跨ぐリージョン。
@@ -133,23 +115,28 @@ export function createBillingMcpStack(
   }
 
   const projectRoot = path.join(__dirname, "..");
-  const uiHtmlPath = path.join(projectRoot, UI_HTML_RELATIVE_PATH);
-  if (!fs.existsSync(uiHtmlPath)) {
-    throw new Error(
-      `ui:// で配信する HTML が見つかりません: ${uiHtmlPath}\n` +
-        "先に billing-mcp/server で pnpm build:ui を実行してください",
-    );
-  }
+
+  // Web Function の名前。アカウント内の全リージョンで一意でなければならない。
+  // バケットポリシーの条件（revision の ARN）に使うので、トークンではなく文字列で決める
+  const functionName = `billing-mcp-${props.envName}`;
 
   // ロググループは明示的に作る。初回デプロイから CloudWatch で追えないと、
-  // facilitator への疎通失敗などが原因不明のまま終わる
+  // facilitator への疎通失敗などが原因不明のまま終わる。
+  // Web Functions の既定は /aws/lambda/web/<関数名> だが、名前を revision に渡して自前のものを使わせる。
+  // Lambda はまず同じ名前に `.local` を付けたグループへ書き、そこから名前どおりのグループへ集める。
+  // `.local` も自前で作っておく（残骸にしないため。書き込み権限は両方に要る。2026-10-25 に実測）
   const logGroup = new LogGroup(stack, "McpFunctionLogs", {
+    retention: RetentionDays.ONE_MONTH,
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+  const localLogGroup = new LogGroup(stack, "McpFunctionLocalLogs", {
+    logGroupName: `${logGroup.logGroupName}.local`,
     retention: RetentionDays.ONE_MONTH,
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
   // 価格表（決定56）。運用中に価格を変えられるよう AppConfig に置く
-  // （差し替えが飛行中の取引を壊さない理由は server/pricing/tiers.ts 参照）。
+  // （差し替えが進行中の取引を壊さない理由は server/pricing/tiers.ts 参照）。
   // 作るのは器（以下の Application / Environment / ConfigurationProfile / DeploymentStrategy）
   // だけで、中身（版と配信）は持たない。持つと deploy のたびに運用中の表が既定値へ巻き戻る
   // （決定64）。中身は `pnpm set:tier-table` で配る
@@ -186,72 +173,59 @@ export function createBillingMcpStack(
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
-  const useAppConfig = Boolean(props.appConfigExtensionLayerArn);
-
-  const mcpFunction = new NodejsFunction(stack, "McpFunction", {
-    entry: path.join(projectRoot, "server/src/handler.ts"),
-    handler: "handler",
-    runtime: Runtime.NODEJS_22_X,
-    architecture: Architecture.ARM_64,
-    timeout: LAMBDA_TIMEOUT,
-    memorySize: 1024,
-    reservedConcurrentExecutions: props.reservedConcurrency,
-    logGroup,
-    projectRoot,
-    depsLockFilePath: path.join(projectRoot, "server/pnpm-lock.yaml"),
-    environment: {
-      PAY_TO_ADDRESS: props.payToAddress,
-      ...(props.facilitatorUrl ? { FACILITATOR_URL: props.facilitatorUrl } : {}),
-      // バンドル後は import.meta.dirname が変わるため、場所を推測させず明示する
-      UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/preview-view.html`,
-      // 判定モデルに jev が指定されたときだけ読みに行く（決定58）
-      TYPESAFE_API_KEY_SECRET_ARN: typesafeApiKeySecret.secretArn,
-      // 拡張を載せたときだけ AppConfig を見る。無ければ既定の表で動く（決定56）
-      ...(useAppConfig
-        ? {
-            APPCONFIG_APPLICATION: application.ref,
-            APPCONFIG_ENVIRONMENT: environment.ref,
-            APPCONFIG_PROFILE: profile.ref,
-          }
-        : {}),
-    },
-    ...(props.appConfigExtensionLayerArn
-      ? {
-          layers: [
-            LayerVersion.fromLayerVersionArn(
-              stack,
-              "AppConfigExtension",
-              props.appConfigExtensionLayerArn,
-            ),
-          ],
-        }
-      : {}),
-    bundling: {
-      // server の package.json は type: module。import.meta を使うため ESM で出す
-      format: OutputFormat.ESM,
-      target: "node22",
-      // 既定では @aws-sdk/* が external になり、Lambda ランタイム同梱の
-      // バージョンに依存する。サンプルとして再現性を優先し、また合成した
-      // 成果物をそのままローカルで実行して確かめられるよう、全て同梱する
-      externalModules: [],
-      // AWS SDK v3 は CJS 配布で内部に動的 require を持つ。ESM 出力にそのまま
-      // 同梱すると実行時に「Dynamic require of "node:stream" is not supported」で
-      // 落ちるため、ESM 側に require / __dirname を用意する（CDK 公式の案内どおり）
-      banner: BUNDLE_BANNER,
-      sourceMap: true,
-      commandHooks: {
-        beforeBundling: () => [],
-        beforeInstall: () => [],
-        // vite singlefile の出力を zip に同梱する（UI_HTML_PATH が指す先）
-        afterBundling: (inputDir: string, outputDir: string) => [
-          // パスに空白が入っても壊れないよう引用する
-          `cp "${path.join(inputDir, UI_HTML_RELATIVE_PATH)}" "${outputDir}/preview-view.html"`,
-        ],
+  // コードの置き場（決定74）。Web Functions は S3 の zip しか読まず、バケットには
+  // バージョニングと「Lambda のサービスプリンシパルが読める」バケットポリシーが要る。
+  // CDK の bootstrap バケットはポリシーを足せないので専用に作る。
+  // 消すときに中身ごと消す（残すと destroy が止まる）
+  const codeBucket = new s3.Bucket(stack, "CodeBucket", {
+    versioned: true,
+    blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    enforceSSL: true,
+    removalPolicy: RemovalPolicy.DESTROY,
+    autoDeleteObjects: true,
+  });
+  // Lambda は revision を作るときにこの許可を検査し、無ければ拒む。
+  // 読めるのはこの関数の revision からだけ
+  codeBucket.addToResourcePolicy(
+    new iam.PolicyStatement({
+      principals: [new iam.ServicePrincipal("lambda.amazonaws.com")],
+      actions: ["s3:GetObject", "s3:GetObjectVersion"],
+      resources: [codeBucket.arnForObjects("*")],
+      conditions: {
+        ArnLike: {
+          "aws:SourceArn": `arn:aws:lambda:${stack.region}:${stack.account}:web-function/${functionName}/revision/*`,
+        },
       },
-    },
+    }),
+  );
+
+  // サーバーを束ねて zip にし、専用バケットへ置く。鍵はアセットのハッシュなので、
+  // 中身が変われば鍵が変わり、revision が作り直される。古い zip は消さない
+  // （消すとそれを指す revision が Failed になり、戻せなくなる）
+  const codeDeployment = new BucketDeployment(stack, "CodeDeployment", {
+    sources: [Source.asset(bundleServer(projectRoot))],
+    destinationBucket: codeBucket,
+    extract: false,
+    prune: false,
   });
 
-  mcpFunction.addToRolePolicy(
+  // 実行ロール。Web Functions の L1 はロールを作ってくれないので自前で作る
+  const role = new iam.Role(stack, "McpFunctionRole", {
+    assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+  });
+  // ログの書き込み。Web Functions の権限の案内（CreateLogGroup を含む 3 つ）に合わせ、
+  // 対象は自前の 2 つのグループに限る
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      actions: [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+      ],
+      resources: [logGroup.logGroupArn, localLogGroup.logGroupArn],
+    }),
+  );
+  role.addToPolicy(
     new iam.PolicyStatement({
       actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       resources: bedrockResourceArns(
@@ -261,40 +235,84 @@ export function createBillingMcpStack(
       ),
     }),
   );
-
-  // 読めるのはこの Secret だけ。鍵は初めて使うときに読み、読めればコンテナ内に保持する
-  typesafeApiKeySecret.grantRead(mcpFunction);
-
-  // AppConfig の拡張は関数の実行ロールで設定を取りに行く。無認証で公開する関数なので、
+  // 読めるのはこの Secret だけ。鍵は初めて使うときに読み、読めれば実行環境内に保持する
+  typesafeApiKeySecret.grantRead(role);
+  // 価格表はサーバーが AppConfigData の API を直接読む（決定74）。無認証で公開する関数なので、
   // 読めるのはこのスタックの価格表だけに絞る（パーティションは Bedrock と同じく aws 固定）
-  if (useAppConfig) {
-    mcpFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "appconfig:StartConfigurationSession",
-          "appconfig:GetLatestConfiguration",
-        ],
-        resources: [
-          `arn:aws:appconfig:${stack.region}:${stack.account}:application/${application.ref}` +
-            `/environment/${environment.ref}/configuration/${profile.ref}`,
-        ],
-      }),
-    );
-  }
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      actions: [
+        "appconfig:StartConfigurationSession",
+        "appconfig:GetLatestConfiguration",
+      ],
+      resources: [
+        `arn:aws:appconfig:${stack.region}:${stack.account}:application/${application.ref}` +
+          `/environment/${environment.ref}/configuration/${profile.ref}`,
+      ],
+    }),
+  );
+
+  const webFunction = new CfnWebFunction(stack, "McpFunction", {
+    functionName,
+  });
+
+  // revision はコードと設定の不変の組。変えるたびに作り直され、endpoint が新しい方へ向く
+  const revision = new CfnWebFunctionRevision(stack, "McpFunctionRevision", {
+    // 関数名は素の名前で渡す（ARN を渡すと endpoint の属性が読めなくなる）
+    functionName,
+    buildConfig: {
+      codeConfig: {
+        s3Object: {
+          bucket: codeBucket.bucketName,
+          key: Fn.select(0, codeDeployment.objectKeys),
+        },
+      },
+      runtimeConfig: { runtime: "nodejs24.x" },
+    },
+    serviceConfig: {
+      executionRoleArn: role.roleArn,
+      timeoutSeconds: REQUEST_TIMEOUT.toSeconds(),
+      telemetryConfig: {
+        loggingConfig: { logGroup: logGroup.logGroupName },
+      },
+      environmentVariables: {
+        PAY_TO_ADDRESS: props.payToAddress,
+        ...(props.facilitatorUrl ? { FACILITATOR_URL: props.facilitatorUrl } : {}),
+        // 束ねた後は import.meta.dirname が変わるため、場所を推測させず明示する
+        UI_HTML_PATH: `${LAMBDA_TASK_ROOT}/${UI_HTML_BUNDLED_NAME}`,
+        // 判定モデルに jev が指定されたときだけ読みに行く（決定58）
+        TYPESAFE_API_KEY_SECRET_ARN: typesafeApiKeySecret.secretArn,
+        // 価格表の場所（決定56・74）
+        APPCONFIG_APPLICATION: application.ref,
+        APPCONFIG_ENVIRONMENT: environment.ref,
+        APPCONFIG_PROFILE: profile.ref,
+      },
+    },
+  });
+  // 関数名を素の名前で渡すと参照が生まれないので、順序は自分で宣言する。
+  // バケットポリシーは revision 作成時の検査に要るので、これも先に作らせる
+  revision.node.addDependency(webFunction);
+  if (codeBucket.policy) revision.node.addDependency(codeBucket.policy);
 
   // 認証は掛けない。認可は x402 の支払いが単独で担う（決定19）。
-  // 応答は流す（決定65）。経過の通知（SSE）を、生成の終わりを待たずに買い手へ届けるため。
-  // 通知を求めない依頼は従来どおり JSON で返り、流しても見え方は変わらない
-  const functionUrl = mcpFunction.addFunctionUrl({
-    authType: FunctionUrlAuthType.NONE,
-    invokeMode: InvokeMode.RESPONSE_STREAM,
+  // 応答は Node の HTTP サーバーがそのまま流すので、経過の通知（SSE。決定65）も途中で届く。
+  // 無認証で公開するため、環境数と秒あたりの依頼数に上限を掛ける
+  const endpoint = new CfnWebFunctionEndpoint(stack, "McpFunctionEndpoint", {
+    functionName,
+    endpointName: "default",
+    endpointType: "HomeRegion",
+    authType: "ApplicationManaged",
+    revisionWeights: [{ revisionId: revision.attrRevisionId, weight: 100 }],
+    scalingConfig: { maxEnvironments: props.maxEnvironments },
+    throttleConfig: { rateLimit: props.rateLimit },
   });
+  endpoint.node.addDependency(webFunction);
 
   // 出力は、deploy 後に describe-stacks だけで要る値が揃うようにする（README「デプロイ後に値を取り出す」）。
   // 買い手（agent-app）に引き継ぐ値（McpEndpointUrl・PayToAddress）と、売り手の運用で使う値
   // （鍵の Secret・価格表の配り先・ロググループ）がある
   new CfnOutput(stack, "McpEndpointUrl", {
-    value: `${functionUrl.url}mcp`,
+    value: `https://${endpoint.attrDomainName}/mcp`,
     description:
       "MCP エンドポイント（無認証。認可は x402 の支払いのみ）。agent-app の BILLING_MCP_URL に設定する。作り直すと変わる",
   });
@@ -322,7 +340,7 @@ export function createBillingMcpStack(
   });
   new CfnOutput(stack, "LogGroupName", {
     value: logGroup.logGroupName,
-    description: "Lambda のロググループ名",
+    description: "Web Function のロググループ名",
   });
   new CfnOutput(stack, "PayToAddress", {
     value: props.payToAddress,

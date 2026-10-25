@@ -28,10 +28,12 @@ pnpm buy:once          # 使い捨てウォレットで実際に買ってみる
 その手前に IAM や JWT のゲートを置くと、認可の主体が支払いではなく権限付与になってしまう。
 
 無認証で公開する代わりに、支払いフローは `upfront`（決済の確定後に生成）とし、
-reserved concurrency と関数タイムアウトで瞬間的な流量に上限を掛けている。
+endpoint の環境数（`maxEnvironments`）と秒あたりの依頼数（`rateLimit`）、依頼 1 件の時間制限で瞬間的な流量に上限を掛けている。
 これは累積コストの上限にはならないので、必要なら AWS Budgets 等を併用すること。
 
-添付ファイルは最大 1 件。Function URL のリクエスト上限 6MB（base64 後）に収めるため。
+添付ファイルは最大 1 件。当初は Lambda Function URL のリクエスト上限 6MB に収めるための制限で、
+Lambda Web Functions に移した今は上限が無い（20MB の本文が通ることを実測）が、件数は据え置いている。
+増やすなら説明文と買い手側の扱いも含めて別の作業で見直す。
 
 ## 途中の経過を知らせる
 
@@ -40,17 +42,17 @@ MCP 標準の `notifications/progress` で売り手の中の経過を途中に�
 流すのは、価格帯の判定の結果（どの判定モデルが何と判定したか）、支払いの署名の受け取り、
 決済の確定と生成の開始、生成の終わり。取引 ID は従来どおり最終結果の `_meta["x402/payment-response"]` に載る。
 `progressToken` を付けない依頼への応答は、従来どおり JSON のまま。
-SSE を途中で届けるため、Function URL はレスポンスストリーミング（`RESPONSE_STREAM`）で返す。
+Web Functions はポートで待つ普通の HTTP サーバーをそのまま動かすので、SSE は特別な設定なしに届いた順に流れる。
 
 ## 構成
 
 ```
 billing-mcp/
 ├── billing-mcp.ts        # CDK エントリ（tsx 実行）
-├── stacks/               # 関数ベースのスタック定義
+├── stacks/               # 関数ベースのスタック定義（bundle.ts はサーバーを esbuild で zip の形に束ねる）
 ├── test/                 # CDK Template テスト（jest + @swc/jest）
 ├── scripts/
-│   ├── verify-bundle.mjs # 合成したバンドルが読み込めるかの検証
+│   ├── verify-bundle.mjs # 合成したバンドルを実行環境と同じ要領で起動し、応答するかの検証
 │   ├── outputs.ts        # deploy 済みスタックの出力を取り出す（pnpm outputs）
 │   ├── set-jev-key.ts    # Jev の API キーを Secrets Manager に入れる（pnpm set:jev-key）
 │   ├── set-tier-table.ts # 価格表を AppConfig に配る（pnpm set:tier-table）
@@ -58,21 +60,22 @@ billing-mcp/
 ├── parameter.sample.ts   # パラメータ雛形（parameter.ts は gitignore）
 └── server/               # MCP Apps サーバー
     └── src/
-        ├── app.ts        # MCP の fetch ハンドラ（ローカルと Lambda で共通）
-        ├── handler.ts    # Lambda Function URL のエントリ（レスポンスストリーミング）
+        ├── index.ts      # エントリ（Hono の HTTP サーバー。ローカルもクラウドも同じ）
+        ├── server.ts     # Hono アプリの組み立てと待ち受け先の決定
+        ├── app.ts        # MCP の fetch ハンドラ（ローカルと Web Functions で共通）
         ├── progress.ts   # 途中の経過の通知（notifications/progress）
-        ├── dev-server.ts # ローカル開発用の薄い node:http エントリ
         ├── tools/        # generate-html（有料ツール、x402 で課金）
         └── ui/           # ui:// で配信する単一 HTML（vite singlefile）
 ```
 
 主要ライブラリ:
-`@modelcontextprotocol/sdk` 1.30 系 / `@modelcontextprotocol/ext-apps` 1.7 系 / `@x402/*`（v2） / `aws-cdk-lib`（aws-lambda-nodejs）
+`@modelcontextprotocol/sdk` 1.30 系 / `@modelcontextprotocol/ext-apps` 1.7 系 / `@x402/*`（v2） / Hono + `@hono/node-server` / `aws-cdk-lib` 2.274 以上（Lambda Web Functions の L1）
 
 ## デプロイ
 
-CDK のバンドルはサーバーの依存を解決し、vite singlefile の出力を zip に同梱するため、
-先に `server` を用意しておく必要がある。
+売り手は AWS Lambda Web Functions（ポートで待つ HTTP サーバーをそのまま動かす Lambda の形。Node.js 24）で動く。
+CDK は合成の中でサーバーを esbuild で 1 つの `index.js` に束ね、vite singlefile の出力と一緒に zip にして
+専用の S3 バケットへ置くので、先に `server` を用意しておく必要がある。
 
 ```bash
 cd server && pnpm install && pnpm build:ui && cd ..
@@ -80,19 +83,22 @@ cd server && pnpm install && pnpm build:ui && cd ..
 pnpm install
 cp parameter.sample.ts parameter.ts   # payToAddress を自分のアドレスに変える
 pnpm typecheck && pnpm test
-pnpm synth && pnpm verify:bundle      # 合成したバンドルが実際に読み込めるかまで見る
+pnpm synth && pnpm verify:bundle      # 合成したバンドルが実際に起動して応答するかまで見る
 pnpm cdk diff                         # 差分を確認してから
 pnpm cdk deploy
 ```
 
 > **注意**: `pnpm cdk deploy` は無認証の公開エンドポイントをインターネットに出す。
-> 誰でも Bedrock を動かせる状態になるため、`reservedConcurrency` と価格の設定を確認してから実行すること。
+> 誰でも Bedrock を動かせる状態になるため、`maxEnvironments` / `rateLimit` と価格の設定を確認してから実行すること。
+
+`pnpm synth` や `pnpm cdk deploy` が「Unknown resource type 'AWS::Lambda::WebFunction'」と警告するのは、
+CDK の検証の定義が新しい資源をまだ知らないため。deploy は通る。CDK CLI（`aws-cdk`）は 2.1146.1 以上が要る。
 
 クラウド上の決済検証は接続先を差し替えるだけでよい。
 
 ```bash
 cd server
-MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
+MCP_SERVER_URL=https://xxxx.yyy.lambda-web.ap-northeast-1.on.aws/mcp pnpm buy:once
 ```
 
 ## デプロイ後に値を取り出す（買い手への引き継ぎ）
@@ -109,7 +115,7 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | --- | --- | --- |
 | `McpEndpointUrl` | 無認証の公開 MCP エンドポイント | agent-app の `BILLING_MCP_URL` |
 | `PayToAddress` | 売上の受取先 | agent-app の `PAYMENT_PAY_TO`（任意。売り手アドレスを固定する）|
-| `LogGroupName` | Lambda のロググループ名 | —（調査用）|
+| `LogGroupName` | ロググループ名。Web Functions はまず同名 `.local` のグループに書き、そこから本体へ集める | —（調査用。直後に見るなら `.local` を見る）|
 | `Pricing*Id`（4 つ） | 価格表（AppConfig）の配り先 | —（`pnpm set:tier-table` が使う）|
 
 **`McpEndpointUrl` は作り直すたびに変わる。** 過去のログや記録に載っている URL をそのまま使わず、
@@ -130,10 +136,9 @@ pnpm outputs <名前>  # スタック名を直接指定する
 | 竹 | 8,000 トークン | $0.15 |
 | 松 | 12,000 トークン | $0.2 |
 
-価格と目安は AppConfig から変えられる。`parameter.ts` に `appConfigExtensionLayerArn`
-（AppConfig Agent Lambda extension のレイヤー ARN）を渡すと、Lambda がそこから価格表を読む。
-渡さなければ上の既定値で動く。設定が読めないときは直前に読めた表を使い続けるので、
-書き損じで売り手が止まることはない。
+価格と目安は AppConfig から変えられる。サーバーが AppConfigData の API を直接読み、実行環境の中に 30 秒
+（`APPCONFIG_TTL_MS`）持ち回す。何も配っていなければ上の既定値で動く。設定が読めないときは直前に読めた表を
+使い続けるので、書き損じで売り手が止まることはない。
 
 CDK が作るのは AppConfig の器（Application / Environment / ConfigurationProfile / DeploymentStrategy）
 だけで、価格表の中身（版と配信）は配らない。deploy した直後は上の既定値で動く。変えるときは表を丸ごと書いた JSON を配る（AWS コンソールで配信してもよい）。一度配った表は、
@@ -157,8 +162,7 @@ pnpm set:tier-table < tier-table.json
 `judge` だけを変えるときも `tiers` を含めること（`tiers` の無い表はサーバーに退けられ、直前の表のまま
 変わらない）。`pnpm set:tier-table` は送る前にサーバーと同じ規則で表を確かめ、サーバーが受け付けない表
 （価格帯の欠け・価格の書式違い・価格帯の逆転・読めない `judge` など）は AWS に触れずに止める。
-`appConfigExtensionLayerArn` を渡していない環境では、Lambda が AppConfig を読まないので、
-配っても何も変わらない。何も配っていない環境では、CloudWatch に警告が出ることがある。
+何も配っていない環境では、CloudWatch に警告が出ることがある。
 
 提示した額は見積書として `accepts[].extra.quote` に載り、買い手がそのまま返す。
 支払いのときは判定をやり直さずその値を使うので、同じ額で決済できる。価格表を差し替えた
@@ -197,10 +201,8 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
    でないかを疑う。CloudWatch に「判定モデルの指定を読み取れませんでした（"jev"）」（古いコードでは
    「判定器の指定を…」）が出ていれば、それが原因。コードを deploy し直せばよい（2026-09-23 に実際に起きた）。
 
-   **反映は即時ではない。** AppConfig の Lambda 拡張は更新を取得した回の呼び出しには旧値を返し、
-   次の回から新値になる。Lambda は呼ばれていないあいだ凍結され拡張もポーリングできないので、
-   伝播は時間ではなく呼び出し回数で進む。実測では展開から反映まで 2〜4 分、間隔をあけた呼び出しが
-   2 回ほど要った。切り替えの最中は同じ依頼が回によって別の判定モデルに当たり得る。
+   **反映は即時ではない。** 配った表は実行環境ごとに最大 30 秒（`APPCONFIG_TTL_MS`）遅れて効く。
+   切り替えの最中は同じ依頼が環境によって別の判定モデルに当たり得る。
 
 切り替えると、買い手の依頼文が AWS の外（`api.typesafe.ai`）へ出る。
 
@@ -214,7 +216,7 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
 検証が済んだら公開を閉じる。理由は 2 つある。
 
 1. 支払いなしで叩ける経路（`initialize` / `tools/list` / `ui://` 取得）の
-   Lambda 実行時間とログの課金が、出しっぱなしのあいだ積み上がり続ける
+   CPU 時間・実行環境のメモリ・ログの課金が、出しっぱなしのあいだ積み上がり続ける
 2. **テストネットでは x402 が経済的な抑止力にならない**。売上は Base Sepolia の
    テスト USDC（faucet で無料に手に入る）で、原価だけが実費の Bedrock ドルなので、
    正規に支払われても攻撃者の費用はゼロ。閉じないかぎり、実費の Bedrock を
@@ -224,7 +226,7 @@ TypeSafe の Jev に切り替えることもできる。手順は二つ。
 pnpm cdk destroy
 ```
 
-再び必要になったら `pnpm cdk deploy` で作り直せる（Function URL は変わる）。
+再び必要になったら `pnpm cdk deploy` で作り直せる（endpoint の URL は変わる）。
 
 ## 採らなかった構成
 
@@ -238,4 +240,9 @@ AgentCore Runtime・API Gateway・AgentCore + Cognito Identity Pool のゲスト
   「ゲスト資格情報の取得と SigV4 署名」という AWS 固有の作法を強いる。
   事前の関係なしに HTTP と決済だけで買える、という x402 の売りが消える
 
-Lambda の制限（リクエスト 6MB / 実行 15分）を超えたくなった場合は ECS へ移す。
+Lambda の制限（依頼 1 件 15 分）を超えたくなった場合は ECS へ移す。
+
+Lambda の Function URL（イベント駆動の関数 + レスポンスストリーミング）で動かしていた時期もある。Web Functions に
+移したのは、ポートで待つ普通の HTTP サーバーをそのまま動かせて Function URL 用のハンドラと手元用のサーバーの
+二重持ちが消えること、価格表の取得に使っていた拡張レイヤーが要らなくなること、リクエスト 6MB の上限が無いこと、
+1 つの実行環境が多数の依頼を同時にさばき I/O 待ちの時間に CPU 課金が乗らないこと、のため。
