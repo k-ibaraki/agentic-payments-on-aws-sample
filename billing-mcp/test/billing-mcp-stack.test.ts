@@ -290,7 +290,12 @@ describe("段階制の値付けに要る資源（決定55・56）", () => {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
-            Action: Match.arrayWith(["appconfig:GetLatestConfiguration"]),
+            // 読み手は毎回まずセッションを開く。片方でも欠けると価格表は一度も読めず、
+            // 失敗は警告で握られて既定の表で売り続ける（気づきにくい）
+            Action: Match.arrayWith([
+              "appconfig:StartConfigurationSession",
+              "appconfig:GetLatestConfiguration",
+            ]),
           }),
         ]),
       }),

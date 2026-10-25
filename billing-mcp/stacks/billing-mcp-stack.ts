@@ -54,7 +54,7 @@ const UNSET_TYPESAFE_API_KEY = "REPLACE_ME";
 /**
  * 依頼 1 件の時間制限（秒）。server 側の BEDROCK_TIMEOUT_MS（570 秒）より長くしないと、
  * Bedrock 由来の具体的なエラーが届く前に打ち切られてしまう。
- * Web Functions の上限は 900 秒（決定20）
+ * Web Functions の上限は 900 秒（決定19・74）
  */
 export const REQUEST_TIMEOUT_SECONDS = 600;
 

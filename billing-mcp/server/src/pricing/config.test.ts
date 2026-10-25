@@ -196,6 +196,25 @@ describe("価格表の読み込み", () => {
     expect(priceOf(await second, "take")).toBe("$0.3");
   });
 
+  // 取得は 1 本に束ねて皆で待つので、止まったら実行環境の全依頼が道連れになる。上限で打ち切る
+  it("取得が上限の時間内に返らなければ直前の表を返す", async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(VALID)
+      .mockImplementation(() => new Promise(() => {}));
+    let now = 1_000;
+    const load = createTierTableLoader({
+      ...options,
+      read,
+      readTimeoutMs: 20,
+      now: () => now,
+    });
+    expect(priceOf(await load(), "take")).toBe("$0.3");
+    now += 1_001;
+    expect(priceOf(await load(), "take")).toBe("$0.3");
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   // AppConfigData は変更が無ければ空を返す。それは失敗ではなく「いまの表のまま」
   it("変更なし（undefined）なら直前に読めた表を保つ", async () => {
     const read = vi

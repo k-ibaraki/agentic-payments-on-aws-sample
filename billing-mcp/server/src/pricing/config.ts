@@ -90,8 +90,16 @@ export interface TierTableLoaderOptions {
   read: ConfigReader;
   /** 実行環境の中で表を持ち回す時間 */
   ttlMs: number;
+  /**
+   * 1 回の取得を待つ上限。取得は 1 本に束ねて皆で待つので、止まると実行環境の全依頼が
+   * 道連れになる。超えたら直前の表で売り続ける（省略時 READ_TIMEOUT_MS）
+   */
+  readTimeoutMs?: number;
   now?: () => number;
 }
+
+/** 価格表の 1 回の取得を待つ上限の既定値 */
+export const READ_TIMEOUT_MS = 3_000;
 
 export type TierTableLoader = () => Promise<TierTable>;
 
@@ -111,9 +119,23 @@ export function createTierTableLoader(
   // 瞬間に依頼の数だけ取りに行かないよう、取得は 1 本に束ねて皆で待つ
   let inflight: Promise<TierTable> | undefined;
 
+  const readTimeoutMs = options.readTimeoutMs ?? READ_TIMEOUT_MS;
+  const readWithTimeout = (): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${readTimeoutMs}ms 以内に取れませんでした`)),
+        readTimeoutMs,
+      );
+    });
+    return Promise.race([options.read(), timeout]).finally(() =>
+      clearTimeout(timer),
+    );
+  };
+
   const refresh = async (): Promise<TierTable> => {
     try {
-      const raw = await options.read();
+      const raw = await readWithTimeout();
       // undefined は「変更なし」。いまの表のまま
       if (raw !== undefined) {
         const table = parseTierTable(raw);
@@ -162,6 +184,9 @@ export function tierTableLoaderFromEnv(
       // リージョンの既定は他のクライアント（Secrets Manager・Bedrock）と揃える
       client: new AppConfigDataClient({
         region: env.AWS_REGION ?? "ap-northeast-1",
+        // SDK の既定には時間制限が無い。止まった接続を待ち続けないよう、
+        // 取得を待つ上限（READ_TIMEOUT_MS）に収まる値で切る
+        requestHandler: { connectionTimeout: 1_000, requestTimeout: 2_000 },
       }),
       target: { application, environment, profile },
     }),
