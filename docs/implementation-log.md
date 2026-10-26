@@ -2,6 +2,26 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-26: 売り手の Lambda Web Functions への移行を、マージ後の main で確かめて完了とする（決定74）
+
+PR #46 をマージした後、main の checkout から deploy し、画面から依頼を通して確かめた。これで移行を完了とした（ユーザー判断）。
+
+- main の checkout の準備: 手元の `billing-mcp/parameter.ts`（gitignore）を新しい形に直した（`reservedConcurrency` を
+  `maxEnvironments: 2` / `rateLimit: 100` に置き換え、`appConfigExtensionLayerArn` を削除）。`server` で `pnpm install` と `build:ui`、
+  CDK 側で `pnpm install` と型検査
+- deploy は `no changes`（差分 0 件）。ブランチから最後に deploy したものと main のコードが同じで、束ねた zip のハッシュも一致したため。
+  esbuild の出力先を固定して source map の相対パスを安定させた狙い（決定74 のつまずき③）どおり、checkout の場所が違っても
+  ハッシュは変わらなかった
+- 買い手（Amplify の main のビルド。`BILLING_MCP_URL` は新しい endpoint）の画面から依頼し、ユーザーが動作を確かめた
+- 売り手のログ（直近 1 時間）: 警告・エラー・価格表の取得の失敗は 0 件。価格帯の判定（竹 $0.15 が 2 秒差で 2 回、のちに梅 $0.1）が
+  出ている。依頼が無いと 10 分ほどで実行環境が止まり（`spinDown`）、次の依頼で 1 秒未満で起動し直す。1 分おきの `invokeSummary` は
+  Web Functions が出す定期の集計。ログは `.local` に書かれてから本体へ集まり、両方に同じ件数が届いている
+- 決済の成否はアプリのログには出ない（画面か `buy:once` の結果で確かめる）
+
+### つまずき
+
+- deploy の前の `cdk diff` が「Unable to resolve AWS account」で止まった。SSO の資格情報の期限切れで、`aws login` をし直して解決
+
 ## 2026-10-25: 売り手を Lambda Function URL から Lambda Web Functions へ移す（決定74）
 
 依頼は `/grill-me` で詰めてから着工した。目的は「新機能を試す」「コードの単純化」「レイヤー廃止」を合わせたもの。
