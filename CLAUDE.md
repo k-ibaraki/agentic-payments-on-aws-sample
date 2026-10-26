@@ -4,7 +4,7 @@
 
 AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 
-- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で Lambda（Function URL・無認証）にデプロイ
+- `billing-mcp/` — 売り手。x402 課金付き MCP Apps を CDK で Lambda Web Functions（endpoint は無認証）にデプロイ
 - `agent-app/` — 買い手。AWS Blocks 製のエージェント + 制御 Web アプリ
 
 ## 必ず守ること（作業記録）
@@ -40,12 +40,14 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 - サーバー実装は Biome（lint / format）+ Vitest
 - MCP は `@modelcontextprotocol/sdk` v1 系（いまは 1.30）+ `@modelcontextprotocol/ext-apps` 1.7 系に固定。ext-apps は 2.0 で
   SDK v2 に対応したが、SDK v2（`@modelcontextprotocol/server` 等）への移行は買い手と合わせて別の作業で行う（DESIGN.md 決定3・U5）
-- サーバーは express を使わず、`WebStandardStreamableHTTPServerTransport` を素の Lambda ハンドラから使う。MCP セッションはステートレス（DESIGN.md 決定22）
+- サーバーは Hono（`@hono/node-server`）でポートを開く普通の HTTP サーバー（`src/index.ts`。手元とクラウドで同じ入口）。MCP の処理は
+  `app.ts` の fetch ハンドラに集約し、`WebStandardStreamableHTTPServerTransport` をそこから使う。MCP セッションはステートレス（DESIGN.md 決定22・74）。
+  Web Functions はポートで待ち始めるまで 10 秒の制限があるので、起動時にネットワークへ出る処理を足さない
 - 売り手は無認証の公開エンドポイント。認可は x402 の支払いのみが担う（DESIGN.md 決定19・21）
 - x402 は `@x402/*`（v2 系）のみ使用。旧 `x402-express` 等の v1 パッケージは deprecated のため使わない
 - 価格帯の判定モデルは AppConfig の価格表（profile `tier-table`）の `judge` 欄で選ぶ。既定は `haiku`（Bedrock の Haiku）、
-  `jev` で TypeSafe の Jev（DESIGN.md 決定58）。鍵が無ければ既定に留まる。AppConfig の反映は
-  即時ではなく、間隔をあけた呼び出しが 2 回ほど要る（拡張は更新を取得した回には旧値を返す）
+  `jev` で TypeSafe の Jev（DESIGN.md 決定58）。鍵が無ければ既定に留まる。価格表はサーバーが AppConfigData の API を
+  直接読み、実行環境内に 30 秒持ち回す（決定74。拡張レイヤーは使わない）。反映はその持ち回しの時間だけ遅れる
 - CDK は AppConfig の器（Application / Environment / ConfigurationProfile / DeploymentStrategy）だけを作り、
   価格表の中身（版と配信）は持たない。中身は `pnpm set:tier-table` で配る（決定64）。CDK に中身を戻すと、
   deploy のたびに運用中の表が巻き戻る
@@ -85,15 +87,18 @@ AWS 上で Agentic Payments を試すサンプル。モノレポに2アプリ:
 ### billing-mcp/
 
 - `pnpm test` / `pnpm typecheck` — CDK の Template テストと型検査
-- `pnpm synth` — 合成。`server` 側で先に `pnpm build:ui` が必要
-- `pnpm verify:bundle` — 合成したバンドルが実際に読み込めるかの検証（synth の後に実行）
+- `pnpm synth` — 合成。`server` 側で先に `pnpm install` と `pnpm build:ui` が必要（合成の中で esbuild がサーバーを束ねる）。
+  「Unknown resource type 'AWS::Lambda::WebFunction'」の警告は CDK の検証の定義が古いだけで、deploy は通る
+- `pnpm verify:bundle` — CDK と同じ束ね（`stacks/bundle.ts`）を行い、実行環境と同じ要領で起動して `OPTIONS /mcp` に 204 を返すかの検証（synth とは独立）
 - `pnpm outputs` — deploy 済みスタックの出力を取り出す（読み取りのみ。`McpEndpointUrl` は作り直すたびに変わるので、
   記録の値を使わずここで取り直す）
 - `pnpm set:jev-key` — 価格帯の判定に Jev を使うときの API キーを Secrets Manager に入れる（決定58）。
   鍵は標準入力で受ける（`pbpaste | pnpm set:jev-key` も可）。引数に置かない
 - `pnpm set:tier-table < tier-table.json` — 価格表（価格・目安・`judge`）を AppConfig に配る（決定64）。表は丸ごと
   差し替える（`judge` だけ変えるときも `tiers` を含める）。**稼働中の価格が変わる。実行前に必ず確認を取ること**
-- `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**
+- `pnpm cdk diff` / `pnpm cdk deploy` — **deploy は無認証の公開エンドポイントを出す。実行前に必ず確認を取ること**。
+  流量の上限は `parameter.ts` の `maxEnvironments`（環境数）と `rateLimit`（秒あたりの依頼数）で掛ける（決定74）。
+  ログは自前のロググループと同名 `.local` の 2 つに届く（まず `.local`、そこから本体へ集まる）
 
 ### agent-app/
 

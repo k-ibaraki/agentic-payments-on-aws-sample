@@ -5,7 +5,7 @@ import { runtimeEnvironment } from './runtime-env.js';
 const FULL = {
   PAYMENT_MANAGER_ARN: 'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/x',
   PAYMENT_INSTRUMENT_ID: 'instrument-1',
-  BILLING_MCP_URL: 'https://example.lambda-url.ap-northeast-1.on.aws/mcp',
+  BILLING_MCP_URL: 'https://example.abc.lambda-web.ap-northeast-1.on.aws/mcp',
 };
 
 describe('runtimeEnvironment', () => {
@@ -94,7 +94,7 @@ describe('runtimeEnvironment（決定42: 残高の取得）', () => {
     const FULL = {
       PAYMENT_MANAGER_ARN: 'arn:aws:bedrock-agentcore:ap-southeast-1:111122223333:payment-manager/x',
       PAYMENT_INSTRUMENT_ID: 'instrument-1',
-      BILLING_MCP_URL: 'https://example.lambda-url.ap-northeast-1.on.aws/mcp',
+      BILLING_MCP_URL: 'https://example.abc.lambda-web.ap-northeast-1.on.aws/mcp',
     };
     expect(runtimeEnvironment({ ...FULL, PAYMENT_CONNECTOR_ID: 'connector-1' }, { requireAll: true })).toMatchObject({
       PAYMENT_CONNECTOR_ID: 'connector-1',

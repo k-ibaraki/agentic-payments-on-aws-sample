@@ -9,7 +9,7 @@
 //                     表示されたアドレスに Circle Faucet でテスト USDC を入金する
 //   ローカル:        サーバーを起動したうえで pnpm buy:once
 //   デプロイ済み:    MCP_SERVER_URL に cdk deploy が出力する McpEndpointUrl を渡す
-//                     MCP_SERVER_URL=https://xxxx.lambda-url.ap-northeast-1.on.aws/mcp pnpm buy:once
+//                     MCP_SERVER_URL=https://xxxx.yyy.lambda-web.ap-northeast-1.on.aws/mcp pnpm buy:once
 //
 // なお支払いフローは upfront（決定21）なので、決済が確定してから生成が走る。
 // 決済が通らなければ生成物は返らない

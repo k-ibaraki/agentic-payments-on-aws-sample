@@ -1,5 +1,5 @@
-// MCP の HTTP 層。Lambda Function URL とローカル開発サーバーの共通実装。
-// Web 標準の Request/Response で完結させ、express は使わない（DESIGN.md 決定22）
+// MCP の HTTP 層。Lambda Web Functions とローカルで共通の fetch ハンドラ。
+// Web 標準の Request/Response で完結させ、HTTP の待受（server.ts の Hono）からは独立させる（DESIGN.md 決定22・74）
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   type BillingMcpServerOptions,
@@ -28,20 +28,20 @@ import {
   createDefaultConverse,
 } from "./tools/generate-html.js";
 
-/** MCP のエンドポイント。ローカルも Function URL も同じパス（決定4） */
+/** MCP のエンドポイント。ローカルもクラウドも同じパス（決定4）。経路の振り分けは server.ts の Hono が担う */
 export const MCP_PATH = "/mcp";
 
 /**
  * 見積もりの呼び出し予算の既定値（決定57）。
  *
- * コンテナごとに持つので、全体の天井は「同時実行数 × この値」になる。
+ * 実行環境ごとに持つので、全体の天井は「環境数（maxEnvironments）× この値」になる（決定74）。
  * 正規の買い手は 1 回の購入につき見積もりを 1 度しか要さないため、
  * この程度あれば通常の売買は妨げない
  */
 export const DEFAULT_JUDGE_BUDGET = { capacity: 20, refillPerSecond: 0.2 };
 
 // ブラウザが ui:// リソースを直接取得する経路（決定10）のために CORS を開ける。
-// Function URL 側の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
+// 実行基盤の CORS 設定には寄せず、ローカルと本番で同じ挙動にする
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
@@ -79,16 +79,19 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+/** MCP を処理する fetch ハンドラの形。HTTP の待受（server.ts）との境界 */
+export type FetchHandler = (request: Request) => Promise<Response>;
+
 /**
  * MCP を処理する fetch ハンドラを作る。
  *
- * facilitator への /supported 照会を伴う支払いラッパーの構築は、Lambda の
- * INIT フェーズ（10 秒制限）を避けるため初回リクエストまで遅延させる。
+ * facilitator への /supported 照会を伴う支払いラッパーの構築は、起動の制限時間
+ * （Web Functions は待ち始めるまで 10 秒）を避けるため初回リクエストまで遅延させる。
  * 失敗した場合は次のリクエストで作り直す。
  */
 export function createMcpFetchHandler(
   options: BillingMcpServerOptions,
-): (request: Request) => Promise<Response> {
+): FetchHandler {
   // ステートレス化でサーバーは毎リクエスト作り直すが、Bedrock クライアント
   // （資格情報チェーンと接続プール）は作り捨てにしない。ここで1度だけ解決して
   // 全リクエストで共有する
@@ -96,7 +99,7 @@ export function createMcpFetchHandler(
     ...options,
     converse: options.converse ?? createDefaultConverse(),
   };
-  // 乱発への防護（決定57、詳細は pricing/judge-guard.ts）。バケツはコンテナに 1 つ
+  // 乱発への防護（決定57、詳細は pricing/judge-guard.ts）。バケツは実行環境に 1 つ
   const judgeBudget = createJudgeBudget(
     options.judgeBudget ?? DEFAULT_JUDGE_BUDGET,
   );
@@ -142,10 +145,6 @@ export function createMcpFetchHandler(
       });
     }
 
-    if (new URL(request.url).pathname !== MCP_PATH) {
-      return jsonResponse(404, { error: "Not Found" });
-    }
-
     // ステートレス + enableJsonResponse では単独の SSE ストリームを提供しない。
     // GET をそのまま SDK へ渡すと終わらないストリームが返り、応答が返らなくなる。
     // MCP 仕様上、SSE を提供しないサーバーは GET に 405 を返してよい
@@ -173,7 +172,7 @@ export function createMcpFetchHandler(
       ? await options.loadTierTable()
       : (options.tierTable ?? DEFAULT_TIER_TABLE);
     // 判定モデルは価格表の指定で毎リクエスト選ぶ（AppConfig で切り替えられるため）。
-    // 予算はコンテナ共有のバケツから取る
+    // 予算は実行環境で共有するバケツから取る
     const judge = judgeBudget.wrap(await selectJudge(table.judge));
     const quote = await resolveQuote(body, { table, judge });
 
@@ -278,8 +277,8 @@ export function closeWhenDone(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          // 閉じる前に後始末を済ませる。閉じた時点で読み手（Lambda の pipeline）は終わり、
-          // 実行環境が止められて後始末が途中で切れ得るため
+          // 閉じる前に後始末を済ませる。閉じた時点で読み手（HTTP サーバー）は応答を終え、
+          // 後始末がその後に回ると、終わったかどうかを誰も待たなくなるため
           await finish();
           controller.close();
           return;

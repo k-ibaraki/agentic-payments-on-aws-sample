@@ -2,6 +2,158 @@
 
 作業のたびに日付見出しで、やったこと・判断・つまずきを記録する。設計決定そのものは DESIGN.md へ分離。
 
+## 2026-10-25: 売り手を Lambda Function URL から Lambda Web Functions へ移す（決定74）
+
+依頼は `/grill-me` で詰めてから着工した。目的は「新機能を試す」「コードの単純化」「レイヤー廃止」を合わせたもの。
+
+### やったこと
+
+- 下調べ: Web Functions（2026-10 公開。ポートで待つ HTTP サーバーをそのまま動かす Lambda の新しい形）の公式ドキュメントと AWS の
+  スキルを読み、①aws-cdk-lib 2.274 に L1 がある（2.267 には無い。CLI は 2.1146.1 以上）②CDK の bootstrap バケットは
+  バケットポリシーが TLS 強制の Deny だけで、Web Functions が revision 作成時に要求する `lambda.amazonaws.com` の読み取り許可が無い
+  ③公式のクォータに本文のサイズ上限は無い（ヘッダ 128 KiB のみ）、の 3 点を確かめた。②により、承認済みの退路どおり専用バケットにした
+- サーバー: `handler.ts`（Function URL 用の変換と `streamifyResponse`）と `dev-server.ts` を消し、Hono + `@hono/node-server` の
+  `index.ts` / `server.ts` に置き換えた。`AWS_LAMBDA_HTTP_ENDPOINT` の host:port で待ち、無ければ PORT（既定 8000）。MCP の処理は
+  `app.ts` の fetch ハンドラのまま。価格表は AppConfigData の API を SDK で直接読む形に書き直した（`pricing/config.ts`。
+  セッションのトークンを引き継ぎ、変更なしの空応答は直前の表を保つ、失敗したら次回は開き直す）。テストは先に書いて赤を確認してから実装した
+- CDK: `NodejsFunction` + Function URL をやめ、`stacks/bundle.ts` で esbuild を直接呼んで `index.js` + `preview-view.html` +
+  `package.json`（type: module）に束ね、専用のバージョニング付きバケットへ `BucketDeployment`（extract/prune とも false）で置き、
+  `CfnWebFunction` / `CfnWebFunctionRevision` / `CfnWebFunctionEndpoint` を組んだ。実行ロールとロググループ（本体と `.local`）も自前。
+  パラメータは `reservedConcurrency` / `appConfigExtensionLayerArn` を外し、`maxEnvironments` / `rateLimit` を必須にした。
+  `verify:bundle` は束ねた `index.js` を実行環境と同じ要領で起動して `OPTIONS /mcp` 204 と他パス 404 を見る形に改めた
+- deploy と検証: 既存の `BillingMcpStack-dev` に deploy（97 秒。旧 Lambda と Function URL は消えた）。OPTIONS 204 + CORS、GET 405、
+  他パス 404、initialize 200（0.6 秒）、`progressToken` 付きの依頼は `text/event-stream`（chunked）で返った。7MB と 20MB の本文も通った。
+  `pnpm buy:once` で実オンチェーン決済が 1 回成功（売り手残高 7.075 → 7.175 USDC）
+
+### 判断
+
+- 専用バケットへ zip を運ぶ手段は BucketDeployment（ユーザー判断）。補助 Lambda が 2 つ（配置とバケットの後始末）増えるが、
+  `pnpm cdk deploy` 一発で済む
+- AppConfig は opt-in のパラメータをやめて常に配線する。拡張レイヤーの ARN を受ける理由が無くなったため
+- 添付ファイルは「最大 1 件」のまま。6MB の根拠は消えたので、理由を「増やすなら別の作業」に書き換え、ツールの説明文の大きさの目安は
+  Bedrock が受け付ける大きさに改めた（ユーザー判断）
+- 束ねた成果物は `server/dist/bundle` の固定の場所に出す。source map の相対パスが安定し、中身が変わらなければアセットのハッシュも
+  変わらない。2 度目の deploy で revision が作り直されなかったことで確かめた
+
+### つまずき
+
+- 最初の deploy ではログが一切届かなかった。Web Functions はまず `<グループ>.local` に書いてから本体へ集めるので、`.local` への
+  `CreateLogGroup` / `CreateLogStream` / `PutLogEvents` が要る（公式の権限の案内のとおり。`grantWrite` では足りない）。`.local` も CDK で作り、
+  両方への書き込みを許して解決。2 度目の deploy 直後に `.local` に JSON 形式のログ（起動 0.5 秒）が届くことを確認した
+- `cdk synth` / `deploy` が「Unknown resource type 'AWS::Lambda::WebFunction'」と警告する。CDK の検証の定義が古いだけで deploy は通る
+- 手元の `aws-cdk`（CLI）が aws-cdk-lib 2.274 の cloud assembly（schema 55）を読めず、`synth` が止まった。CLI を 2.1146.1 に上げた
+- `verify:bundle` が CDK の補助関数（配置と後始末）の `index.js` も拾った。`preview-view.html` を同梱している方だけを売り手のバンドルとみなすようにした
+
+### /simplify（同日）
+
+4 観点（再利用・単純化・効率・深さ）で見て、ユーザー承認のうえ次を直した。
+
+- 経路の振り分けが Hono と `app.ts` の 2 層にあり、`app.ts` の `/mcp` 以外の 404 は本番では届かない死んだ経路だった。Hono に一本化し、
+  `app.ts` の判定とそのテストを消した（404 のテストは `server.test.ts` にある）
+- 価格表の読み手: 有効期間が切れた瞬間に同時依頼の数だけ `GetLatestConfiguration` が飛び、セッショントークンを互いに上書きしていた。
+  進行中の取得を 1 本に束ねて皆で待つ形にし、テストを足した。4 分岐で繰り返していた `fetchedAt = now()` は `finally` に寄せた
+- source map（6.3MB。バンドルの 6 割）を同梱しながら誰も読んでいなかった。NodejsFunction が自動で付けていた
+  `NODE_OPTIONS=--enable-source-maps` を revision の環境変数に戻し、CloudWatch のスタックトレースで活きるようにした
+- `verify-bundle` は cdk.out の asset を名前当て（`preview-view.html` の有無）で探していた。`scripts/verify-bundle.ts`（tsx）にして
+  `bundleServer` を直接呼び、その出力を起動する形に改めた。synth への依存と探索が消えた
+- CDK のテストは 4 つの describe がそれぞれ同じ `synth()`（esbuild を伴う）を呼んでいた。ファイルの先頭で 1 度だけ合成して共有する
+- 小さな整理: `REQUEST_TIMEOUT` を秒の数値に（L1 は数値を受けるので `Duration` の往復が無駄）、`FetchHandler` 型を `app.ts` から共有、
+  AppConfigData クライアントのリージョンの既定を他のクライアントと揃える、不要な export と assertion を外す
+- 見送り: CDK の Asset bundling（`tryBundle`）への載せ替え（差分が広い）、ログ権限を `grantWrite` ×2 に分ける案（いまの 1 文のほうが読みやすい）
+
+### セルフレビュー 1 巡目（同日）
+
+`/goal` でセルフレビューと修正を繰り返した（最大 4 巡）。1 巡目は 7 件、すべて直した。
+
+- 本文の大きさに上限が無かった。Function URL の 6MB が支払いより前に本文を切っていた保護が消え、実行環境 1 つを最大 64 件で分け合うので、
+  巨大な本文で環境ごと落とされると同じ環境で生成中の有料依頼も道連れになる（推測。実測はしていない）。Hono の `bodyLimit` で 10MB の上限を
+  掛け、超えたら 413 を返す。テストを 2 本足した
+- AppConfigData のセッションを `RequiredMinimumPollIntervalInSeconds` 無しで開いていた。既定の下限は 60 秒で、持ち回し 30 秒ごとの取得が
+  弾かれ得る。15 秒（API の最小値）を渡すようにした。deploy 済みの環境ではログに取得失敗は出ていなかったが、表の読み直しが起きるほど
+  間隔をあけた呼び出しをしていないので、確かめられてはいない
+- 旧構成が前提の文言を直した: `set-tier-table` の反映の案内（「2 回ほど要る」→「最大 30 秒」）、買い手のエラー文の「売り手の Function URL」、
+  判定予算の天井の説明（「同時実行数 × 予算」→「環境数 × 予算」）、テストの見出し、`buy-once` の URL の例、`closeWhenDone` のコメント
+- `@aws-sdk/core` が 3 版に分かれていた（新しく足した AppConfigData のクライアントだけ版が新しい）。3 つのクライアントを 3.1156 系に揃え、
+  1 版にまとめた。束ねた `index.js` が 3.9MB から 2.6MB に減った
+- `createMcpFetchHandler` の JSDoc が `FetchHandler` 型の側に付いていた（並び順を直した）。`tierTableLoaderFromEnv` がリージョンだけ
+  引数の `env` ではなく `process.env` を読んでいた
+- SSE が `@hono/node-server` 越しに途中で届くかのテストが無かった（旧 `handler.test.ts` が持っていた検証の代わり）。一時ポートで立てて、
+  最初のイベントが後続より先に届くことを確かめるテストを足した
+
+### セルフレビュー 2 巡目（同日）
+
+4 件、すべて直した。
+
+- 10MB の上限を足したのに、README・`generate-html.ts` のコメント・決定23 の追記が「上限は無い」のままだった
+- 「失敗したら次回はセッションを開き直す」のテストが、トークンを持つ前の失敗しか試しておらず、catch 節の `token = undefined` を消しても
+  落ちなかった。1 回目を成功させてトークンを持たせ、2 回目の `GetLatestConfiguration` の失敗の後に開き直すことを確かめる形にした
+- 本文の上限のテストが Content-Length の経路（`bodyLimit` はヘッダの値だけで判定する。実際の依頼はこちら）を通っていなかった。1 本足した
+- 旧構成が前提の文言: CI と `jest.config.js` のコメント、`app.ts` の「コンテナ」、買い手のテストの例の URL、決定65 の
+  「空の write」の注意（消した `handler.ts` の話。決定65 に追記した）
+
+### セルフレビュー 3 巡目（同日）
+
+4 件、すべて直した。
+
+- AppConfigData の取得に時間制限が無かった（SDK の既定は無制限）。取得を 1 本に束ねたので、止まると実行環境の全依頼がそれを待って
+  止まる（止まること自体は推測、止まれば全件が待つことはコードで確かめた）。読み手で 3 秒（`READ_TIMEOUT_MS`）で打ち切って直前の表を
+  返すようにした。テストを 1 本足した（この巡では SDK にも接続 1 秒・応答 2 秒を渡したが、4 巡目で応答の制限が効かないと分かり、接続・応答の両方を外した。接続の制限は効いていたが、
+  外側の 3 秒の打ち切りが `abortSignal` で接続の段階も止めるので要らない）
+- IAM のテストが `appconfig:StartConfigurationSession` の許可を見ていなかった。欠けると価格表は一度も読めず、警告で握られて
+  既定の表で売り続ける。2 つとも含むことを確かめる形にした
+- 決定5 の追記に、コードに無い「arm64」を書いていた（Web Functions の L1 にはアーキテクチャを指定する口が無い）
+- 時間制限の定数のコメントが、関係の無い決定20 を根拠に挙げていた（決定19・74 に直した）
+- 見送り: 触っていない `pricing/` の他のファイルに残る「コンテナ」の表記（意味は通じ、差分の外のため）
+
+### セルフレビュー 4 巡目（同日）
+
+3 件、すべて直した（巡の上限の 4 巡目なので、この修正は未レビュー）。
+
+- 3 巡目で SDK に渡した `requestTimeout: 2_000` は通信を止めず、警告を出すだけだった（AppConfigData のクライアントが使う HTTP/1.1 の
+  ハンドラ、`@smithy/node-http-handler` 4.12.1 の `NodeHttpHandler` の場合。HTTP/2 の `NodeHttp2Handler` を使う Bedrock では打ち切る。
+  `setRequestTimeout` は `throwOnRequestTimeout` が無いと `req.destroy` も `reject` もしない。実装を読んで確かめた）。外側の 3 秒の
+  打ち切りで依頼は待たされないが、止まった呼び出しは残り、読み手の失敗の経路（トークンを捨てる）に届かなかった。`AbortController` で
+  SDK の呼び出し（`abortSignal`）まで取りやめを届ける形に改め、SDK の時間制限の指定は外した。テストを 1 本足し、既存のテストで signal が
+  取りやめられることも確かめる
+- 価格表の取得の 3 秒の打ち切りが決定74 に載っていなかった（⑬として足した）
+- U13 の「現状」欄が「未決」のままで、論点消滅は検証方法の欄の末尾にしか無かった。「現状」欄の頭に書いた
+
+### セルフレビュー 5 巡目（同日。ユーザーの依頼で 2 巡を追加）
+
+低 2 件、どちらも直した。
+
+- セッションを開く呼び出し（`StartConfigurationSession`）に signal が届くことを、どのテストも確かめていなかった。1 本足した
+- `createMcpFetchHandler` の JSDoc と関数の間に空行が入っていた
+
+### セルフレビュー 6 巡目（同日。追加 2 巡の 2 巡目）
+
+低 2 件（ドキュメント）、どちらも直した。巡の上限なので、この修正は未レビュー。
+
+- 「SDK の `requestTimeout` は通信を止めない」を、パッケージ全体の性質のように書いていた。当てはまるのは HTTP/1.1 の `NodeHttpHandler`
+  （AppConfigData が使う）だけで、HTTP/2 の `NodeHttp2Handler`（Bedrock が使う）は打ち切る。コメント・決定74 ⑬・この記録の主語を絞った
+- 3 巡目の記録が、外したのは応答の制限だけのように読めた。実際は接続・応答の両方を外している
+
+### セルフレビュー後の deploy と確認（2026-10-26）
+
+セルフレビュー（6 巡）の修正を deploy した（41 秒。差分は zip の差し替え・`NODE_OPTIONS` を足した revision の作り直し・endpoint の向け替えだけ。
+URL は変わらない）。支払いの要らない範囲で確かめた。
+
+- OPTIONS 204・GET 405・他パス 404・initialize 200（0.65 秒）・`tools/list` 200
+- 11MB の本文は 413（`{"error":"Payload Too Large"}`）。上限が効いている
+- 支払いなしの `tools/call`（見積もりの 402 相当の応答）を 3 回。3 回目は 40 秒あけて、価格表の持ち回し（30 秒）が切れた後の読み直しを通した。
+  どれも 200（1.3〜1.8 秒）で、ログには価格帯の判定（梅 $0.1）だけが出て、価格表の取得の失敗・時間切れの警告は 1 件も無かった。
+  起動直後の最初の取得が 3 秒以内に終わることと、`RequiredMinimumPollIntervalInSeconds: 15` で 30 秒ごとの読み直しが弾かれないことを、
+  この範囲で確かめた（U13・決定74 ⑪⑬ の実機確認）
+- 起動はログの `initReport: success` まで約 0.5 秒（Node.js 24、`nodejs.web24.v14`）
+- 仕上げに `pnpm buy:once` で実オンチェーン決済を 1 回流し、成功した（売り手残高 7.175 → 7.275 USDC。生成まで通った。ユーザー承認）
+
+### 買い手側の追随
+
+- 買い手（Amplify アプリ）のアプリ単位の環境変数 `BILLING_MCP_URL` を、API（`UpdateApp`。他の環境変数は据え置き）で新しい endpoint の
+  URL に書き換えた（ユーザー承認）。値は合成時に読まれるので、次に Amplify のビルドが走るまで効かない
+- 構成図（`docs/architecture.drawio.png`）は PNG に埋め込まれた XML を取り出してラベル 3 つ（売り手の Lambda・AppConfig・認可の注記）を直し、
+  同じ寸法で書き出し直した
+
 ## 2026-10-24: PR #45 のレビューで見つかった、観察が終わらない 2 つの経路を直す
 
 PR レビュー（4 観点）で、読み込み直したときの観察（`observeRunningReply`）が送信を止めたままになる経路が 2 つ見つかった。どちらも頻度は低い。

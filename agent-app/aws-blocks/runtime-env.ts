@@ -59,7 +59,7 @@ export function runtimeEnvironment(
       throw new Error(
         `実決済に必要な環境変数が未設定です: ${missing.join(', ')}。` +
           '合成時の環境変数に設定してください（Amplify はコンソールのアプリ／ブランチ環境変数、' +
-          'cdk deploy 経路はシェル。値は scripts/payments-setup.ts の出力と売り手の Function URL）',
+          'cdk deploy 経路はシェル。値は scripts/payments-setup.ts の出力と売り手の McpEndpointUrl 出力）',
       );
     }
   }
